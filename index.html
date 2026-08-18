@@ -45,7 +45,7 @@
         <div class="pause-icon">☕</div>
         <h1 class="pause-title">レジ休止中</h1>
         <p class="pause-desc">店員または店長のバーコードを読み取ってください</p>
-        <input type="text" id="pause-jan-input" placeholder="店員・店長バーコードをスキャン" autocomplete="off">
+        <input type="text" id="pause-jan-input" placeholder="店員・店長バーコードをスキャン" autocomplete="off" onkeydown="if(event.key==='Enter'){ event.stopPropagation(); }">
     </div>
 
     <!-- レジ休止中のオーバーレイ（客用画面用） -->
