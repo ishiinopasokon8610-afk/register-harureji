@@ -157,7 +157,7 @@ function calculateEndCash() {
     return diff;
 }
 
-// 業務終了（ログアウト）ボタンを押した時（0円のときOKを押すとレシートがPNG保存される）
+// 業務終了（ログアウト）ボタンを押した時（0円のときOKを押すとレシートがPNG保存され、Ably経由で通知が送信される）
 function closeBusiness() {
     if (typeof playSound === 'function') playSound('click');
     
@@ -170,8 +170,13 @@ function closeBusiness() {
 
             checkBusinessStatus();
 
+            // Ably経由で「本日の業務を終了しました」というメッセージとステータスを送信
             if (typeof ablyChannel !== 'undefined' && ablyChannel) {
-                ablyChannel.publish('business-status', { status: 'closed', time: Date.now() }).catch(() => {});
+                ablyChannel.publish('business-status', { 
+                    status: 'closed', 
+                    message: '本日の業務を終了しました', 
+                    time: Date.now() 
+                }).catch(() => {});
             }
 
             // 本日の精算・売上内容のレシートをPNG画像として自動保存する
@@ -189,7 +194,7 @@ function closeBusiness() {
             }
 
             if (typeof playSound === 'function') playSound('success');
-            if (typeof speak === 'function') speak("ほんじつ の ぎょうむ は しゅうりょう し まし た。 レシート を ほぞん し まし た");
+            if (typeof speak === 'function') speak("ほんじつ の ぎょうむ は しゅうりょく し まし た。 レシート を ほぞん し まし た");
         }, true);
     }
 }
