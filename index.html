@@ -1,0 +1,877 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>haruレジ</title>
+    <!-- ウェブアイコン（Favicon）の設定 -->
+    <link rel="icon" href="https://illust8.com/wp-content/uploads/2022/04/cash-register_16279.png" type="image/png">
+    
+    <!-- manifest.jsonの読み込み -->
+    <link rel="manifest" href="./manifest.json">
+
+    <!-- Service Workerの登録 JavaScript -->
+    <script>
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('./sw.js')
+          .then(() => console.log('PWAの登録に成功しました'))
+          .catch((err) => console.log('PWAの登録に失敗:', err));
+      }
+    </script>
+
+    <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+
+    <!-- Ably Realtimeライブラリの読み込み -->
+    <script src="https://cdn.ably.com/lib/ably.min-1.js"></script>
+    <!-- PDF生成・ダウンロード用ライブラリ (html2canvas & jsPDF) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    
+    <!-- 縦画面時の強制警告オーバーレイ -->
+    <div id="orientation-overlay">
+        <div class="orientation-box">
+            <div class="pause-icon">📱🔄</div>
+            <h2>横画面で開いてください</h2>
+            <p>このアプリは横画面専用です。<br>スマートフォンを横向きにしてください。</p>
+        </div>
+    </div>
+
+    <!-- レジ休止中のオーバーレイ（店員用） -->
+    <div id="pause-overlay" class="pause-overlay-base">
+        <div class="pause-icon">☕</div>
+        <h1 class="pause-title">レジ休止中</h1>
+        <p class="pause-desc">店員または店長のバーコードを読み取ってください</p>
+        <input type="text" id="pause-jan-input" placeholder="店員・店長バーコードをスキャン" autocomplete="off">
+    </div>
+
+    <!-- レジ休止中のオーバーレイ（客用画面用） -->
+    <div id="customer-pause-overlay" class="pause-overlay-base">
+        <div class="pause-icon">☕</div>
+        <h1 class="pause-title">ただいまレジ休止中です</h1>
+        <p class="pause-desc large">しばらくお待ちくださいませ。</p>
+    </div>
+
+    <!-- 年齢確認中オーバーレイ（店員画面用大画面） -->
+    <div id="clerk-age-modal">
+        <div class="age-icon-large">🔞</div>
+        <h1 class="age-title-large">年齢確認中です</h1>
+        <p class="age-desc-large">客側画面での操作をお待ちください...</p>
+    </div>
+
+    <!-- 年齢確認モーダル（客用画面用） -->
+    <div id="customer-age-modal">
+        <div class="customer-age-box">
+            <div class="age-icon">🔞</div>
+            <h2 class="age-title">年齢確認をお願いします</h2>
+            <p class="age-desc">こちらの商品は対象年齢の確認が必要です。<br>身分証明書の提示をお願いする場合がございます。<br>あなたは対象の年齢を満たしていますか？</p>
+            <div class="age-btn-group">
+                <button onclick="handleAgeCheckResult(false)" class="age-btn age-btn-decline">同意しない</button>
+                <button onclick="handleAgeCheckResult(true)" class="age-btn age-btn-accept">同意する</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- アニメーション通知用コンテナ -->
+    <div id="toast-container"></div>
+
+    <!-- 常に右下の時計 -->
+    <div id="global-clock">00:00:00</div>
+
+    <!-- 時計の左側に表示する店員専用のミニ挨拶ボタン -->
+    <div id="clerk-quick-voices">
+        <button class="mini-voice-btn" onclick="speakVoice('いらっしゃいませ')">いらっしゃいませ</button>
+        <button class="mini-voice-btn" onclick="speakVoice('ありがとうございました')">ありがとうございました</button>
+    </div>
+
+    <!-- ホーム画面 -->
+    <div id="home-screen" class="screen active">
+        <!-- 店長認証 / 店長ロックボタン（右上に常時表示） -->
+        <button id="manager-lock-btn" class="manager-lock-btn" onclick="handleManagerBtnClick()">店長認証</button>
+
+        <div class="home-header">
+            <!-- 文字を消してロゴ画像を表示するように変更 -->
+            <!-- ホーム画面のロゴ（サイズ拡大版） -->
+<img id="home-shop-logo" src="https://illust8.com/wp-content/uploads/2022/04/cash-register_16279.png" alt="ここにロゴを設定できます。" style="max-height: 150px; width: auto; margin-bottom: 10px;">
+        </div>
+        
+        <!-- API設定コンテナ -->
+        <div id="api-settings-container" class="api-settings-container" style="display: none;">
+            <div id="api-guide-msg" class="api-guide-msg">初めて入った人は設定をしてください！</div>
+            <label class="api-label">APIキー設定 (Ably):</label>
+            <div class="api-input-wrapper">
+                <input type="text" id="api-key-input" placeholder="APIキーを入力してください" value="">
+                <button class="api-save-btn" onclick="saveApiKey()">保存</button>
+            </div>
+        </div>
+
+        <div class="home-grid">
+            <button class="home-btn large" onclick="openRegister()">会計スタート (店員用)</button>
+            <button class="home-btn large home-btn-customer" onclick="openCustomerScreen()">客用画面を開く</button>
+            
+            <button class="home-btn" onclick="showScreen('clerk-screen')">担当者管理</button>
+            <button class="home-btn" onclick="requestManagerAuth('product')">商品管理</button>
+            
+            <!-- 追加：タイムカードボタン -->
+            <button class="home-btn full home-btn-timecard" onclick="openTimecardScreen()">⏱️ タイムカード (出勤・退勤)</button>
+            
+            <button class="home-btn full home-btn-customer-mgmt" onclick="requestManagerAuth('customer')">👥 会員・顧客管理 (ポイント・情報)</button>
+            
+            <!-- お会計履歴ボタン -->
+            <button class="home-btn full" onclick="requestHistoryAuth()">お会計履歴</button>
+            
+            <button class="home-btn full home-btn-receipt" onclick="setupReceiptFolder()">📁 レシート保存フォルダを設定する（自動保存対応）</button>
+            <button class="home-btn full home-btn-migration" onclick="requestManagerAuth('migration')">データ管理・ロゴ設定</button>
+        </div>
+    </div>
+
+    <!-- 客用画面 -->
+    <div id="customer-screen" class="screen">
+        <div class="customer-back-container">
+            <button class="back-btn-small" onclick="goHome()">ホームに戻る</button>
+        </div>
+        
+        <div id="customer-last-barcode">
+            コード: -
+        </div>
+
+        <div class="customer-card">
+            <h2 class="customer-header-msg" id="customer-header-msg">いらっしゃいませ！</h2>
+            <div class="customer-cart-list" id="customer-cart-list">
+                <div class="customer-cart-empty">商品がスキャンされるとここに表示されます</div>
+            </div>
+            <div class="customer-total-area">
+                <div>
+                    <div class="customer-total-label">ご請求金額</div>
+                    <div id="customer-total">¥0</div>
+                </div>
+                <div>
+                    <div class="customer-total-label">お預かり</div>
+                    <div id="customer-deposit">¥0</div>
+                </div>
+                <div>
+                    <div class="customer-total-label">お釣り</div>
+                    <div id="customer-change">¥0</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- タイムカード打刻・管理画面 -->
+    <div id="timecard-screen" class="screen management-screen">
+        <div class="top-bar">
+            <button class="back-btn" onclick="goHome()">← ホーム</button>
+            <h2 class="top-bar-title">⏱️ タイムカード管理</h2>
+            <button class="csv-export-btn" id="timecard-export-btn" onclick="exportTimecardXlsx()">XLSX出力</button>
+        </div>
+
+        <div class="timecard-stamp-area">
+            <h3>バーコードスキャン（または入力）して打刻</h3>
+            <div class="input-form">
+                <input type="text" id="tc-barcode-input" placeholder="担当者バーコードをスキャン" autocomplete="off" onkeydown="if(event.key==='Enter') handleTimecardStamp()">
+                <button onclick="handleTimecardStamp('clockIn')" style="background:#4caf50;">出勤</button>
+                <button onclick="handleTimecardStamp('breakStart')" style="background:#ff9800;">休憩開始</button>
+                <button onclick="handleTimecardStamp('breakEnd')" style="background:#2196f3;">休憩終了</button>
+                <button onclick="handleTimecardStamp('clockOut')" style="background:#f44336;">退勤</button>
+            </div>
+            <div id="tc-status-msg" style="font-weight:bold; font-size:16px; margin-top:5px; min-height:24px;"></div>
+        </div>
+
+        <div class="history-btn-container" style="margin-top:15px; display:flex; justify-content:space-between; align-items:center;">
+            <h4>勤務記録一覧（※1年経過した記録は自動的に削除されます）</h4>
+        </div>
+
+        <table class="data-table">
+            <thead>
+                <!-- 操作（削除）ボタンの列を消しました -->
+                <tr>
+                    <th>日付</th>
+                    <th>担当者</th>
+                    <th>出勤</th>
+                    <th>休憩開始</th>
+                    <th>休憩終了</th>
+                    <th>退勤</th>
+                    <th>実働時間</th>
+                </tr>
+            </thead>
+            <tbody id="timecard-tbody"></tbody>
+        </table>
+    </div>
+
+    <!-- 店長認証モーダル -->
+    <div id="manager-auth-modal" class="modal-overlay">
+        <div class="modal-box slide-up-modal medium">
+            <h3 class="modal-title purple">店長認証</h3>
+            <p class="modal-desc">管理画面を開くには、店長用バーコードをスキャンするか、バーコードを入力してください。</p>
+            <input type="text" id="manager-auth-input" placeholder="店長用バーコード" class="modal-input auth" autocomplete="off">
+            <div id="manager-auth-error" class="error-msg">バーコードが一致しません</div>
+            <div class="modal-btn-group">
+                <button onclick="closeManagerAuth()" class="modal-btn cancel">キャンセル</button>
+                <button onclick="verifyManagerAuth()" class="modal-btn purple">認証して開く</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- お会計履歴閲覧用のバーコード認証モーダル -->
+    <div id="history-auth-modal" class="modal-overlay">
+        <div class="modal-box medium">
+            <h3 class="modal-title blue">お会計履歴の確認</h3>
+            <p class="modal-desc">履歴を見るには、バーコードをスキャンするか入力してEnterキーを押してください。</p>
+            <input type="text" id="history-auth-input" placeholder="バーコードを入力" class="modal-input auth" autocomplete="off" onkeydown="if(event.key==='Enter'){verifyHistoryAuth();}">
+            <div id="history-auth-error" class="error-msg">バーコードが一致しません</div>
+            <div class="modal-btn-group">
+                <button onclick="closeHistoryAuth()" class="modal-btn cancel">キャンセル</button>
+                <button onclick="verifyHistoryAuth()" class="modal-btn blue">確定</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 顧客管理画面 -->
+    <div id="customer-mgmt-screen" class="screen management-screen">
+        <div class="top-bar">
+            <button class="back-btn" onclick="goHome()">← ホーム</button>
+            <h2 class="top-bar-title">会員・顧客管理</h2>
+        </div>
+        
+        <div class="input-form">
+            <input type="text" id="new-cust-barcode" placeholder="会員証バーコード (必須)" class="input-cust-barcode">
+            <input type="text" id="new-cust-last-name" placeholder="姓 (例: 山田)" class="input-cust-name">
+            <input type="text" id="new-cust-first-name" placeholder="名 (例: 太郎)" class="input-cust-name">
+            <input type="text" id="new-cust-last-kana" placeholder="セイ (例: ヤマダ)" class="input-cust-kana">
+            <input type="text" id="new-cust-first-kana" placeholder="メイ (例: タロウ)" class="input-cust-kana">
+            <div class="input-cust-birth-container">
+                <label class="input-label-small">生年月日</label>
+                <input type="date" id="new-cust-birthday" class="input-cust-birth">
+            </div>
+            <input type="number" id="new-cust-points" placeholder="初期/入会特典pt" class="input-cust-points">
+            <input type="text" id="new-cust-phone" placeholder="電話番号" class="input-cust-phone">
+            <input type="text" id="new-cust-address" placeholder="住所" class="input-cust-address">
+            <button onclick="addCustomer()">登録・追加</button>
+        </div>
+
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>バーコード</th>
+                    <th>お名前・フリガナ (年齢 / 生年月日)</th>
+                    <th>保有ポイント (有効期限)</th>
+                    <th>連絡先 / 住所</th>
+                    <th>操作</th>
+                </tr>
+            </thead>
+            <tbody id="customer-tbody"></tbody>
+        </table>
+    </div>
+
+    <!-- 担当者管理画面 -->
+    <div id="clerk-screen" class="screen management-screen">
+        <div class="top-bar">
+            <button class="back-btn" onclick="goHome()">← ホーム</button>
+            <h2 class="top-bar-title">担当者管理</h2>
+        </div>
+        <div class="input-form">
+            <input type="text" id="new-clerk-barcode" placeholder="店員用バーコード(任意)" class="input-clerk-barcode">
+            <input type="text" id="new-clerk-name" placeholder="店員名 (例: 山田)" class="input-clerk-name">
+            <input type="text" id="new-clerk-kana" placeholder="フリガナ (例: ヤマダ)" class="input-clerk-name">
+            <input type="number" id="new-clerk-age" placeholder="年齢" class="input-clerk-age">
+            <label class="checkbox-label">
+                <input type="checkbox" id="new-clerk-voice-check" checked> 音声あり
+            </label>
+            <button onclick="addClerk()">追加</button>
+        </div>
+        <table class="data-table">
+            <thead><tr><th>状態</th><th>バーコード</th><th>店員名 / フリガナ (年齢)</th><th>操作</th></tr></thead>
+            <tbody id="clerk-tbody"></tbody>
+        </table>
+    </div>
+
+    <!-- 商品管理画面 -->
+    <!-- 商品管理画面 -->
+    <div id="product-screen" class="screen management-screen">
+        <div class="top-bar">
+            <button class="back-btn" onclick="goHome()">← ホーム</button>
+            <h2 class="top-bar-title">商品管理 (JANコード指定対応)</h2>
+        </div>
+        
+        <div id="bulk-edit-bar">
+            <span class="bulk-edit-title">☑ 一括操作メニュー</span>
+            <input type="number" id="bulk-price-input" placeholder="新しい値段" class="bulk-input price">
+            <span>円 /</span>
+            <input type="number" id="bulk-tax-input" placeholder="税率" class="bulk-input tax">
+            <span>%</span>
+            <button onclick="applyBulkEdit()" class="btn-bulk-apply">適用する</button>
+            <button onclick="confirmBulkDelete()" class="btn-bulk-delete">選択した商品を削除</button>
+        </div>
+
+        <div class="input-form">
+            <input type="text" id="new-prod-jan" placeholder="JANコード (例: 4901...) ※空欄で自動生成" class="input-prod-jan">
+            <input type="text" id="new-prod-name" placeholder="商品名 (例: ハンディファン)">
+            
+            <!-- 追加: ジャンル選択プルダウン -->
+            <select id="new-prod-genre" class="modal-input" style="padding: 8px; font-size: 16px; border: 1px solid #ccc; border-radius: 4px; min-width: 120px;">
+                <option value="食品">食品</option>
+                <option value="飲料/お酒">飲料/お酒</option>
+                <option value="お惣菜/お弁当">お惣菜/お弁当</option>
+                <option value="スイーツ/菓子">スイーツ/菓子</option>
+                <option value="日用品">日用品</option>
+                <option value="衣料品">衣料品</option>
+                <option value="雑貨">雑貨</option>
+                <option value="サービス">サービス</option>
+                <option value="その他商品" selected>その他商品</option>
+                <option value="値引き/その他">値引き/その他</option>
+            </select>
+
+            <input type="number" id="new-prod-price" placeholder="価格 (例: 1500)" class="input-prod-price">
+            <input type="number" id="new-prod-tax" placeholder="税率(%)" class="input-prod-tax" value="">
+            <label class="checkbox-label">
+                <input type="checkbox" id="new-prod-age-check"> 年齢確認が必要
+            </label>
+            <button onclick="addProduct()">商品追加</button>
+        </div>
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th class="table-checkbox-col"><input type="checkbox" id="check-all-prods" onchange="toggleAllProds()"></th>
+                    <th>JANコード</th>
+                    <th>商品名</th>
+                    <th>ジャンル</th> <!-- 追加 -->
+                    <th>価格・税率</th>
+                    <th>年齢確認</th>
+                    <th>操作</th>
+                </tr>
+            </thead>
+            <tbody id="product-tbody"></tbody>
+        </table>
+    </div>
+
+    <!-- レジ画面（店員用） -->
+    <div id="register-screen" class="screen">
+        <div class="reg-header">
+            <button class="back-btn" onclick="goHome()">← ホーム</button>
+            <div class="header-actions">
+                <span id="active-clerk-display" class="active-clerk-display">担当: 未設定</span>
+                <button onclick="togglePauseRegister()" class="btn-pause-reg">レジ休止</button>
+            </div>
+        </div>
+        <div class="reg-layout">
+            <div class="left-pane">
+                <div class="receipt-header">レシート</div>
+                <div class="receipt-body" id="receipt-body"></div>
+            </div>
+            <div class="right-pane">
+                
+                <div id="active-customer-display">
+                    <button class="cust-clear-btn" onclick="clearCustomer()">クリア</button>
+                    <div class="cust-info-main">👤 <span id="ac-name"></span> 様 (<span id="ac-age"></span>歳)</div>
+                    <div class="cust-info-sub">
+                        <span>🅿️ 保有ポイント: <b id="ac-points"></b> pt</span>
+                        <span id="ac-exp-info"></span>
+                    </div>
+                </div>
+
+                <div class="display-area">
+                    <div class="jan-input-area">
+                        <input type="text" id="jan-input" placeholder="JAN・会員・店員バーコードをスキャン" autocomplete="off">
+                    </div>
+                    <div class="display-total-label">合計金額</div>
+                    <div class="display-total" id="display-total">¥0</div>
+                </div>
+
+                <div class="fixed-actions-container">
+                    <button class="action-btn red" onclick="applyDynamicDiscount('percent')">% 値引<br><small>(数値を打ってから)</small></button>
+                    <button class="action-btn blue" onclick="applyDynamicDiscount('yen')">円 値引<br><small>(数値を打ってから)</small></button>
+                    <button class="action-btn blue" onclick="applyMultiplyQuantity()">複数<br><small>(数値を打ってから)</small></button>
+                    <button class="action-btn orange" onclick="applyHalfPrice()">半額<br><small>(商品選択/入力)</small></button>
+                    <button class="action-btn red" onclick="removeSelectedOrInputItem()">選択して取消<br><small>(バーコード/選択)</small></button>
+                    <button class="action-btn red" onclick="removeLastItem()">一個取り消す<br><small>(直前)</small></button>
+                    <button class="action-btn blue" onclick="clearCart()">全取消</button>
+                    <button class="action-btn green" onclick="openCheckout()">お会計</button>
+                </div>
+                
+                <div class="controls-area">
+                    <div class="numpad">
+                        <button class="num-btn" onclick="typeNum('7')">7</button><button class="num-btn" onclick="typeNum('8')">8</button><button class="num-btn" onclick="typeNum('9')">9</button>
+                        <button class="num-btn" onclick="typeNum('4')">4</button><button class="num-btn" onclick="typeNum('5')">5</button><button class="num-btn" onclick="typeNum('6')">6</button>
+                        <button class="num-btn" onclick="typeNum('1')">1</button><button class="num-btn" onclick="typeNum('2')">2</button><button class="num-btn" onclick="typeNum('3')">3</button>
+                        <button class="num-btn" onclick="typeNum('0')">0</button><button class="num-btn" onclick="typeNum('00')">00</button><button class="num-btn" onclick="clearNum()">C</button>
+                        <button class="num-btn enter-btn" onclick="submitInput()">確定</button>
+                    </div>
+                    <div class="action-grid" id="custom-buttons-area"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 履歴画面 -->
+    <div id="history-screen" class="screen management-screen">
+        <div class="top-bar">
+            <button class="back-btn" onclick="goHome()">← ホーム</button>
+            <h2 class="top-bar-title">お会計履歴</h2>
+            <button class="csv-export-btn" onclick="exportHistorycsv()">XLSX出力</button>
+        </div>
+        <div class="history-btn-container">
+            <button class="del-btn" onclick="deleteSelectedHistory()">選択削除</button>
+            <button class="del-btn btn-del-all" onclick="clearAllHistory()">全履歴削除</button>
+        </div>
+        <table class="data-table">
+            <thead><tr><th class="history-select-col">選択</th><th>日時</th><th>担当者</th><th>合計金額</th><th>支払方法</th><th>購入内容</th></tr></thead>
+            <tbody id="history-tbody"></tbody>
+        </table>
+    </div>
+
+    <!-- データ管理・ロゴ設定画面 -->
+    <div id="migration-screen" class="screen management-screen">
+        <div class="top-bar">
+            <button class="back-btn" onclick="goHome()">← ホーム</button>
+            <h2 class="top-bar-title">データ管理・ロゴ設定</h2>
+        </div>
+
+        <!-- 追加：ロゴ画像のアップロード設定ブロック -->
+        <div class="migration-block" style="background:#e3f2fd; border:2px solid #90caf9; padding:15px; border-radius:6px; margin-bottom:15px;">
+            <h3 class="migration-title" style="color:#1565c0;">📸 ホーム画面・レシート用ロゴの登録</h3>
+            <p class="migration-desc">お店のロゴ（ヤオコーなど）の画像を登録できます。「ファイルを選択」ボタンからアップロードしてください。</p>
+            <input type="file" id="logo-upload-input" accept="image/*" onchange="uploadShopLogo(event)" style="margin-bottom: 10px;">
+            <br>
+            <button class="btn-migration" style="background:#f44336; color:white; padding:8px 12px; border:none; border-radius:4px; font-weight:bold; cursor:pointer;" onclick="clearShopLogo()">ロゴを初期化する</button>
+        </div>
+
+        <div class="migration-block danger">
+            <h3 class="migration-title danger">🚨 商品・履歴データの初期化 (会員・店員データは残す)</h3>
+            <p class="migration-desc">登録されている商品データとレジの履歴を削除します。<b>お客様（会員）データと店員データはそのまま保持されます。</b></p>
+            <button class="btn-migration danger" onclick="confirmResetAllData()">商品と履歴データを初期化する</button>
+        </div>
+
+        <div class="migration-block export">
+            <h3 class="migration-title export">【送る】 今使っている端末のデータを出力 (全情報)</h3>
+            <p class="migration-desc">現在登録されているすべてのデータ（商品、会員、担当者、履歴など）をコードとして出力・コピーします。</p>
+            <button class="btn-migration export" onclick="exportAllData()">全データをコピーする</button>
+        </div>
+        
+        <div class="migration-block import">
+            <h3 class="migration-title import">【受け取る】 他の端末からのデータを取り込む</h3>
+            <p class="migration-desc">別の端末でコピーしたデータを下の欄に貼り付けて取り込んでください。</p>
+            <textarea id="import-data-input" placeholder="ここに、別の端末でコピーしたデータを貼り付けてください" class="migration-textarea"></textarea>
+            <button class="btn-migration import" onclick="importAllData()">貼り付けたデータを取り込む</button>
+        </div>
+    </div>
+
+    <!-- お会計モーダル -->
+    <div id="checkout-modal" class="modal-overlay">
+        <div class="modal-box checkout-box">
+            
+            <div id="checkout-step-points">
+                <h2 class="modal-title pink">ポイント利用</h2>
+                <div class="point-avail-text">
+                    ご利用可能: <span id="modal-avail-points"></span> pt
+                </div>
+                <div class="pay-methods wrap">
+                    <button class="pay-btn selected point-selected" onclick="skipPoints()">まだ利用しない</button>
+                    <button class="pay-btn" onclick="useAllPoints()">全ポイント使用</button>
+                    <button class="pay-btn" onclick="showSomePointsInput()">一部ポイント使用</button>
+                </div>
+                
+                <div id="some-points-input-area">
+                    <label class="point-input-label">利用するポイント数を入力</label>
+                    <div class="point-input-group">
+                        <input type="number" id="some-points-input" placeholder="例: 100">
+                        <button class="btn-point-decide" onclick="useSomePoints()">決定</button>
+                    </div>
+                </div>
+
+                <div>
+                    <button class="btn-full-cancel" onclick="closeCheckout()">キャンセルして戻る</button>
+                </div>
+            </div>
+
+            <div id="checkout-step-pay">
+                <h2 class="modal-title">お支払い</h2>
+                <div class="checkout-total" id="modal-total">¥0</div>
+                
+                <div class="pay-methods">
+                    <button class="pay-btn selected" id="btn-cash" onclick="selectPayMethod('現金')">現金</button>
+                    <button class="pay-btn" id="btn-credit" onclick="selectPayMethod('クレジット')">クレジット</button>
+                    <button class="pay-btn" id="btn-qr" onclick="selectPayMethod('QR決済')">QR決済</button>
+                </div>
+
+                <div class="cash-input-section" id="cash-input-area">
+                    <label>お預かり金額</label>
+                    <input type="number" id="deposit-input" placeholder="0" oninput="calculateChange()">
+                    <div class="preset-buttons">
+                        <button class="preset-btn" onclick="addDepositPreset(1000)">+1,000</button>
+                        <button class="preset-btn" onclick="addDepositPreset(5000)">+5,000</button>
+                        <button class="preset-btn" onclick="addDepositPreset(10000)">+10,000</button>
+                        <button class="preset-btn" onclick="setExactDeposit()">丁度</button>
+                        <button class="preset-btn" onclick="clearDeposit()">クリア</button>
+                    </div>
+                    <div class="change-display" id="change-display-box">お釣り: ¥0</div>
+                </div>
+
+                <div class="checkout-actions">
+                    <button class="checkout-back-btn" onclick="closeCheckout()">戻る</button>
+                    <button class="complete-btn" onclick="completeTransaction()">お会計・レシート発行</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 領収書宛名入力モーダル -->
+    <div id="invoice-modal" class="modal-overlay">
+        <div class="modal-box medium">
+            <h3 class="modal-title navy">領収書の発行</h3>
+            <p class="modal-desc">領収書の宛名（お名前）を入力してください。</p>
+            <div class="modal-form-group large">
+                <label class="modal-label">宛名</label>
+                <input type="text" id="invoice-client-name-input" placeholder="例: 山田 太郎 / 上様" class="modal-input">
+            </div>
+            <div class="modal-btn-group">
+                <button onclick="closeInvoiceModal()" class="modal-btn cancel">発行しない（レシートのみ）</button>
+                <button onclick="generateReceiptAndInvoice()" class="modal-btn primary">領収書も発行する</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- レシートプレビュー＆保存モーダル -->
+    <div id="receipt-print-modal" class="modal-overlay">
+        <div class="receipt-preview-box">
+            <!-- ロゴとレシート本文を撮影用エリア(receipt-capture-area)でまとめる -->
+            <div id="receipt-capture-area" style="background: #ffffff; padding: 15px; border-radius: 4px;">
+                <div class="receipt-preview-title" style="text-align:center;">
+                    <!-- レシートプレビューのロゴ -->
+                    <img id="receipt-preview-logo" src="https://illust8.com/wp-content/uploads/2022/04/cash-register_16279.png" style="max-height: 80px; width: auto; margin-bottom: 10px;">
+                </div>
+                <div id="print-receipt-content"></div>
+            </div>
+            <div class="modal-btn-group no-print">
+                <button onclick="closeReceiptPrintModal()" class="modal-btn cancel">閉じる</button>
+                <button onclick="saveReceiptAsImage()" class="modal-btn primary">画像(PNG)保存</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- カスタム確認モーダル -->
+    <div id="custom-confirm-modal" class="modal-overlay">
+        <div class="custom-alert-box">
+            <div class="custom-alert-msg" id="custom-confirm-text">確認メッセージ</div>
+            <div class="modal-btn-group">
+                <button id="custom-confirm-no-btn" onclick="closeCustomConfirm(false)" class="custom-btn-no">いいえ</button>
+                <button id="custom-confirm-yes-btn" onclick="closeCustomConfirm(true)" class="custom-btn-yes">はい</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 未知商品登録用モーダル -->
+    <div id="unknown-prod-modal" class="modal-overlay">
+        <div class="modal-box medium">
+            <h3 class="modal-title">価格と税率、名前を入力してください</h3>
+            <div class="unknown-jan-display" id="unknown-jan-display">JAN: </div>
+            <div class="modal-form-group">
+                <label class="modal-label">商品名</label>
+                <input type="text" id="unknown-prod-name-input" placeholder="商品名を入力 (空欄で「名無しの商品」)" class="modal-input">
+            </div>
+            
+            <!-- 追加: ジャンル選択 -->
+            <div class="modal-form-group">
+                <label class="modal-label">ジャンル</label>
+                <select id="unknown-prod-genre-input" class="modal-input">
+                    <option value="食品">食品</option>
+                    <option value="飲料/お酒">飲料/お酒</option>
+                    <option value="お惣菜/お弁当">お惣菜/お弁当</option>
+                    <option value="スイーツ/菓子">スイーツ/菓子</option>
+                    <option value="日用品">日用品</option>
+                    <option value="衣料品">衣料品</option>
+                    <option value="雑貨">雑貨</option>
+                    <option value="サービス">サービス</option>
+                    <option value="その他商品" selected>その他商品</option>
+                    <option value="値引き/その他">値引き/その他</option>
+                </select>
+            </div>
+
+            <div class="modal-form-group">
+                <label class="modal-label">価格 (円) <span class="req-mark">*必須</span></label>
+                <input type="number" id="unknown-prod-price-input" placeholder="価格を入力してください" class="modal-input">
+            </div>
+            <div class="modal-form-group">
+                <label class="modal-label">税率 (%)</label>
+                <input type="number" id="unknown-prod-tax-input" value="10" class="modal-input">
+            </div>
+            <div class="modal-form-group large">
+                <label class="checkbox-label">
+                    <input type="checkbox" id="unknown-prod-age-check"> 年齢確認が必要
+                </label>
+            </div>
+            <div id="unknown-prod-error" class="error-msg">価格を正しく入力してください</div>
+            <div class="modal-btn-group">
+                <button onclick="closeUnknownProdModal()" class="modal-btn cancel">キャンセル</button>
+                <button onclick="saveUnknownProd()" class="modal-btn primary">登録して追加</button>
+            </div>
+        </div>
+    </div>
+
+   <!-- 商品編集モーダル -->
+    <div id="edit-prod-modal" class="modal-overlay">
+        <div class="modal-box small">
+            <h3 class="modal-title" id="edit-prod-name-display">商品編集</h3>
+            
+            <!-- 追加: ジャンル選択 -->
+            <div class="modal-form-group">
+                <label class="modal-label">ジャンル</label>
+                <select id="edit-prod-genre-input" class="modal-input">
+                    <option value="食品">食品</option>
+                    <option value="飲料/お酒">飲料/お酒</option>
+                    <option value="お惣菜/お弁当">お惣菜/お弁当</option>
+                    <option value="スイーツ/菓子">スイーツ/菓子</option>
+                    <option value="日用品">日用品</option>
+                    <option value="衣料品">衣料品</option>
+                    <option value="雑貨">雑貨</option>
+                    <option value="サービス">サービス</option>
+                    <option value="その他商品">その他商品</option>
+                    <option value="値引き/その他">値引き/その他</option>
+                </select>
+            </div>
+
+            <div class="modal-form-group">
+                <label class="modal-label">新しい値段 (円)</label>
+                <input type="number" id="edit-prod-price-input" class="modal-input">
+            </div>
+            <div class="modal-form-group">
+                <label class="modal-label">新しい税率 (%)</label>
+                <input type="number" id="edit-prod-tax-input" class="modal-input">
+            </div>
+            <div class="modal-form-group large">
+                <label class="checkbox-label">
+                    <input type="checkbox" id="edit-prod-age-check"> 年齢確認が必要
+                </label>
+            </div>
+            <div id="edit-prod-error" class="error-msg">数値を正しく入力してください</div>
+            <div class="modal-btn-group">
+                <button onclick="closeEditProdModal()" class="modal-btn cancel">キャンセル</button>
+                <button onclick="saveEditProd()" class="modal-btn primary">保存する</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 担当者編集モーダル -->
+    <div id="edit-clerk-modal" class="modal-overlay">
+        <div class="modal-box small">
+            <h3 class="modal-title">担当者情報の変更</h3>
+            <div class="modal-form-group">
+                <label class="modal-label">新しい担当者名</label>
+                <input type="text" id="edit-clerk-name-input" class="modal-input">
+            </div>
+            <div class="modal-form-group">
+                <label class="modal-label">フリガナ</label>
+                <input type="text" id="edit-clerk-kana-input" class="modal-input">
+            </div>
+            <div class="modal-form-group">
+                <label class="modal-label">年齢</label>
+                <input type="number" id="edit-clerk-age-input" class="modal-input">
+            </div>
+            <div class="modal-form-group">
+                <label class="modal-label">店員用バーコード</label>
+                <input type="text" id="edit-clerk-barcode-input" placeholder="(任意)" class="modal-input">
+            </div>
+            <div class="modal-form-group large">
+                <label class="checkbox-label">
+                    <input type="checkbox" id="edit-clerk-voice-check"> 音声を読み上げる
+                </label>
+            </div>
+            <div id="edit-clerk-error" class="error-msg">名前を入力してください</div>
+            <div class="modal-btn-group">
+                <button onclick="closeEditClerkModal()" class="modal-btn cancel">キャンセル</button>
+                <button onclick="saveEditClerk()" class="modal-btn primary">保存する</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 顧客情報編集モーダル -->
+    <div id="edit-cust-modal" class="modal-overlay">
+        <div class="modal-box large">
+            <h3 class="modal-title purple">会員情報の変更</h3>
+            <div class="modal-form-group small">
+                <label class="modal-label small">バーコード (読み取り専用)</label>
+                <input type="text" id="edit-cust-barcode-input" readonly class="modal-input small">
+            </div>
+            <div class="flex-row">
+                <div class="flex-col">
+                    <label class="modal-label small">姓</label>
+                    <input type="text" id="edit-cust-last-name-input" class="modal-input small">
+                </div>
+                <div class="flex-col">
+                    <label class="modal-label small">名</label>
+                    <input type="text" id="edit-cust-first-name-input" class="modal-input small">
+                </div>
+            </div>
+            <div class="flex-row">
+                <div class="flex-col">
+                    <label class="modal-label small">セイ</label>
+                    <input type="text" id="edit-cust-last-kana-input" class="modal-input small">
+                </div>
+                <div class="flex-col">
+                    <label class="modal-label small">メイ</label>
+                    <input type="text" id="edit-cust-first-kana-input" class="modal-input small">
+                </div>
+            </div>
+            <div class="modal-form-group small">
+                <label class="modal-label small">生年月日</label>
+                <input type="date" id="edit-cust-birthday-input" class="modal-input small">
+            </div>
+            <div class="modal-form-group small">
+                <label class="modal-label small">保有ポイント</label>
+                <input type="number" id="edit-cust-points-input" class="modal-input small">
+            </div>
+            <div class="modal-form-group small">
+                <label class="modal-label small">電話番号</label>
+                <input type="text" id="edit-cust-phone-input" class="modal-input small">
+            </div>
+            <div class="modal-form-group large">
+                <label class="modal-label small">住所</label>
+                <input type="text" id="edit-cust-address-input" class="modal-input small">
+            </div>
+            <div id="edit-cust-error" class="error-msg">お名前とフリガナを入力してください</div>
+            <div class="modal-btn-group">
+                <button onclick="closeEditCustModal()" class="modal-btn cancel">キャンセル</button>
+                <button onclick="saveEditCust()" class="modal-btn purple">保存する</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const apiKeyInput = document.getElementById('api-key-input');
+            const guideMsg = document.getElementById('api-guide-msg');
+            
+            const savedKey = localStorage.getItem('pos_api_key');
+            if (savedKey) {
+                apiKeyInput.value = savedKey;
+                guideMsg.style.display = 'none';
+            } else {
+                guideMsg.style.display = 'block';
+            }
+
+            document.addEventListener('keydown', (e) => {
+                const checkoutModal = document.getElementById('checkout-modal');
+                const invoiceModal = document.getElementById('invoice-modal');
+                const receiptPrintModal = document.getElementById('receipt-print-modal');
+                const customConfirmModal = document.getElementById('custom-confirm-modal');
+                const managerAuthModal = document.getElementById('manager-auth-modal');
+                const historyAuthModal = document.getElementById('history-auth-modal');
+                const homeScreen = document.getElementById('home-screen');
+
+                const isVisible = (el) => {
+                    if (!el) return false;
+                    const style = window.getComputedStyle(el);
+                    return style.display !== 'none' && style.visibility !== 'hidden';
+                };
+
+                if (homeScreen && homeScreen.classList.contains('active')) {
+                    const isAnyModalOpen = (
+                        isVisible(checkoutModal) ||
+                        isVisible(invoiceModal) ||
+                        isVisible(receiptPrintModal) ||
+                        isVisible(customConfirmModal) ||
+                        isVisible(managerAuthModal) ||
+                        isVisible(historyAuthModal)
+                    );
+
+                    if (!isAnyModalOpen && (e.key === 'k' || e.key === 'K')) {
+                        const activeEl = document.activeElement;
+                        if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA')) {
+                            return;
+                        }
+
+                        e.preventDefault();
+                        if (typeof openRegister === 'function') {
+                            openRegister();
+                        }
+                        return;
+                    }
+                }
+
+                if (isVisible(customConfirmModal)) {
+                    const confirmText = document.getElementById('custom-confirm-text')?.innerText || '';
+                    if (confirmText.includes('領収書を発行しますか？')) {
+                        if (e.key === 'Enter' || e.key === 'Backspace' || e.key === 'Delete') {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            customConfirmModal.style.display = 'none';
+                            if (typeof closeCustomConfirm === 'function') {
+                                closeCustomConfirm(false);
+                            }
+                            return;
+                        }
+                    }
+                }
+
+                if (isVisible(checkoutModal)) {
+                    const pointStep = document.getElementById('checkout-step-points');
+                    const isPointVisible = pointStep && window.getComputedStyle(pointStep).display !== 'none';
+
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        if (isPointVisible) {
+                            const somePointsInput = document.getElementById('some-points-input');
+                            if (document.activeElement === somePointsInput) {
+                                if (typeof useSomePoints === 'function') {
+                                    useSomePoints();
+                                }
+                            } else {
+                                if (typeof skipPoints === 'function') {
+                                    skipPoints();
+                                }
+                            }
+                        } else {
+                            if (typeof completeTransaction === 'function') {
+                                completeTransaction();
+                            }
+                        }
+                    }
+                }
+                else if (isVisible(invoiceModal)) {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        if (typeof generateReceiptAndInvoice === 'function') {
+                            generateReceiptAndInvoice();
+                        }
+                    } else if (e.key === 'Backspace' || e.key === 'Delete') {
+                        e.preventDefault();
+                        if (typeof closeInvoiceModal === 'function') {
+                            closeInvoiceModal();
+                        }
+                    }
+                }
+                else if (isVisible(receiptPrintModal)) {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        if (typeof saveReceiptAsImage === 'function') {
+                            saveReceiptAsImage();
+                        }
+                    } else if (e.key === 'Backspace' || e.key === 'Delete') {
+                        e.preventDefault();
+                        if (typeof closeReceiptPrintModal === 'function') {
+                            closeReceiptPrintModal();
+                        }
+                    }
+                }
+            });
+        });
+
+        function saveApiKey() {
+            const apiKeyInput = document.getElementById('api-key-input');
+            const val = apiKeyInput.value.trim();
+            localStorage.setItem('pos_api_key', val);
+            location.reload();
+        }
+    </script>
+
+    <script src="state.js"></script>
+    <script src="utils.js"></script>
+    <script src="management.js"></script>
+    <script src="register.js"></script>
+    <script src="ui.js"></script>
+    <script src="keyboarddown.js"></script>
+</body>
+</html>
