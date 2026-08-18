@@ -1,3 +1,11 @@
+// XSS対策：商品名・会員名など、ユーザーが入力した文字列をHTMLに挿入する前に無害化する
+function escapeHtml(str) {
+    if (str === undefined || str === null) return '';
+    return String(str).replace(/[&<>"']/g, function (ch) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch];
+    });
+}
+
 function checkPointExpiry(cust) {
     if (!cust || !cust.points || cust.points <= 0) return { expired: false, expiringSoon: false, daysLeft: 365 };
     const updatedAt = cust.pointsUpdatedAt ? new Date(cust.pointsUpdatedAt).getTime() : Date.now();
@@ -174,6 +182,8 @@ function initAbly() {
                 usedPoints = message.data.pointsUsed || 0;
                 isRegisterPaused = !!message.data.isPaused;
                 lastScannedBarcode = message.data.lastBarcode || "";
+                selectedPayment = message.data.payment || selectedPayment;
+                customerDisplayMemberInfo = message.data.member || null;
                 updatePauseUI();
                 updateCustomerDisplay();
             });
@@ -203,7 +213,9 @@ function broadcastState() {
             change: currentChange,
             pointsUsed: usedPoints,
             isPaused: isRegisterPaused,
-            lastBarcode: lastScannedBarcode
+            lastBarcode: lastScannedBarcode,
+            payment: (typeof selectedPayment !== 'undefined') ? selectedPayment : '現金',
+            member: (typeof customerDisplayMemberInfo !== 'undefined') ? customerDisplayMemberInfo : null
         });
     }
 }
@@ -223,13 +235,18 @@ window.addEventListener('online', () => {
     }
 });
 
-// 縦画面・横画面の強制判定
+// 縦画面・横画面の判定
+// ------------------------------------------
+// 以前は「スマホサイズで縦画面」の場合に強制的に回転を促すオーバーレイを
+// 表示していたが、スマホでも快適に使えるようレイアウトを対応させたため、
+// 極端に幅が狭い端末（スマホより小さいごく一部の機器）以外では
+// 縦画面のままでも操作できるようにした。
 function checkOrientation() {
     const overlay = document.getElementById('orientation-overlay');
     if (!overlay) return;
     const isPortrait = window.innerHeight > window.innerWidth;
-    const isMobileSize = window.innerWidth <= 1024; 
-    if (isPortrait && isMobileSize) {
+    const isTooNarrow = window.innerWidth < 340; // スマホ対応の下限を下回る場合のみ案内
+    if (isPortrait && isTooNarrow) {
         overlay.style.display = 'flex';
     } else {
         overlay.style.display = 'none';

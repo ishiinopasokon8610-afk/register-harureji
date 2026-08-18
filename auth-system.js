@@ -117,6 +117,9 @@ function openManagerAuthTarget(target) {
         } else if (target === 'history') {
             showScreen('history-screen');
             renderHistory();
+        } else if (target === 'discount') {
+            showScreen('discount-screen');
+            if (typeof renderDiscounts === 'function') renderDiscounts();
         } else {
             showScreen('home-screen');
         }

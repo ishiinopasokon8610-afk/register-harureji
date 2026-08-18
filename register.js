@@ -46,17 +46,29 @@ function openRegister() {
 /* =========================================================
    ジャンル（種類）フィルター機能
    ========================================================= */
-const GENRE_LIST = [
-    'すべて', '食品', '飲料/お酒', 'お惣菜/お弁当', 
+const BASE_GENRE_LIST = [
+    '食品', '飲料/お酒', 'お惣菜/お弁当', 
     'スイーツ/菓子', '日用品', '衣料品', '雑貨', 'サービス', 'その他商品', '値引き/その他'
 ];
+
+// 基本の種類一覧 ＋ ユーザーが追加した種類（customGenres）をまとめて返す
+function getAllGenres() {
+    const customs = (typeof customGenres !== 'undefined' && Array.isArray(customGenres)) ? customGenres : [];
+    const merged = BASE_GENRE_LIST.slice();
+    customs.forEach(g => { if (g && !merged.includes(g)) merged.push(g); });
+    return merged;
+}
+
+function getGenreFilterList() {
+    return ['すべて'].concat(getAllGenres());
+}
 
 function renderGenreFilterButtons() {
     const container = document.getElementById('genre-filter-container');
     if (!container) return;
 
     container.innerHTML = '';
-    GENRE_LIST.forEach(genre => {
+    getGenreFilterList().forEach(genre => {
         const btn = document.createElement('button');
         btn.className = 'genre-tab-btn' + (selectedGenreFilter === genre ? ' active' : '');
         btn.innerText = genre;
@@ -103,6 +115,20 @@ function generateCustomButtons() {
     });
 }
 
+// 客用画面に表示する会員情報（名前・ポイント・ランク）をまとめる
+function buildMemberSummary(cust, displayName, rankInfo) {
+    if (!cust) return null;
+    const name = displayName || cust.name || `${cust.lastName || ''} ${cust.firstName || ''}`.trim();
+    const info = rankInfo || ((typeof getCustomerRankInfo === 'function') ? getCustomerRankInfo(cust) : null);
+    return {
+        name: name,
+        points: cust.points,
+        rankName: info ? info.name : '',
+        rankColor: info ? info.color : '',
+        navText: (typeof buildRankNavText === 'function') ? buildRankNavText(cust) : ''
+    };
+}
+
 function openCustomerScreen() {
     initAbly();
     requestFullscreen();
@@ -134,6 +160,64 @@ function updateCustomerDisplay() {
         lastCodeEl.innerText = lastScannedBarcode ? `コード: ${lastScannedBarcode}` : 'コード: -';
     }
 
+    // 追加：お会計確定前でも、お支払方法を選んだだけで「いらっしゃいませ」の文言を変える
+    const headerMsgEl = document.getElementById('customer-header-msg');
+    if (headerMsgEl) {
+        const payingByPoints = (usedPoints > 0 && billingAmount === 0);
+        if (cart.length === 0) {
+            headerMsgEl.innerText = 'いらっしゃいませ！';
+        } else if (payingByPoints) {
+            headerMsgEl.innerText = 'ポイントでのお支払いですね';
+        } else if (selectedPayment === 'クレジット') {
+            headerMsgEl.innerText = 'クレジットカードでのお支払いですね';
+        } else if (selectedPayment === 'QR決済') {
+            headerMsgEl.innerText = 'QR決済でのお支払いですね';
+        } else if (selectedPayment === '現金' && currentDeposit > 0) {
+            headerMsgEl.innerText = '現金でのお支払いですね';
+        } else {
+            headerMsgEl.innerText = 'ご来店ありがとうございます';
+        }
+    }
+
+    // 追加：お支払方法を選んだ時、客画面右側にバッジで表示する
+    const paymentBadgeEl = document.getElementById('customer-payment-badge');
+    if (paymentBadgeEl) {
+        const inPayStep = (
+            selectedPayment === 'クレジット' ||
+            selectedPayment === 'QR決済' ||
+            (selectedPayment === '現金' && currentDeposit > 0)
+        );
+        if (inPayStep && cart.length > 0) {
+            const payIcon = selectedPayment === '現金' ? '💴' : (selectedPayment === 'クレジット' ? '💳' : '📱');
+            paymentBadgeEl.innerText = `${payIcon} ${selectedPayment}`;
+            paymentBadgeEl.style.display = 'block';
+        } else {
+            paymentBadgeEl.style.display = 'none';
+        }
+    }
+
+    // 追加：会員バーコードスキャン時、客画面右側に現在のポイント数・ランクを表示する
+    const memberCardEl = document.getElementById('customer-member-card');
+    if (memberCardEl) {
+        const info = (typeof customerDisplayMemberInfo !== 'undefined') ? customerDisplayMemberInfo : null;
+        if (info) {
+            const nameEl = document.getElementById('cm-name');
+            const rankEl = document.getElementById('cm-rank');
+            const ptsEl = document.getElementById('cm-points');
+            const navEl = document.getElementById('cm-nav');
+            if (nameEl) nameEl.innerText = `👤 ${info.name || ''} 様`;
+            if (rankEl) {
+                rankEl.innerText = info.rankName || '';
+                rankEl.style.background = info.rankColor || 'rgba(0,0,0,0.25)';
+            }
+            if (ptsEl) ptsEl.innerText = (info.points !== undefined && info.points !== null) ? info.points : 0;
+            if (navEl) navEl.innerText = info.navText || '';
+            memberCardEl.style.display = 'block';
+        } else {
+            memberCardEl.style.display = 'none';
+        }
+    }
+
     if (!listEl) return;
 
     if (typeof selectedPayment !== 'undefined' && (selectedPayment === 'クレジット' || selectedPayment === 'QR決済')) {
@@ -160,7 +244,8 @@ function updateCustomerDisplay() {
         div.style.justifyContent = 'space-between';
         div.style.marginBottom = '6px';
         div.style.fontSize = '16px';
-        div.innerHTML = `<span>${item.name} ${item.qty > 1 ? 'x'+item.qty : ''}</span> <span>¥${(item.price * item.qty).toLocaleString()}</span>`;
+        const safeName = (typeof escapeHtml === 'function') ? escapeHtml(item.name) : item.name;
+        div.innerHTML = `<span>${safeName} ${item.qty > 1 ? 'x'+item.qty : ''}</span> <span>¥${(item.price * item.qty).toLocaleString()}</span>`;
         listEl.appendChild(div);
     });
     
@@ -184,10 +269,116 @@ function typeNum(n) {
     if (input) { input.value += n; focusJanInput(); }
 }
 
+// 追加：「万」ボタン。入力中の数字を1万円単位に一括変換する（例: 3 → 30000）
+function typeMan() {
+    playSound('click');
+    const input = getJanInput();
+    if (!input) return;
+    const cur = parseInt(input.value, 10);
+    if (isNaN(cur) || cur === 0) {
+        input.value = '10000';
+    } else {
+        input.value = String(cur * 10000);
+    }
+    focusJanInput();
+}
+
 function clearNum() {
     playSound('click');
     const input = getJanInput();
     if (input) { input.value = ""; focusJanInput(); }
+    // 単価更新モードの途中でクリアした場合はモードごとキャンセルする
+    if (typeof priceUpdateMode !== 'undefined' && priceUpdateMode) {
+        cancelPriceUpdateMode();
+    }
+}
+
+// 追加：単価更新モード（選択中の商品の価格を、今回のお会計だけ一時的に変更する。商品マスタは変更しない）
+function startPriceUpdateMode() {
+    if (selectedCartIndex === -1 || !cart[selectedCartIndex]) {
+        playSound('error');
+        showCustomConfirm("先にレシートから価格を変更したい商品をタップして選択してください。", "さきに かかくを へんこう し たい しょうひんを タップ し て せんたく し て ください。", () => { focusJanInput(); }, true);
+        return;
+    }
+    playSound('click');
+    priceUpdateMode = true;
+    const input = getJanInput();
+    if (input) {
+        input.value = '';
+        input.placeholder = '新しい価格を入力して「確定」を押してください';
+        input.classList.add('price-update-active');
+        input.focus();
+    }
+    speak('あたらしい たんかを にゅうりょく し て ください');
+}
+
+function cancelPriceUpdateMode() {
+    priceUpdateMode = false;
+    const input = getJanInput();
+    if (input) {
+        input.placeholder = 'JAN・会員・店員バーコードをスキャン';
+        input.classList.remove('price-update-active');
+    }
+}
+
+function applyPriceUpdate(code) {
+    const newPrice = parseInt(code, 10);
+    cancelPriceUpdateMode();
+
+    if (isNaN(newPrice) || newPrice < 0 || selectedCartIndex === -1 || !cart[selectedCartIndex]) {
+        playSound('error');
+        showCustomConfirm("価格の変更に失敗しました。数字のみを入力してください。", "かかく の へんこう に しっぱい し まし た。", () => { focusJanInput(); }, true);
+        return;
+    }
+
+    recordCartState();
+    const item = cart[selectedCartIndex];
+    item.price = newPrice;
+    item.priceOverridden = true; // 今回限りの単価変更（商品マスタには反映されない）
+    selectedCartIndex = -1;
+    updateReceipt();
+    playSound('success');
+    speak(`たんかを ${newPrice}えんに へんこう し まし た`);
+    focusJanInput();
+}
+
+// 税込価格から、指定の税率分を差し引いた「免税後の価格」を計算する
+// （例：110円・税率10% → 100円）
+function computeTaxExemptPrice(price, originalTaxRate) {
+    if (!originalTaxRate || originalTaxRate <= 0) return price;
+    return Math.floor(price * 100 / (100 + originalTaxRate));
+}
+
+// 免税対象ボタン。
+// 押した時点でこの会計（取引）全体を免税に切り替える。
+// 元々の価格は税込で登録されているため、税率分を差し引いた金額に変更する。
+// 会計が完了する（レシート発行後）までは、後から追加した商品にも自動的に免税が適用され続ける。
+function applyTaxExempt() {
+    if (cart.length === 0) {
+        playSound('error');
+        showCustomConfirm("先に商品をカートに入れてください。", "さき に しょうひん を かーと に いれ て ください。", () => { focusJanInput(); }, true);
+        return;
+    }
+    recordCartState();
+    playSound('click');
+
+    taxExemptTransaction = true; // この会計はずっと免税
+
+    cart.forEach(item => {
+        if (item.taxExempt) return; // すでに免税適用済みならスキップ（二重に差し引かない）
+        const originalRate = item.taxRate;
+        if (originalRate > 0) {
+            item.price = computeTaxExemptPrice(item.price, originalRate);
+        }
+        item.originalTaxRate = originalRate;
+        item.taxRate = 0;
+        item.taxExempt = true;
+    });
+
+    selectedCartIndex = -1;
+    updateReceipt();
+    speak("この おかいけい は、 これいこう ずっと めんぜい に なり まし た");
+    focusJanInput();
 }
 
 async function submitInput() {
@@ -203,6 +394,13 @@ async function submitInput() {
     const code = input.value.trim();
     if (!code) {
         focusJanInput();
+        return;
+    }
+
+    // 単価更新モード中は、入力された数字を新しい価格として適用する（バーコード処理は行わない）
+    if (typeof priceUpdateMode !== 'undefined' && priceUpdateMode) {
+        input.value = "";
+        applyPriceUpdate(code);
         return;
     }
 
@@ -238,6 +436,7 @@ async function fetchAndAddItem(code) {
     const foundCustomer = customers.find(c => c.barcode === code);
     if (foundCustomer) {
         activeCustomer = foundCustomer;
+        if (typeof ensureCustomerRankFields === 'function') ensureCustomerRankFields(activeCustomer);
         const currentAge = calculateAge(foundCustomer);
         const displayName = foundCustomer.name || `${foundCustomer.lastName || ''} ${foundCustomer.firstName || ''}`;
         
@@ -247,6 +446,24 @@ async function fetchAndAddItem(code) {
         if (acNameEl) acNameEl.innerText = displayName;
         if (acAgeEl) acAgeEl.innerText = currentAge;
         if (acPtsEl) acPtsEl.innerText = foundCustomer.points;
+
+        // 会員ランクの即時判別表示（レジ画面に大きくカラー表示）
+        const rankBadgeEl = document.getElementById('ac-rank-badge');
+        const rankNavEl = document.getElementById('ac-rank-nav');
+        let rankInfo = null;
+        if (typeof getCustomerRankInfo === 'function') {
+            rankInfo = getCustomerRankInfo(activeCustomer);
+            if (rankBadgeEl) {
+                rankBadgeEl.innerText = rankInfo.name;
+                rankBadgeEl.style.background = rankInfo.color;
+            }
+            if (rankNavEl && typeof buildRankNavText === 'function') {
+                rankNavEl.innerText = buildRankNavText(activeCustomer);
+            }
+        }
+
+        // 追加：客用画面（別端末の場合も含む）にポイント・ランクを表示するための情報を作成
+        customerDisplayMemberInfo = buildMemberSummary(activeCustomer, displayName, rankInfo);
         
         const exp = checkPointExpiry(foundCustomer);
         const expInfoEl = document.getElementById('ac-exp-info');
@@ -259,6 +476,9 @@ async function fetchAndAddItem(code) {
         } else if (exp.expiringSoon) {
             if (expInfoEl) expInfoEl.innerText = `⚠️ まもなく ${foundCustomer.points} ポイントが失効します！(あと${exp.daysLeft}日)`;
             speak(`かいいんカードをスキャンしました。まもなく、${foundCustomer.points} ポイントが失効します。`);
+        } else if (rankInfo && (rankInfo.key === 'gold' || rankInfo.key === 'diamond')) {
+            // 上位ランク会員には一言添える
+            speak(`いつもご利用ありがとうございます。${rankInfo.name}かいいんさまです。げんざいのポイントは、${foundCustomer.points} ポイントです。`);
         } else {
             speak(`かいいんカードをスキャンしました。げんざいのポイントは、${foundCustomer.points} ポイントです。`);
         }
@@ -441,7 +661,20 @@ function recordCartState() {
 function addToCart(name, price, taxRate = 10, genre = 'その他商品') {
     recordCartState();
     if (cart.length === 1 && cartHistory.length === 0 && !activeCustomer) { speak("いらっしゃいませ"); }
-    const existingItem = cart.find(item => item.name === name && item.price === price && item.taxRate === taxRate);
+
+    // この会計がすでに免税になっている場合、新しく追加する商品にも自動的に免税を適用する
+    let finalPrice = price;
+    let finalTaxRate = taxRate;
+    let originalTaxRate = undefined;
+    let isTaxExemptItem = false;
+    if (typeof taxExemptTransaction !== 'undefined' && taxExemptTransaction && taxRate > 0) {
+        finalPrice = computeTaxExemptPrice(price, taxRate);
+        originalTaxRate = taxRate;
+        finalTaxRate = 0;
+        isTaxExemptItem = true;
+    }
+
+    const existingItem = cart.find(item => item.name === name && item.price === finalPrice && item.taxRate === finalTaxRate);
     
     const speakName = (name === '名無しの商品') ? 'ななしのしょうひん' : name;
 
@@ -449,8 +682,13 @@ function addToCart(name, price, taxRate = 10, genre = 'その他商品') {
         existingItem.qty += 1;
         speak("どういつ しょうひん です");
     } else {
-        cart.push({ name: name, price: price, qty: 1, taxRate: taxRate, genre: genre });
-        speak(`${speakName}、 ${price} えん です`);
+        const newItem = { name: name, price: finalPrice, qty: 1, taxRate: finalTaxRate, genre: genre };
+        if (isTaxExemptItem) {
+            newItem.taxExempt = true;
+            newItem.originalTaxRate = originalTaxRate;
+        }
+        cart.push(newItem);
+        speak(`${speakName}、 ${finalPrice} えん です`);
     }
     updateReceipt();
 }
@@ -514,6 +752,7 @@ function updateReceipt() {
     currentTotal = 0;
     let total8 = 0; 
     let total10 = 0; 
+    let total0 = 0;
     let totalQty = 0;
 
     cart.forEach((item, idx) => {
@@ -523,6 +762,8 @@ function updateReceipt() {
 
         if (item.taxRate === 8) {
             total8 += subTotal;
+        } else if (item.taxRate === 0) {
+            total0 += subTotal;
         } else {
             total10 += subTotal;
         }
@@ -536,8 +777,9 @@ function updateReceipt() {
             updateReceipt();
         };
 
-        const taxMark = item.taxRate === 8 ? ' ※' : '';
-        div.innerHTML = `<span>${item.name}${item.qty > 1 ? ' x'+item.qty : ''}</span> <span>¥${subTotal.toLocaleString()}${taxMark}</span>`;
+        const taxMark = item.taxRate === 8 ? ' ※' : (item.taxRate === 0 ? ' 免' : '');
+        const safeItemName = (typeof escapeHtml === 'function') ? escapeHtml(item.name) : item.name;
+        div.innerHTML = `<span>${safeItemName}${item.qty > 1 ? ' x'+item.qty : ''}</span> <span>¥${subTotal.toLocaleString()}${taxMark}</span>`;
         receiptBody.appendChild(div);
     });
 
@@ -562,8 +804,11 @@ function updateReceipt() {
         if (total10 !== 0) {
             summaryHTML += `<div style="display:flex; justify-content:space-between; margin-top:2px;"><span>消費税等(税抜10%)</span><span>¥${excl10.toLocaleString()}</span></div>`;
         }
+        if (total0 !== 0) {
+            summaryHTML += `<div style="display:flex; justify-content:space-between; margin-top:2px; color:#00838f;"><span>免税対象</span><span>¥${total0.toLocaleString()}</span></div>`;
+        }
         if (total8 !== 0) {
-            summaryHTML += `<div style="text-align:right; font-size:10px; margin-top:4px;">(※は軽減税率8%対象)</div>`;
+            summaryHTML += `<div style="text-align:right; font-size:10px; margin-top:4px;">(※は軽減税率8%対象 / 免は免税対象)</div>`;
         }
         
         summaryHTML += `<div style="display:flex; justify-content:space-between; margin-top:8px; font-weight:bold; font-size:14px; color:#333;"><span>スキャン点数:</span><span>${totalQty} 点</span></div>`;
@@ -721,6 +966,7 @@ function clearCart() {
         recordCartState();
         cart = []; currentDeposit = 0; currentChange = 0; usedPoints = 0; billingAmount = 0; lastScannedBarcode = "";
         selectedPayment = '現金';
+        taxExemptTransaction = false;
         clearCustomer(false);
         updateReceipt(); 
         speak("クリア に し まし た"); 
@@ -731,9 +977,16 @@ function clearCart() {
 function clearCustomer(playSnd = true) {
     if(playSnd) playSound('click');
     activeCustomer = null;
+    customerDisplayMemberInfo = null;
     usedPoints = 0;
     const acDisplay = document.getElementById('active-customer-display');
     if (acDisplay) acDisplay.style.display = 'none';
+    const rankBadgeEl = document.getElementById('ac-rank-badge');
+    const rankNavEl = document.getElementById('ac-rank-nav');
+    if (rankBadgeEl) { rankBadgeEl.innerText = ''; rankBadgeEl.style.background = ''; }
+    if (rankNavEl) rankNavEl.innerText = '';
+    if (typeof updateCustomerDisplay === 'function') updateCustomerDisplay();
+    if (typeof broadcastState === 'function') broadcastState();
     focusJanInput();
 }
 
@@ -856,6 +1109,8 @@ function closeCheckout() {
     const modal = document.getElementById('checkout-modal');
     if (modal) modal.style.display = 'none'; 
     selectedPayment = '現金';
+    currentDeposit = 0;
+    currentChange = 0;
     updateCustomerDisplay();
     focusJanInput(); 
 }
@@ -954,15 +1209,17 @@ async function completeTransaction() {
         playSound('success'); 
 
         if (activeCustomer) {
-            earnedPointsThisTime = Math.floor(billingAmount / 100);
+            const rewardRate = (typeof addPurchaseAndGetRewardRate === 'function')
+                ? addPurchaseAndGetRewardRate(activeCustomer, billingAmount)
+                : 1.0;
+            earnedPointsThisTime = Math.floor(billingAmount * rewardRate / 100);
             activeCustomer.points -= usedPoints;
             activeCustomer.points += earnedPointsThisTime;
             activeCustomer.pointsUpdatedAt = new Date().toISOString();
             
             const idx = customers.findIndex(c => c.barcode === activeCustomer.barcode);
             if (idx !== -1) {
-                customers[idx].points = activeCustomer.points;
-                customers[idx].pointsUpdatedAt = activeCustomer.pointsUpdatedAt;
+                customers[idx] = activeCustomer;
                 localStorage.setItem('pos_customers', JSON.stringify(customers));
             }
         }
@@ -992,17 +1249,25 @@ async function completeTransaction() {
         const record = {
             id: Date.now(), 
             date: new Date().toLocaleString(), 
+            dateISO: new Date().toISOString(), // 分析機能（日別/週別/月別集計）向けの正確な日時
             clerk: activeClerkName,
             total: billingAmount,
             deposit: currentDeposit, 
             change: currentChange, 
             payment: usedPoints > 0 && billingAmount === 0 ? '全額ポイント' : selectedPayment, 
-            items: histItems
+            items: histItems,
+            // 分析機能向け：商品ごとの売上集計に使う構造化データ
+            cartSnapshot: JSON.parse(JSON.stringify(cart)),
+            // 分析機能向け：会員（ポイントカード）の年齢層集計に使う
+            customerBarcode: activeCustomer ? activeCustomer.barcode : null,
+            customerAge: (activeCustomer && typeof calculateAge === 'function') ? calculateAge(activeCustomer) : null
         };
         let historyList = JSON.parse(localStorage.getItem('pos_history')) || [];
         historyList.unshift(record); 
-        if (historyList.length > 50) { historyList = historyList.slice(0, 50); }
+        // 分析機能（週別・月別集計）が実用的に使えるよう、保存件数の上限を拡大
+        if (historyList.length > 3000) { historyList = historyList.slice(0, 3000); }
         localStorage.setItem('pos_history', JSON.stringify(historyList));
+        if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
 
         closeCheckout();
         promptReceiptAndInvoice();
@@ -1055,18 +1320,19 @@ function generateReceiptHTML(includeInvoice = false, clientName = "上様") {
 
     let total8 = 0; 
     let total10 = 0; 
+    let total0 = 0;
     let totalQty = 0;
 
     let html = `
         <div style="text-align: center; font-weight: bold; margin-bottom: 8px;">【 お会計レシート 】</div>
         <div>日時: ${new Date().toLocaleString()}</div>
-        <div>担当: ${activeClerkName}</div>
-        <div>支払: ${usedPoints > 0 && billingAmount === 0 ? 'ポイント' : selectedPayment}</div>
+        <div>担当: ${escapeHtml(activeClerkName)}</div>
+        <div>支払: ${usedPoints > 0 && billingAmount === 0 ? 'ポイント' : escapeHtml(selectedPayment)}</div>
     `;
     
     if (activeCustomer) {
         const custDisplayName = activeCustomer.name || `${activeCustomer.lastName || ''} ${activeCustomer.firstName || ''}`;
-        html += `<div style="margin-top:4px;">会員: ${custDisplayName} 様</div>`;
+        html += `<div style="margin-top:4px;">会員: ${escapeHtml(custDisplayName)} 様</div>`;
     }
 
     html += `<div style="border-bottom: 1px dashed #333; margin: 6px 0;"></div>`;
@@ -1076,12 +1342,14 @@ function generateReceiptHTML(includeInvoice = false, clientName = "上様") {
         totalQty += item.qty;
         if (item.taxRate === 8) {
             total8 += subTotal;
+        } else if (item.taxRate === 0) {
+            total0 += subTotal;
         } else {
             total10 += subTotal;
         }
         
-        const taxMark = item.taxRate === 8 ? ' ※' : '';
-        html += `<div style="display: flex; justify-content: space-between;"><span>${item.name} x${item.qty}</span><span>¥${subTotal.toLocaleString()}${taxMark}</span></div>`;
+        const taxMark = item.taxRate === 8 ? ' ※' : (item.taxRate === 0 ? ' 免' : '');
+        html += `<div style="display: flex; justify-content: space-between;"><span>${escapeHtml(item.name)} x${item.qty}</span><span>¥${subTotal.toLocaleString()}${taxMark}</span></div>`;
     });
 
     const tax8 = Math.floor(total8 * 8 / 108);
@@ -1098,6 +1366,9 @@ function generateReceiptHTML(includeInvoice = false, clientName = "上様") {
     if (total10 !== 0) {
         html += `<div style="display: flex; justify-content: space-between;"><span>小計(税抜10%)</span><span>¥${excl10.toLocaleString()}</span></div>`;
         html += `<div style="display: flex; justify-content: space-between;"><span>消費税等(10%)</span><span>¥${tax10.toLocaleString()}</span></div>`;
+    }
+    if (total0 !== 0) {
+        html += `<div style="display: flex; justify-content: space-between; color:#00838f;"><span>免税対象</span><span>¥${total0.toLocaleString()}</span></div>`;
     }
 
     if (usedPoints > 0) {
@@ -1121,9 +1392,12 @@ function generateReceiptHTML(includeInvoice = false, clientName = "上様") {
         html += `<div style="display: flex; justify-content: space-between; font-size:12px; margin-top:2px;"><span>10%対象</span><span>¥${total10.toLocaleString()}</span></div>`;
         html += `<div style="display: flex; justify-content: space-between; font-size:12px; color:#555;"><span>(内消費税等</span><span>¥${tax10.toLocaleString()})</span></div>`;
     }
+    if (total0 !== 0) {
+        html += `<div style="display: flex; justify-content: space-between; font-size:12px; margin-top:2px; color:#00838f;"><span>免税対象</span><span>¥${total0.toLocaleString()}</span></div>`;
+    }
     
-    if (total8 !== 0) {
-        html += `<div style="text-align:right; font-size:10px; margin-top:4px;">(※は軽減税率8%対象)</div>`;
+    if (total8 !== 0 || total0 !== 0) {
+        html += `<div style="text-align:right; font-size:10px; margin-top:4px;">(※は軽減税率8%対象 / 免は免税対象)</div>`;
     }
 
     html += `<div style="display: flex; justify-content: space-between; font-weight: bold; margin-top: 6px; font-size: 14px;"><span>スキャン点数:</span><span>${totalQty} 点</span></div>`;
@@ -1139,6 +1413,14 @@ function generateReceiptHTML(includeInvoice = false, clientName = "上様") {
         <div style="border-bottom: 1px dashed #333; margin: 6px 0;"></div>
         <div style="display: flex; justify-content: space-between; font-size:12px;"><span>累計ポイント残高:</span><span>${activeCustomer.points} pt</span></div>
         `;
+
+        if (typeof getCustomerRankInfo === 'function') {
+            const rankInfo = getCustomerRankInfo(activeCustomer);
+            html += `<div style="display: flex; justify-content: space-between; font-size:12px; font-weight:bold; color:${rankInfo.color};"><span>会員ランク:</span><span>${rankInfo.name}</span></div>`;
+            if (typeof buildRankNavText === 'function') {
+                html += `<div style="font-size:11px; color:#555; margin-top:2px;">${buildRankNavText(activeCustomer)}</div>`;
+            }
+        }
     }
 
     html += `<div style="text-align: center; margin-top: 15px; font-weight: bold;">ありがとうございました！</div>`;
@@ -1148,7 +1430,7 @@ html += `<div style="text-align: center; margin-top: 15px; font-weight: bold;">�
         html += `
             <div style="border-top: 2px dashed #666; margin: 25px 0 15px 0; padding-top: 15px;"></div>
             <div style="text-align: center; font-weight: bold; font-size: 16px; margin-bottom: 8px;">【 領 収 書 】</div>
-            <div style="font-size: 14px; font-weight: bold; margin-bottom: 10px; border-bottom: 1px solid #333; padding-bottom: 4px;">${clientName} 様</div>
+            <div style="font-size: 14px; font-weight: bold; margin-bottom: 10px; border-bottom: 1px solid #333; padding-bottom: 4px;">${escapeHtml(clientName)} 様</div>
             <div style="font-size: 18px; font-weight: bold; margin: 10px 0; text-align: center;">金額: ¥${billingAmount.toLocaleString()} -</div>
             <div style="font-size: 12px; margin-bottom: 8px;">但し: お品代として</div>
             <div style="font-size: 11px; color: #555; margin-bottom: 10px;">
@@ -1160,7 +1442,7 @@ html += `<div style="text-align: center; margin-top: 15px; font-weight: bold;">�
                 内訳:<br>
         `;
         cart.forEach(item => {
-            html += `・${item.name} x${item.qty} (¥${(item.price * item.qty).toLocaleString()})<br>`;
+            html += `・${escapeHtml(item.name)} x${item.qty} (¥${(item.price * item.qty).toLocaleString()})<br>`;
         });
         html += `</div>`;
     }
@@ -1168,6 +1450,9 @@ html += `<div style="text-align: center; margin-top: 15px; font-weight: bold;">�
     content.innerHTML = html;
     const printModal = document.getElementById('receipt-print-modal');
     if (printModal) printModal.style.display = 'flex';
+
+    // レシートが発行されたタイミングで、客用画面に設定された画像をアニメーション表示する
+    if (typeof triggerCheckoutCompleteImage === 'function') triggerCheckoutCompleteImage();
 }
 
 function closeReceiptPrintModal() {
@@ -1181,6 +1466,7 @@ function closeReceiptPrintModal() {
     selectedPayment = '現金';
     
     ageVerifiedCurrentTransaction = false;
+    taxExemptTransaction = false;
 
     clearCustomer(false);
     updateReceipt();

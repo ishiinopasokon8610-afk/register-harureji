@@ -9,9 +9,11 @@ function showScreen(screenId) {
     } else { quickVoices.style.display = 'none'; }
 
     if(screenId === 'clerk-screen') renderClerks();
-    if(screenId === 'product-screen') renderProducts();
+    if(screenId === 'product-screen') { renderProducts(); if (typeof populateGenreSelects === 'function') populateGenreSelects(); if (typeof renderCustomGenreList === 'function') renderCustomGenreList(); }
     if(screenId === 'history-screen') renderHistory();
     if(screenId === 'customer-mgmt-screen') renderCustomers();
+    if(screenId === 'discount-screen' && typeof renderDiscounts === 'function') renderDiscounts();
+    if(screenId === 'analytics-screen' && typeof renderAnalytics === 'function') renderAnalytics();
     
     updatePauseUI();
 }
@@ -148,11 +150,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (!code) return;
                 pauseJanInput.value = '';
 
-                const foundClerk = clerks.find(c => (c.barcode && c.barcode === code) || c.name === code);
-                if (foundClerk || code === '店长' || code === '店長' || code === '0529' || clerks.some(c => c.barcode === code)) {
-                    if (foundClerk) {
-                        selectClerk(foundClerk.name);
-                    }
+                // セキュリティ修正：以前は '0529' や中国語簡体字の '店长' などの
+                // 固定コードでも解除できてしまっていたため削除。
+                // 実際に登録されているバーコードでの一致のみを許可する。
+                const foundClerk = clerks.find(c => c.barcode && c.barcode === code);
+                if (foundClerk) {
+                    selectClerk(foundClerk.name);
                     playSound('success');
                     togglePauseRegister();
                 } else {
@@ -183,6 +186,8 @@ document.addEventListener('DOMContentLoaded', () => {
     ['jan-input', 'manager-auth-input', 'new-cust-barcode', 'edit-cust-barcode-input', 'new-clerk-barcode', 'edit-clerk-barcode-input', 'new-prod-jan', 'pause-jan-input'].forEach(id => {
         applyAutoHalfWidth(id);
     });
+
+    if (typeof populateGenreSelects === 'function') populateGenreSelects();
 
     checkOrientation();
 });

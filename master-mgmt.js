@@ -3,6 +3,69 @@
 // ==========================================
 
 // ------------------------------------------
+// 商品の種類（カテゴリ）をユーザーが自由に追加・削除する機能
+// ------------------------------------------
+function addCustomGenre() {
+    const input = document.getElementById('new-genre-input');
+    if (!input) return;
+    const name = input.value.trim();
+    if (!name) {
+        playSound('error');
+        return;
+    }
+    if (getAllGenres().includes(name)) {
+        showCustomConfirm('その種類はすでに存在します。', 'その しゅるい は すでに そんざい し ます。', () => {}, false);
+        return;
+    }
+    customGenres.push(name);
+    localStorage.setItem('pos_custom_genres', JSON.stringify(customGenres));
+    if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
+
+    input.value = '';
+    playSound('success');
+    populateGenreSelects();
+    if (typeof renderGenreFilterButtons === 'function') renderGenreFilterButtons();
+    renderCustomGenreList();
+    speak('あたらしい しゅるいを ついか し まし た');
+}
+
+function deleteCustomGenre(name) {
+    showCustomConfirm(`「${name}」を削除しますか？（この種類が設定済みの商品はそのまま残ります）`, `さくじょ し ます か？`, (res) => {
+        if (!res) return;
+        customGenres = customGenres.filter(g => g !== name);
+        localStorage.setItem('pos_custom_genres', JSON.stringify(customGenres));
+        if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
+
+        populateGenreSelects();
+        if (typeof renderGenreFilterButtons === 'function') renderGenreFilterButtons();
+        renderCustomGenreList();
+        playSound('click');
+    }, true);
+}
+
+function renderCustomGenreList() {
+    const container = document.getElementById('custom-genre-list');
+    if (!container) return;
+    if (!customGenres || customGenres.length === 0) {
+        container.innerHTML = '<span style="color:#999; font-size:13px;">まだ追加した種類はありません</span>';
+        return;
+    }
+    container.innerHTML = customGenres.map(g =>
+        `<span class="custom-genre-chip">${escapeHtml(g)} <button type="button" onclick="deleteCustomGenre('${g.replace(/'/g, "\\'")}')" aria-label="削除">×</button></span>`
+    ).join('');
+}
+
+// 商品追加・編集画面などにある「種類」プルダウンをすべて最新の一覧で再描画する
+function populateGenreSelects() {
+    const genres = (typeof getAllGenres === 'function') ? getAllGenres() : [];
+    document.querySelectorAll('select.genre-select-dynamic').forEach(sel => {
+        const currentVal = sel.value;
+        sel.innerHTML = genres.map(g => `<option value="${escapeHtml(g)}">${escapeHtml(g)}</option>`).join('');
+        sel.value = genres.includes(currentVal) ? currentVal : 'その他商品';
+    });
+}
+
+// ------------------------------------------
 // 顧客管理系
 // ------------------------------------------
 function renderCustomers() {
@@ -28,10 +91,23 @@ function renderCustomers() {
             else if (exp.expiringSoon) expText = `<br><small style="color:#d32f2f; font-weight:bold;">(あと${exp.daysLeft}日で失効)</small>`;
         }
 
+        let rankCellHtml = '-';
+        if (typeof ensureCustomerRankFields === 'function' && typeof getCustomerRankInfo === 'function') {
+            ensureCustomerRankFields(cust);
+            const rankInfo = getCustomerRankInfo(cust);
+            const navText = typeof buildRankNavText === 'function' ? buildRankNavText(cust) : '';
+            rankCellHtml = `
+                <span style="display:inline-block; background:${rankInfo.color}; color:#fff; font-weight:bold; padding:2px 10px; border-radius:12px; font-size:12px;">${rankInfo.name}</span>
+                <br><small style="color:#666;">年間購入額: ¥${cust.annualPurchase.toLocaleString()}</small>
+                <br><small style="color:#00796b;">${navText}</small>
+            `;
+        }
+
         const tr = document.createElement('tr');
         tr.innerHTML = `
             <td style="font-family:monospace; font-weight:bold; color:#0066cc;">${cust.barcode}</td>
             <td><b>${displayName}</b> (${currentAge}歳)${displayKana}${bdayText}</td>
+            <td style="text-align:center;">${rankCellHtml}</td>
             <td style="color:#d81b60; font-weight:bold;">${cust.points} pt ${expText}</td>
             <td style="font-size:12px;">📞 ${cust.phone || '-'}<br>🏠 ${cust.address || '-'}</td>
             <td>
@@ -62,22 +138,34 @@ function addCustomer() {
         return;
     }
 
-    if (typeof customers !== 'undefined' && customers.some(c => c.barcode === barcode)) {
-        if (typeof playSound === 'function') playSound('error');
-        if (typeof showCustomConfirm === 'function') {
-            showCustomConfirm("このバーコードは既に登録されています", "すでに とうろく さ れ て い ます", () => {}, true);
-        }
-        return;
-    }
-
     const name = `${lastName} ${firstName}`;
     const kana = `${lastKana} ${firstKana}`;
     const age = typeof calculateAge === 'function' ? calculateAge({ birthday: birthday }) : 0;
     const pointsUpdatedAt = new Date().toISOString();
 
     if (typeof customers !== 'undefined') {
-        customers.push({ barcode, lastName, firstName, lastKana, firstKana, name, kana, birthday, age, points, phone, address, pointsUpdatedAt });
-        localStorage.setItem('pos_customers', JSON.stringify(customers));
+        // 同じバーコードがあるか確認し、あれば上書き保存
+        const existingIndex = customers.findIndex(c => c.barcode === barcode);
+        const custData = { barcode, lastName, firstName, lastKana, firstKana, name, kana, birthday, age, points, phone, address, pointsUpdatedAt };
+        if (existingIndex !== -1) {
+            // 既存会員の場合、ランク進捗（年間購入額・現在ランク等）は上書きせず引き継ぐ
+            const old = customers[existingIndex];
+            custData.annualPurchase = old.annualPurchase;
+            custData.rank = old.rank;
+            custData.rankEvalMonth = old.rankEvalMonth;
+            custData.rankGrace = old.rankGrace;
+            custData.rankResetYear = old.rankResetYear;
+        }
+        if (typeof ensureCustomerRankFields === 'function') ensureCustomerRankFields(custData);
+
+        if (existingIndex !== -1) {
+            customers[existingIndex] = custData;
+            if (typeof speak === 'function') speak("こきゃく じょうほう を うわがき ほぞん し まし た");
+        } else {
+            customers.push(custData);
+            if (typeof speak === 'function') speak("こきゃく を とうろく し まし た");
+        }
+        localStorage.setItem('pos_customers', JSON.stringify(customers)); if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
     }
     
     document.getElementById('new-cust-barcode').value = '';
@@ -92,7 +180,6 @@ function addCustomer() {
 
     if (typeof playSound === 'function') playSound('success');
     renderCustomers();
-    if (typeof speak === 'function') speak("こきゃく を とうろく し まし た");
 }
 
 function editCustomer(index) {
@@ -158,7 +245,7 @@ function saveEditCust() {
         document.getElementById('ac-points').innerText = activeCustomer.points;
     }
 
-    localStorage.setItem('pos_customers', JSON.stringify(customers));
+    localStorage.setItem('pos_customers', JSON.stringify(customers)); if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
     if (typeof playSound === 'function') playSound('success');
     renderCustomers();
     closeEditCustModal();
@@ -173,7 +260,7 @@ function withdrawCustomer(index) {
             (res) => {
                 if (!res) return;
                 customers.splice(index, 1);
-                localStorage.setItem('pos_customers', JSON.stringify(customers));
+                localStorage.setItem('pos_customers', JSON.stringify(customers)); if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
                 if (typeof playSound === 'function') playSound('click');
                 renderCustomers();
                 if (typeof speak === 'function') speak("たいかい させ まし た");
@@ -226,8 +313,18 @@ function addClerk() {
         return;
     }
     if (typeof clerks !== 'undefined') {
-        clerks.push({ id: Date.now(), name: name, kana: kana, barcode: barcode, age: age, voiceEnabled: voiceEnabled });
-        localStorage.setItem('pos_clerks', JSON.stringify(clerks));
+        // バーコードが指定されていて既に存在すれば上書き保存
+        const existingIndex = barcode ? clerks.findIndex(c => c.barcode === barcode) : -1;
+        const clerkData = { id: (existingIndex !== -1 ? clerks[existingIndex].id : Date.now()), name, kana, barcode, age, voiceEnabled };
+        
+        if (existingIndex !== -1) {
+            clerks[existingIndex] = clerkData;
+            if (typeof speak === 'function') speak("たんとうしゃ を うわがき ほぞん し まし た");
+        } else {
+            clerks.push(clerkData);
+            if (typeof speak === 'function') speak("たんとうしゃ を ついか し まし た");
+        }
+        localStorage.setItem('pos_clerks', JSON.stringify(clerks)); if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
     }
     document.getElementById('new-clerk-name').value = '';
     document.getElementById('new-clerk-kana').value = '';
@@ -236,7 +333,6 @@ function addClerk() {
     document.getElementById('new-clerk-voice-check').checked = true;
     if (typeof playSound === 'function') playSound('beep');
     renderClerks();
-    if (typeof speak === 'function') speak("たんとうしゃ を ついか し まし た");
 }
 
 function changeToManager(index) {
@@ -262,7 +358,7 @@ function changeToManager(index) {
                     }
                 });
                 clerks[index].name = '店長';
-                localStorage.setItem('pos_clerks', JSON.stringify(clerks));
+                localStorage.setItem('pos_clerks', JSON.stringify(clerks)); if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
                 if (typeof activeClerkName !== 'undefined') {
                     activeClerkName = '店長';
                     localStorage.setItem('pos_active_clerk', activeClerkName);
@@ -296,7 +392,7 @@ function deleteClerk(index) {
             (res) => {
                 if (!res) return;
                 clerks.splice(index, 1);
-                localStorage.setItem('pos_clerks', JSON.stringify(clerks));
+                localStorage.setItem('pos_clerks', JSON.stringify(clerks)); if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
                 if (typeof playSound === 'function') playSound('click');
                 renderClerks();
                 if (typeof speak === 'function') speak("たんとうしゃ を さくじょ し まし た");
@@ -351,7 +447,7 @@ function saveEditClerk() {
     clerks[editingClerkIndex].barcode = newBarcode;
     clerks[editingClerkIndex].age = newAge;
     clerks[editingClerkIndex].voiceEnabled = newVoiceEnabled;
-    localStorage.setItem('pos_clerks', JSON.stringify(clerks));
+    localStorage.setItem('pos_clerks', JSON.stringify(clerks)); if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
     if (typeof playSound === 'function') playSound('success');
     renderClerks();
     closeEditClerkModal();
@@ -432,7 +528,7 @@ function applyBulkEdit() {
         if (newTaxStr !== "") products[idx].taxRate = parseInt(newTaxStr);
     });
 
-    localStorage.setItem('pos_products', JSON.stringify(products));
+    localStorage.setItem('pos_products', JSON.stringify(products)); if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
     if (typeof playSound === 'function') playSound('success');
     renderProducts();
     if (typeof generateCustomButtons === 'function') generateCustomButtons(); 
@@ -450,13 +546,13 @@ function confirmBulkDelete() {
     if (count === 0) return;
 
     let msg = count <= 5 ? "選択した商品を削除しますか？" : "本当に削除しますか？";
-    let hiraMsg = count <= 5 ? "せんたく し た しょうひん を さくじょ し ます か？" : "ほんとう に さくじょ し ます か？";
+    let hiraMsg = count <= 5 ? "せんたく し た しょうひん を さくじょ し ます か？" : "ほんとう に さくじょ し まし た？";
     if (typeof showCustomConfirm === 'function') {
         showCustomConfirm(msg, hiraMsg, (res) => {
             if (!res) return;
             const indices = Array.from(checks).map(cb => parseInt(cb.value)).sort((a,b) => b - a);
             indices.forEach(idx => products.splice(idx, 1));
-            localStorage.setItem('pos_products', JSON.stringify(products));
+            localStorage.setItem('pos_products', JSON.stringify(products)); if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
             if (typeof playSound === 'function') playSound('success');
             renderProducts();
             if (typeof generateCustomButtons === 'function') generateCustomButtons();
@@ -483,7 +579,10 @@ function editSingleProduct(index) {
     if (nameDisp) nameDisp.innerText = prod.name + ' の編集';
 
     const genreInp = document.getElementById('edit-prod-genre-input');
-    if (genreInp) genreInp.value = prod.genre || 'その他商品';
+    if (genreInp) {
+        if (typeof populateGenreSelects === 'function') populateGenreSelects();
+        genreInp.value = prod.genre || 'その他商品';
+    }
 
     const priceInp = document.getElementById('edit-prod-price-input');
     if (priceInp) priceInp.value = prod.price;
@@ -537,11 +636,13 @@ function addProduct() {
 
     if (existingIndex !== -1) {
         products[existingIndex] = prodData;
+        if (typeof speak === 'function') speak("しょうひん を うわがき ほぞん し まし た");
     } else {
         products.push(prodData);
+        if (typeof speak === 'function') speak("しょうひん を ついか し まし た");
     }
 
-    localStorage.setItem('pos_products', JSON.stringify(products));
+    localStorage.setItem('pos_products', JSON.stringify(products)); if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
     
     if (janInput) janInput.value = '';
     if (nameInput) nameInput.value = '';
@@ -551,7 +652,6 @@ function addProduct() {
     renderProductTable();
     if (typeof generateCustomButtons === 'function') generateCustomButtons();
     if (typeof playSound === 'function') playSound('success');
-    if (typeof speak === 'function') speak("しょうひん を ついか し まし た");
 }
 
 function saveEditProd() {
@@ -577,7 +677,7 @@ function saveEditProd() {
     products[index].taxRate = taxInput;
     products[index].ageCheck = ageCheckInput;
 
-    localStorage.setItem('pos_products', JSON.stringify(products));
+    localStorage.setItem('pos_products', JSON.stringify(products)); if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
 
     closeEditProdModal();
     renderProductTable();
@@ -594,7 +694,7 @@ function deleteProduct(index) {
             (res) => {
                 if (!res) return;
                 products.splice(index, 1);
-                localStorage.setItem('pos_products', JSON.stringify(products));
+                localStorage.setItem('pos_products', JSON.stringify(products)); if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
                 if (typeof playSound === 'function') playSound('click');
                 renderProducts();
                 if (typeof generateCustomButtons === 'function') generateCustomButtons();
@@ -676,7 +776,7 @@ function saveUnknownProd() {
     
     if (typeof products !== 'undefined') {
         products.push(newProd);
-        localStorage.setItem('pos_products', JSON.stringify(products));
+        localStorage.setItem('pos_products', JSON.stringify(products)); if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
     }
     if (typeof generateCustomButtons === 'function') generateCustomButtons();
 

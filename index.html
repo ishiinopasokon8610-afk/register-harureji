@@ -19,6 +19,106 @@
       }
     </script>
 
+    <!-- ============================================================
+         安全なデータバックアップ（localStorage → IndexedDB）
+         ------------------------------------------------------------
+         localStorageはブラウザの設定・容量不足・プライベートモードなどで
+         消えてしまうことがあるため、ページを閉じる/隠すタイミングで
+         中身をまるごとIndexedDB（消えにくい永続ストレージ）にも保存する。
+         もし次回起動時にlocalStorageが空（＝データが消えてしまった状態）
+         だった場合は、IndexedDBのバックアップから自動的に復元する。
+    ==================================================================-->
+    <script>
+      (function () {
+        const DB_NAME = 'haru_pos_backup_db';
+        const STORE_NAME = 'kv';
+        const BACKUP_KEY = 'localStorage_snapshot';
+
+        function openBackupDb() {
+          return new Promise((resolve, reject) => {
+            const req = indexedDB.open(DB_NAME, 1);
+            req.onupgradeneeded = () => {
+              if (!req.result.objectStoreNames.contains(STORE_NAME)) {
+                req.result.createObjectStore(STORE_NAME);
+              }
+            };
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+          });
+        }
+
+        async function backupLocalStorageToIndexedDb() {
+          try {
+            const snapshot = {};
+            for (let i = 0; i < localStorage.length; i++) {
+              const key = localStorage.key(i);
+              snapshot[key] = localStorage.getItem(key);
+            }
+            const db = await openBackupDb();
+            await new Promise((resolve, reject) => {
+              const tx = db.transaction(STORE_NAME, 'readwrite');
+              tx.objectStore(STORE_NAME).put({ data: snapshot, savedAt: Date.now() }, BACKUP_KEY);
+              tx.oncomplete = resolve;
+              tx.onerror = () => reject(tx.error);
+            });
+          } catch (e) {
+            console.warn('バックアップ保存に失敗しました:', e);
+          }
+        }
+
+        async function restoreLocalStorageFromIndexedDbIfNeeded() {
+          // すでに何かデータが入っていれば復元不要（通常起動）
+          if (localStorage.length > 0) return false;
+          // このタブ内で既に一度復元・リロード済みなら二重にやらない
+          if (sessionStorage.getItem('haru_pos_restore_attempted')) return false;
+
+          try {
+            const db = await openBackupDb();
+            const record = await new Promise((resolve, reject) => {
+              const tx = db.transaction(STORE_NAME, 'readonly');
+              const req = tx.objectStore(STORE_NAME).get(BACKUP_KEY);
+              req.onsuccess = () => resolve(req.result);
+              req.onerror = () => reject(req.error);
+            });
+
+            if (record && record.data && Object.keys(record.data).length > 0) {
+              Object.keys(record.data).forEach((key) => {
+                localStorage.setItem(key, record.data[key]);
+              });
+              sessionStorage.setItem('haru_pos_restore_attempted', '1');
+              console.log('localStorageが空だったため、安全なバックアップから復元しました。');
+              location.reload();
+              return true;
+            }
+          } catch (e) {
+            console.warn('バックアップからの復元チェックに失敗しました:', e);
+          }
+          return false;
+        }
+
+        // ブラウザにできる限りデータを消さないようリクエスト（永続ストレージ）
+        if (navigator.storage && navigator.storage.persist) {
+          navigator.storage.persist().then((granted) => {
+            console.log('永続ストレージ:', granted ? '許可されました' : '許可されませんでした（設定に依存）');
+          }).catch(() => {});
+        }
+
+        // ページを閉じる・タブを隠す直前に必ずバックアップを取る
+        window.addEventListener('pagehide', backupLocalStorageToIndexedDb);
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'hidden') backupLocalStorageToIndexedDb();
+        });
+        // 念のため定期的にもバックアップ（1分ごと）
+        setInterval(backupLocalStorageToIndexedDb, 60 * 1000);
+
+        // 起動時：localStorageが空ならバックアップから復元を試みる
+        restoreLocalStorageFromIndexedDbIfNeeded();
+
+        // 他のスクリプトからも手動でバックアップを呼べるように公開
+        window.haruPosBackupNow = backupLocalStorageToIndexedDb;
+      })();
+    </script>
+
     <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
 
     <!-- Ably Realtimeライブラリの読み込み -->
@@ -124,8 +224,12 @@
     <button class="home-btn full home-btn-customer-mgmt" onclick="requestManagerAuth('customer')">👥 会員・顧客管理 (ポイント・情報)</button>
             
             <!-- お会計履歴ボタン -->
-            <button class="home-btn full" onclick="requestHistoryAuth()">お会計履歴</button>
-            
+            <!-- お会計履歴 ＆ 割引バーコード登録 -->
+<button class="home-btn" onclick="requestHistoryAuth()">お会計履歴</button>
+<button class="home-btn" onclick="requestManagerAuth('discount')">🏷️ 自動化バーコード作成</button>
+
+<button class="home-btn" onclick="openAnalyticsScreen()" style="background: linear-gradient(to bottom, #26a69a, #00695c); border-color: #004d40;">📊 分析</button>
+
             <button class="home-btn full home-btn-receipt" onclick="setupReceiptFolder()">📁 レシート保存フォルダを設定する（自動保存対応）</button>
             <button class="home-btn full home-btn-migration" onclick="requestManagerAuth('migration')">データ管理・ロゴ設定</button>
         </div>
@@ -136,7 +240,18 @@
         <div class="customer-back-container">
             <button class="back-btn-small" onclick="goHome()">ホームに戻る</button>
         </div>
-        
+
+        <!-- 追加：客画面の右側にまとめて表示するパネル（お支払方法・会員情報） -->
+        <div id="customer-side-panel" class="customer-side-panel">
+            <div id="customer-payment-badge" class="customer-payment-badge"></div>
+            <div id="customer-member-card" class="customer-member-card">
+                <div class="cm-name" id="cm-name"></div>
+                <div class="cm-rank" id="cm-rank"></div>
+                <div class="cm-points">保有ポイント: <b id="cm-points">0</b> pt</div>
+                <div class="cm-nav" id="cm-nav"></div>
+            </div>
+        </div>
+
         <div id="customer-last-barcode">
             コード: -
         </div>
@@ -161,6 +276,13 @@
                 </div>
             </div>
         </div>
+    </div>
+
+    <!-- 追加：お会計完了時に下からせり上がって表示される画像オーバーレイ -->
+    <!-- 客用画面（#customer-screen）の外に配置：客用画面が非アクティブでも
+         （同一端末でレジ画面を表示中でも）確実に前面表示されるようにするため -->
+    <div id="customer-checkout-image-overlay" class="customer-checkout-image-overlay">
+        <img id="customer-checkout-image" src="" alt="">
     </div>
 
     <!-- タイムカード打刻・管理画面 -->
@@ -260,6 +382,7 @@
                 <tr>
                     <th>バーコード</th>
                     <th>お名前・フリガナ (年齢 / 生年月日)</th>
+                    <th>会員ランク</th>
                     <th>保有ポイント (有効期限)</th>
                     <th>連絡先 / 住所</th>
                     <th>操作</th>
@@ -298,6 +421,14 @@
             <button class="back-btn" onclick="goHome()">← ホーム</button>
             <h2 class="top-bar-title">商品管理 (JANコード指定対応)</h2>
         </div>
+
+        <!-- 追加：商品の種類（カテゴリ）を自分で追加できる機能 -->
+        <div class="genre-manage-box">
+            <b>商品の種類（カテゴリ）を追加:</b>
+            <input type="text" id="new-genre-input" placeholder="新しい種類名（例：文房具）">
+            <button onclick="addCustomGenre()">＋ 追加</button>
+            <div id="custom-genre-list" class="custom-genre-list"></div>
+        </div>
         
         <div id="bulk-edit-bar">
             <span class="bulk-edit-title">☑ 一括操作メニュー</span>
@@ -314,7 +445,7 @@
             <input type="text" id="new-prod-name" placeholder="商品名 (例: ハンディファン)">
             
             <!-- 追加: ジャンル選択プルダウン -->
-            <select id="new-prod-genre" class="modal-input" style="padding: 8px; font-size: 16px; border: 1px solid #ccc; border-radius: 4px; min-width: 120px;">
+            <select id="new-prod-genre" class="modal-input genre-select-dynamic" style="padding: 8px; font-size: 16px; border: 1px solid #ccc; border-radius: 4px; min-width: 120px;">
                 <option value="食品">食品</option>
                 <option value="飲料/お酒">飲料/お酒</option>
                 <option value="お惣菜/お弁当">お惣菜/お弁当</option>
@@ -350,6 +481,124 @@
         </table>
     </div>
 
+    <!-- 割引バーコード管理画面 -->
+    <div id="discount-screen" class="screen management-screen">
+        <div class="top-bar">
+            <button class="back-btn" onclick="goHome()">← ホーム</button>
+            <h2 class="top-bar-title">🏷️ 自動化バーコード作成</h2>
+        </div>
+        <p class="modal-desc" style="margin: 0 0 10px 2px;">1つのバーコードに「商品の自動追加」と「割引（％/円）」を組み合わせて登録できます。レジでこのバーコードをスキャンすると、設定した内容がまとめて自動的にカートに反映されます。</p>
+
+        <div class="input-form" style="flex-direction:column; align-items:stretch; gap:14px;">
+            <div style="display:flex; gap:10px; flex-wrap:wrap;">
+                <div style="display:flex; gap:6px; flex:1; min-width:220px;">
+                    <input type="text" id="new-disc-barcode" placeholder="バーコード (例: 8001...) ※空欄で自動生成" style="flex:1; min-width:150px;">
+                    <button type="button" onclick="openBarcodeCameraScan('new-disc-barcode')" style="flex:none; background:#009688;" title="スマホのカメラでバーコードを読み取って自動入力します">📷 カメラで読取</button>
+                </div>
+                <input type="text" id="new-disc-name" placeholder="割引名 (例: 缶ビール1本＋10%オフ)" style="min-width:220px;">
+            </div>
+
+            <div style="border-top:1px dashed #ccc; padding-top:10px; text-align:left;">
+                <b>① 自動追加する商品（複数登録可・任意）</b>
+                <div id="new-disc-product-list" style="margin:8px 0;"></div>
+                <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+                    <select id="new-disc-product-select" style="flex:1; min-width:220px; padding:8px; font-size:15px; border:1px solid #ccc; border-radius:4px;"></select>
+                    <input type="number" id="new-disc-product-qty" value="1" min="1" style="flex:none; width:70px; padding:8px;">
+                    <button type="button" onclick="addStagedProductRow('new')" style="flex:none; background:#2196f3;">＋ この商品を追加</button>
+                </div>
+            </div>
+
+            <div style="border-top:1px dashed #ccc; padding-top:10px; text-align:left;">
+                <label style="font-weight:bold;"><input type="checkbox" id="new-disc-use-discount" onchange="toggleDiscValueRow('new')"> ② 割引も適用する（任意）</label>
+                <div id="new-disc-value-row" style="display:none; gap:10px; margin-top:8px; align-items:center;">
+                    <select id="new-disc-type" style="flex:none; padding:8px; font-size:15px; border:1px solid #ccc; border-radius:4px; min-width:170px;">
+                        <option value="percent">パーセント値引き (%)</option>
+                        <option value="yen">金額値引き (円)</option>
+                    </select>
+                    <input type="number" id="new-disc-value" placeholder="値引き値 (例: 10)" style="flex:none; width:140px; padding:8px;">
+                </div>
+            </div>
+
+            <button onclick="addDiscountBarcode()" style="align-self:flex-start; padding:10px 30px;">この内容でバーコードを登録</button>
+        </div>
+
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>バーコード</th>
+                    <th>割引名</th>
+                    <th>内容</th>
+                    <th>状態</th>
+                    <th>操作</th>
+                </tr>
+            </thead>
+            <tbody id="discount-tbody"></tbody>
+        </table>
+    </div>
+
+    <!-- 割引バーコード 編集モーダル -->
+    <div id="edit-disc-modal" class="modal-overlay">
+        <div class="modal-box large">
+            <h3 class="modal-title purple" id="edit-disc-name-display">自動化バーコード作成の編集</h3>
+            <input type="text" id="edit-disc-name-input" class="modal-input" placeholder="割引名" style="margin-bottom:10px;">
+
+            <div style="text-align:left; border-top:1px dashed #ccc; padding-top:10px; margin-bottom:10px;">
+                <b>① 自動追加する商品（複数登録可・任意）</b>
+                <div id="edit-disc-product-list" style="margin:8px 0;"></div>
+                <div style="display:flex; gap:8px; align-items:center;">
+                    <select id="edit-disc-product-select" style="flex:1; padding:8px; font-size:14px; border:1px solid #ccc; border-radius:4px;"></select>
+                    <input type="number" id="edit-disc-product-qty" value="1" min="1" style="flex:none; width:60px; padding:8px;">
+                    <button type="button" onclick="addStagedProductRow('edit')" style="flex:none; background:#2196f3; color:white; border:none; border-radius:4px; padding:8px 10px; cursor:pointer; font-weight:bold;">＋追加</button>
+                </div>
+            </div>
+
+            <div style="text-align:left; border-top:1px dashed #ccc; padding-top:10px; margin-bottom:10px;">
+                <label style="font-weight:bold;"><input type="checkbox" id="edit-disc-use-discount" onchange="toggleDiscValueRow('edit')"> ② 割引も適用する（任意）</label>
+                <div id="edit-disc-value-row" style="display:none; gap:10px; margin-top:8px;">
+                    <select id="edit-disc-type" style="flex:1; padding:8px;">
+                        <option value="percent">パーセント値引き (%)</option>
+                        <option value="yen">金額値引き (円)</option>
+                    </select>
+                    <input type="number" id="edit-disc-value" placeholder="値引き値" style="width:120px; padding:8px;">
+                </div>
+            </div>
+
+            <div class="error-msg" id="edit-disc-error">割引名を入力し、商品追加または割引のどちらか一方以上を設定してください</div>
+            <div class="modal-btn-group">
+                <button onclick="closeEditDiscModal()" class="modal-btn cancel">キャンセル</button>
+                <button onclick="saveEditDisc()" class="modal-btn purple">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 売上分析画面 -->
+    <div id="analytics-screen" class="screen management-screen">
+        <div class="top-bar">
+            <button class="back-btn" onclick="goHome()">← ホーム</button>
+            <h2 class="top-bar-title">📊 売上分析</h2>
+        </div>
+
+        <div style="display:flex; gap:10px; margin-bottom:16px;">
+            <button id="analytics-tab-day" class="select-btn analytics-tab-btn" onclick="switchAnalyticsPeriod('day')">本日</button>
+            <button id="analytics-tab-week" class="select-btn analytics-tab-btn" onclick="switchAnalyticsPeriod('week')">週間（直近7日）</button>
+            <button id="analytics-tab-month" class="select-btn analytics-tab-btn" onclick="switchAnalyticsPeriod('month')">月間（今月）</button>
+        </div>
+
+        <div id="analytics-content" style="display:flex; flex-direction:column; gap:16px;"></div>
+    </div>
+
+    <!-- カメラでバーコードを読み取るモーダル -->
+    <div id="barcode-camera-modal" class="modal-overlay">
+        <div class="modal-box medium" style="text-align:center;">
+            <h3 class="modal-title">📷 バーコードを枠内に映してください</h3>
+            <video id="barcode-camera-video" playsinline autoplay muted style="width:100%; max-width:400px; border-radius:8px; background:#000;"></video>
+            <p class="modal-desc" style="margin-top:8px;">認識すると自動でバーコード欄に入力されます</p>
+            <div class="modal-btn-group" style="margin-top:10px;">
+                <button onclick="closeBarcodeCameraScan()" class="modal-btn cancel" style="width:100%;">キャンセル</button>
+            </div>
+        </div>
+    </div>
+
    <!-- レジ画面（店員用） -->
 <div id="register-screen" class="screen">
     <div class="reg-header">
@@ -369,11 +618,12 @@
             
             <div id="active-customer-display">
                 <button class="cust-clear-btn" onclick="clearCustomer()">クリア</button>
-                <div class="cust-info-main">👤 <span id="ac-name"></span> 様 (<span id="ac-age"></span>歳)</div>
+                <div class="cust-info-main">👤 <span id="ac-name"></span> 様 (<span id="ac-age"></span>歳) <span id="ac-rank-badge" class="ac-rank-badge"></span></div>
                 <div class="cust-info-sub">
                     <span>🅿️ 保有ポイント: <b id="ac-points"></b> pt</span>
                     <span id="ac-exp-info"></span>
                 </div>
+                <div id="ac-rank-nav" class="ac-rank-nav"></div>
             </div>
 
             <div class="display-area">
@@ -401,12 +651,19 @@
             </div>
 
             <div class="controls-area">
-                <div class="numpad">
-                    <button class="num-btn" onclick="typeNum('7')">7</button><button class="num-btn" onclick="typeNum('8')">8</button><button class="num-btn" onclick="typeNum('9')">9</button>
-                    <button class="num-btn" onclick="typeNum('4')">4</button><button class="num-btn" onclick="typeNum('5')">5</button><button class="num-btn" onclick="typeNum('6')">6</button>
-                    <button class="num-btn" onclick="typeNum('1')">1</button><button class="num-btn" onclick="typeNum('2')">2</button><button class="num-btn" onclick="typeNum('3')">3</button>
-                    <button class="num-btn" onclick="typeNum('0')">0</button><button class="num-btn" onclick="typeNum('00')">00</button><button class="num-btn" onclick="clearNum()">C</button>
-                    <button class="num-btn enter-btn" onclick="submitInput()">確定</button>
+                <div class="numpad-col">
+                    <div class="numpad-extra-actions">
+                        <button class="extra-fn-btn price-update" onclick="startPriceUpdateMode()">単価更新<br><small>(商品選択→金額→確定)</small></button>
+                        <button class="extra-fn-btn man-btn" onclick="typeMan()">万<br><small>(入力中の数字×1万)</small></button>
+                        <button class="extra-fn-btn tax-exempt" onclick="applyTaxExempt()">免税対象<br><small>(商品選択/直前)</small></button>
+                    </div>
+                    <div class="numpad">
+                        <button class="num-btn" onclick="typeNum('7')">7</button><button class="num-btn" onclick="typeNum('8')">8</button><button class="num-btn" onclick="typeNum('9')">9</button>
+                        <button class="num-btn" onclick="typeNum('4')">4</button><button class="num-btn" onclick="typeNum('5')">5</button><button class="num-btn" onclick="typeNum('6')">6</button>
+                        <button class="num-btn" onclick="typeNum('1')">1</button><button class="num-btn" onclick="typeNum('2')">2</button><button class="num-btn" onclick="typeNum('3')">3</button>
+                        <button class="num-btn" onclick="typeNum('0')">0</button><button class="num-btn" onclick="typeNum('00')">00</button><button class="num-btn" onclick="clearNum()">C</button>
+                        <button class="num-btn enter-btn" onclick="submitInput()">確定</button>
+                    </div>
                 </div>
                 <div class="action-grid" id="custom-buttons-area"></div>
             </div>
@@ -464,6 +721,17 @@
             <p class="migration-desc">別の端末でコピーしたデータを下の欄に貼り付けて取り込んでください。</p>
             <textarea id="import-data-input" placeholder="ここに、別の端末でコピーしたデータを貼り付けてください" class="migration-textarea"></textarea>
             <button class="btn-migration import" onclick="importAllData()">貼り付けたデータを取り込む</button>
+        </div>
+
+        <!-- 追加：お会計完了時に客画面へ表示する画像の設定 -->
+        <div class="migration-block" style="background:#fff3e0; border:2px solid #ffb74d; padding:15px; border-radius:6px; margin-top:15px;">
+            <h3 class="migration-title" style="color:#e65100;">🖼️ お会計完了時に客画面へ表示する画像の設定</h3>
+            <p class="migration-desc">お会計が完了した瞬間、客用画面いっぱいに表示される画像（広告・キャンペーン告知など）を設定できます。画像は画面の下からアニメーションでせり上がって表示されます。</p>
+            <input type="file" id="checkout-image-upload-input" accept="image/*" onchange="uploadCheckoutCompleteImage(event)" style="margin-bottom: 10px;">
+            <br>
+            <img id="checkout-image-preview" src="" alt="" style="max-width:240px; max-height:160px; display:none; border:1px solid #ccc; border-radius:4px; margin-bottom:10px; object-fit:contain;">
+            <br>
+            <button class="btn-migration" style="background:#f44336; color:white; padding:8px 12px; border:none; border-radius:4px; font-weight:bold; cursor:pointer;" onclick="clearCheckoutCompleteImage()">画像を削除する</button>
         </div>
     </div>
 
@@ -584,7 +852,7 @@
             <!-- 追加: ジャンル選択 -->
             <div class="modal-form-group">
                 <label class="modal-label">ジャンル</label>
-                <select id="unknown-prod-genre-input" class="modal-input">
+                <select id="unknown-prod-genre-input" class="modal-input genre-select-dynamic">
                     <option value="食品">食品</option>
                     <option value="飲料/お酒">飲料/お酒</option>
                     <option value="お惣菜/お弁当">お惣菜/お弁当</option>
@@ -627,7 +895,7 @@
             <!-- 追加: ジャンル選択 -->
             <div class="modal-form-group">
                 <label class="modal-label">ジャンル</label>
-                <select id="edit-prod-genre-input" class="modal-input">
+                <select id="edit-prod-genre-input" class="modal-input genre-select-dynamic">
                     <option value="食品">食品</option>
                     <option value="飲料/お酒">飲料/お酒</option>
                     <option value="お惣菜/お弁当">お惣菜/お弁当</option>
@@ -984,13 +1252,17 @@
     </script>
 
     <script src="state.js"></script>
+    <script src="member-rank.js"></script>
     <script src="utils.js"></script>
     <script src="auth-system.js"></script>
 <script src="master-mgmt.js"></script>
     <script src="register.js"></script>
     <script src="ui.js"></script>
+    <script src="checkout-image.js"></script>
     <script src="keyboarddown.js"></script>
     <script src="refund.js"></script>
     <script src="sales-mgmt.js"></script>
+    <script src="discount-system.js"></script>
+    <script src="analytics-system.js"></script>
 </body>
 </html>

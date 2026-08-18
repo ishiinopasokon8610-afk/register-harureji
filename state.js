@@ -2,6 +2,8 @@ let clerks = JSON.parse(localStorage.getItem('pos_clerks')) || [{id:1, name:'店
 let products = JSON.parse(localStorage.getItem('pos_products')) || [];
 let customers = JSON.parse(localStorage.getItem('pos_customers')) || [];
 let activeClerkName = localStorage.getItem('pos_active_clerk') || '店長';
+let customGenres = JSON.parse(localStorage.getItem('pos_custom_genres')) || []; // ユーザーが追加した商品の種類（カテゴリ）
+let priceUpdateMode = false; // 単価更新モード（テンキーで入力した金額を選択中の商品に一時的に適用する）
 
 let cart = [];
 let currentTotal = 0;
@@ -10,6 +12,7 @@ let currentChange = 0;
 let selectedPayment = '現金';
 
 let activeCustomer = null;
+let customerDisplayMemberInfo = null; // 客用画面に表示する会員情報（名前・ポイント・ランク）
 let usedPoints = 0;
 let billingAmount = 0;
 let earnedPointsThisTime = 0;
@@ -19,6 +22,7 @@ let lastScannedTime = 0;
 
 let pendingAgeCheckItem = null;
 let ageVerifiedCurrentTransaction = false;
+let taxExemptTransaction = false; // 免税ボタンが押された会計は、完了するまでずっと免税扱いになる
 
 let cartHistory = [];
 let redoStack = [];
