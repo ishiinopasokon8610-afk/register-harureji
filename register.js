@@ -1,11 +1,11 @@
 // 二重プッシュ防止用のフラグ
 let isSubmitting = false;
+let selectedGenreFilter = 'すべて'; // 現在選択中のジャンルフィルター
 
 // 確実にフォーカスを当てるためのヘルパー関数
 function focusJanInput() {
     setTimeout(() => {
         const input = getJanInput();
-        // モーダル（ダイアログ）が開いている場合はフォーカスを当てない
         const isModalOpen = Array.from(document.querySelectorAll('.modal, .modal-overlay, #checkout-modal, #invoice-modal, #receipt-print-modal')).some(m => {
             const style = window.getComputedStyle(m);
             return style.display === 'flex' || style.display === 'block';
@@ -17,12 +17,11 @@ function focusJanInput() {
     }, 100);
 }
 
-// 画面のどこかをタップ/クリックした際に自動で入力欄にフォーカスを戻す
+// 画面クリック時の自動フォーカス
 document.addEventListener('click', (e) => {
     const regScreen = document.getElementById('register-screen');
     if (regScreen && regScreen.classList.contains('active')) {
         const target = e.target;
-        // 入力欄やボタン以外の場所を押した場合は自動フォーカス
         if (!['INPUT', 'BUTTON', 'TEXTAREA', 'SELECT', 'A'].includes(target.tagName)) {
             focusJanInput();
         }
@@ -36,10 +35,72 @@ function openRegister() {
     showScreen('register-screen');
     const clerkDisplay = document.getElementById('active-clerk-display');
     if (clerkDisplay) clerkDisplay.innerText = `担当: ${activeClerkName}`;
-    generateCustomButtons(); 
+    
+    renderGenreFilterButtons(); // ジャンルタブの描画
+    generateCustomButtons();   // 商品ボタンの描画
     focusJanInput();
     updatePauseUI();
     speak("いらっしゃいませ");
+}
+
+/* =========================================================
+   ジャンル（種類）フィルター機能
+   ========================================================= */
+const GENRE_LIST = [
+    'すべて', '食品', '飲料/お酒', 'お惣菜/お弁当', 
+    'スイーツ/菓子', '日用品', '衣料品', '雑貨', 'サービス', 'その他商品', '値引き/その他'
+];
+
+function renderGenreFilterButtons() {
+    const container = document.getElementById('genre-filter-container');
+    if (!container) return;
+
+    container.innerHTML = '';
+    GENRE_LIST.forEach(genre => {
+        const btn = document.createElement('button');
+        btn.className = 'genre-tab-btn' + (selectedGenreFilter === genre ? ' active' : '');
+        btn.innerText = genre;
+        btn.onclick = () => {
+            selectedGenreFilter = genre;
+            renderGenreFilterButtons();
+            generateCustomButtons();
+            focusJanInput();
+        };
+        container.appendChild(btn);
+    });
+}
+
+function generateCustomButtons() {
+    const area = document.getElementById('custom-buttons-area');
+    if (!area) return;
+    area.innerHTML = '';
+
+    // 選択されたジャンルで商品を絞り込み
+    let filteredProducts = products;
+    if (selectedGenreFilter !== 'すべて') {
+        filteredProducts = products.filter(p => (p.genre || 'その他商品') === selectedGenreFilter);
+    }
+
+    if (filteredProducts.length === 0) {
+        area.innerHTML = `<div style="grid-column: 1/-1; text-align: center; color: #888; padding: 20px;">「${selectedGenreFilter}」に該当する商品はありません</div>`;
+        return;
+    }
+
+    filteredProducts.forEach(prod => {
+        const btn = document.createElement('button');
+        btn.className = 'action-btn blue';
+        btn.style.position = 'relative';
+        
+        const genreTag = prod.genre ? `<span class="prod-genre-badge">${prod.genre}</span>` : '';
+        btn.innerHTML = `${genreTag}<b>${prod.name}</b><small>¥${prod.price.toLocaleString()}</small>`;
+        
+        btn.onclick = () => {
+            playSound('click');
+            checkAndAddToCart(prod);
+            focusJanInput();
+        };
+        area.appendChild(btn);
+    });
 }
 
 function openCustomerScreen() {
@@ -59,7 +120,6 @@ function updateCustomerDisplay() {
     const changeEl = document.getElementById('customer-change');
     const lastCodeEl = document.getElementById('customer-last-barcode');
 
-    // 「いらっしゃいませ！」の見出し要素を自動取得
     const titleEl = document.getElementById('customer-title') || 
                     document.getElementById('customer-header') || 
                     (listEl ? listEl.previousElementSibling : null);
@@ -76,11 +136,8 @@ function updateCustomerDisplay() {
 
     if (!listEl) return;
 
-    // クレジットまたはQR決済が選択されている場合
     if (typeof selectedPayment !== 'undefined' && (selectedPayment === 'クレジット' || selectedPayment === 'QR決済')) {
-        if (titleEl && titleEl !== listEl) {
-            titleEl.style.display = 'none'; // 「いらっしゃいませ！」を非表示
-        }
+        if (titleEl && titleEl !== listEl) titleEl.style.display = 'none';
         listEl.innerHTML = `
             <div style="display: flex; align-items: center; justify-content: center; height: 100%; min-height: 160px; text-align: center; color: #80d8ff; font-size: 22px; font-weight: bold; padding: 20px; line-height: 1.6;">
                 店員の指示に従ってお支払いください。
@@ -89,10 +146,7 @@ function updateCustomerDisplay() {
         return;
     }
 
-    // 通常時（現金等）は「いらっしゃいませ！」タイトルを表示復元
-    if (titleEl && titleEl !== listEl) {
-        titleEl.style.display = '';
-    }
+    if (titleEl && titleEl !== listEl) titleEl.style.display = '';
 
     if (cart.length === 0) {
         listEl.innerHTML = '<div style="color: #ccc; text-align: center;">商品がスキャンされるとここに表示されます</div>';
@@ -124,23 +178,16 @@ function updateCustomerDisplay() {
     listEl.scrollTop = listEl.scrollHeight;
 }
 
-// テンキー入力
 function typeNum(n) {
     playSound('click');
     const input = getJanInput();
-    if (input) { 
-        input.value += n; 
-        focusJanInput(); 
-    }
+    if (input) { input.value += n; focusJanInput(); }
 }
 
 function clearNum() {
     playSound('click');
     const input = getJanInput();
-    if (input) { 
-        input.value = ""; 
-        focusJanInput(); 
-    }
+    if (input) { input.value = ""; focusJanInput(); }
 }
 
 async function submitInput() {
@@ -240,13 +287,72 @@ async function fetchAndAddItem(code) {
                     const priceNode = data[0].onix.ProductSupply.SupplyDetail.Price[0];
                     if (priceNode && priceNode.PriceAmount) itemPrice = parseInt(priceNode.PriceAmount);
                 } catch(e) {}
-                checkAndAddToCart({ name: itemName, price: itemPrice, ageCheck: false, taxRate: 10 });
+                checkAndAddToCart({ name: itemName, price: itemPrice, ageCheck: false, taxRate: 10, genre: '書籍' });
                 return;
             }
         } catch (error) { console.log(error); }
     }
 
     openUnknownProdModal(code);
+}
+
+/* =========================================================
+   未登録商品の保存（種類ジャンルの保存修正）
+   ========================================================= */
+function openUnknownProdModal(code) {
+    const modal = document.getElementById('unknown-prod-modal');
+    const janDisplay = document.getElementById('unknown-jan-display');
+    if (janDisplay) janDisplay.innerText = `JAN: ${code}`;
+    
+    document.getElementById('unknown-prod-name-input').value = "";
+    document.getElementById('unknown-prod-price-input').value = "";
+    document.getElementById('unknown-prod-tax-input').value = "10";
+    document.getElementById('unknown-prod-genre-input').value = "その他商品";
+    document.getElementById('unknown-prod-age-check').checked = false;
+    
+    if (modal) {
+        modal.dataset.code = code;
+        modal.style.display = 'flex';
+    }
+}
+
+function closeUnknownProdModal() {
+    const modal = document.getElementById('unknown-prod-modal');
+    if (modal) modal.style.display = 'none';
+    focusJanInput();
+}
+
+function saveUnknownProd() {
+    const modal = document.getElementById('unknown-prod-modal');
+    const code = modal ? modal.dataset.code : '';
+    const nameInput = document.getElementById('unknown-prod-name-input').value.trim() || '名無しの商品';
+    const genreInput = document.getElementById('unknown-prod-genre-input').value || 'その他商品';
+    const priceInput = parseInt(document.getElementById('unknown-prod-price-input').value);
+    const taxInput = parseInt(document.getElementById('unknown-prod-tax-input').value) || 10;
+    const ageCheckInput = document.getElementById('unknown-prod-age-check').checked;
+
+    if (isNaN(priceInput) || priceInput < 0) {
+        document.getElementById('unknown-prod-error').style.display = 'block';
+        return;
+    }
+    document.getElementById('unknown-prod-error').style.display = 'none';
+
+    // 商品リストに追加して保存（ジャンルを確実に保存）
+    const newProd = {
+        jan: code,
+        name: nameInput,
+        genre: genreInput,
+        price: priceInput,
+        taxRate: taxInput,
+        ageCheck: ageCheckInput
+    };
+
+    products.push(newProd);
+    localStorage.setItem('pos_products', JSON.stringify(products));
+
+    closeUnknownProdModal();
+    generateCustomButtons(); // ボタン更新
+    checkAndAddToCart(newProd);
 }
 
 // 年齢確認モーダル関連
@@ -278,45 +384,30 @@ function checkAndAddToCart(prod) {
     if (prod.ageCheck && !ageVerifiedCurrentTransaction) {
         pendingAgeCheckItem = prod;
         showAgeCheckModals();
-        
-        if (channel) {
-            channel.publish('age-check-event', { action: 'start', item: prod });
-        }
+        if (channel) channel.publish('age-check-event', { action: 'start', item: prod });
     } else {
-        addToCart(prod.name, prod.price, prod.taxRate);
+        addToCart(prod.name, prod.price, prod.taxRate, prod.genre);
     }
 }
 
 function handleAgeCheckResult(agreed) {
     if (agreed) {
-        if (channel) {
-            channel.publish('age-check-event', { action: 'success' });
-        } else {
-            onAgeCheckSuccess();
-        }
+        if (channel) channel.publish('age-check-event', { action: 'success' });
+        else onAgeCheckSuccess();
     } else {
-        if (channel) {
-            channel.publish('age-check-event', { action: 'cancel' });
-        } else {
-            onAgeCheckCancel();
-        }
+        if (channel) channel.publish('age-check-event', { action: 'cancel' });
+        else onAgeCheckCancel();
     }
 }
 
 function onAgeCheckSuccess() {
-    if (ageCheckInterval) {
-        clearInterval(ageCheckInterval);
-        ageCheckInterval = null;
-    }
-    const clerkModal = document.getElementById('clerk-age-modal');
-    const custModal = document.getElementById('customer-age-modal');
-    if (clerkModal) clerkModal.style.display = 'none';
-    if (custModal) custModal.style.display = 'none';
-    
+    if (ageCheckInterval) { clearInterval(ageCheckInterval); ageCheckInterval = null; }
+    document.getElementById('clerk-age-modal').style.display = 'none';
+    document.getElementById('customer-age-modal').style.display = 'none';
     ageVerifiedCurrentTransaction = true;
 
     if (pendingAgeCheckItem) {
-        addToCart(pendingAgeCheckItem.name, pendingAgeCheckItem.price, pendingAgeCheckItem.taxRate);
+        addToCart(pendingAgeCheckItem.name, pendingAgeCheckItem.price, pendingAgeCheckItem.taxRate, pendingAgeCheckItem.genre);
         pendingAgeCheckItem = null;
     }
     showToastAnimation("成功しました");
@@ -325,15 +416,9 @@ function onAgeCheckSuccess() {
 }
 
 function onAgeCheckCancel() {
-    if (ageCheckInterval) {
-        clearInterval(ageCheckInterval);
-        ageCheckInterval = null;
-    }
-    const clerkModal = document.getElementById('clerk-age-modal');
-    const custModal = document.getElementById('customer-age-modal');
-    if (clerkModal) clerkModal.style.display = 'none';
-    if (custModal) custModal.style.display = 'none';
-    
+    if (ageCheckInterval) { clearInterval(ageCheckInterval); ageCheckInterval = null; }
+    document.getElementById('clerk-age-modal').style.display = 'none';
+    document.getElementById('customer-age-modal').style.display = 'none';
     pendingAgeCheckItem = null;
     playSound('error');
     speak("購入できません");
@@ -345,9 +430,7 @@ function showToastAnimation(msg) {
     toast.className = 'toast-success';
     toast.innerText = msg;
     document.body.appendChild(toast);
-    setTimeout(() => {
-        if (toast.parentNode) toast.parentNode.removeChild(toast);
-    }, 2500);
+    setTimeout(() => { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 2500);
 }
 
 function recordCartState() {
@@ -355,7 +438,7 @@ function recordCartState() {
     redoStack = []; 
 }
 
-function addToCart(name, price, taxRate = 10) {
+function addToCart(name, price, taxRate = 10, genre = 'その他商品') {
     recordCartState();
     if (cart.length === 1 && cartHistory.length === 0 && !activeCustomer) { speak("いらっしゃいませ"); }
     const existingItem = cart.find(item => item.name === name && item.price === price && item.taxRate === taxRate);
@@ -366,7 +449,7 @@ function addToCart(name, price, taxRate = 10) {
         existingItem.qty += 1;
         speak("どういつ しょうひん です");
     } else {
-        cart.push({ name: name, price: price, qty: 1, taxRate: taxRate });
+        cart.push({ name: name, price: price, qty: 1, taxRate: taxRate, genre: genre });
         speak(`${speakName}、 ${price} えん です`);
     }
     updateReceipt();
@@ -414,7 +497,7 @@ function applyHalfPrice() {
         return;
     }
 
-    cart.push({ name: `半額 (${lastItem.name})`, price: -discountAmount, qty: 1, taxRate: lastItem.taxRate });
+    cart.push({ name: `半額 (${lastItem.name})`, price: -discountAmount, qty: 1, taxRate: lastItem.taxRate, genre: '値引き/その他' });
     speak("はんがく が てきよう さ れ まし た");
     updateReceipt();
     focusJanInput();
@@ -479,7 +562,6 @@ function updateReceipt() {
         if (total10 !== 0) {
             summaryHTML += `<div style="display:flex; justify-content:space-between; margin-top:2px;"><span>消費税等(税抜10%)</span><span>¥${excl10.toLocaleString()}</span></div>`;
         }
-        
         if (total8 !== 0) {
             summaryHTML += `<div style="text-align:right; font-size:10px; margin-top:4px;">(※は軽減税率8%対象)</div>`;
         }
@@ -621,7 +703,7 @@ function applyDynamicDiscount(type) {
         return;
     }
 
-    cart.push({ name: discountName, price: -discountAmount, qty: 1, taxRate: 10 });
+    cart.push({ name: discountName, price: -discountAmount, qty: 1, taxRate: 10, genre: '値引き/その他' });
     speak(`${discountNameHira} が てきよう さ れ まし た`); 
     if (input) { input.value = ""; }
     focusJanInput();
@@ -1060,6 +1142,7 @@ function generateReceiptHTML(includeInvoice = false, clientName = "上様") {
     }
 
     html += `<div style="text-align: center; margin-top: 15px; font-weight: bold;">ありがとうございました！</div>`;
+html += `<div style="text-align: center; margin-top: 15px; font-weight: bold;">返品は7日以内にお願いします。</div>`;
 
     if (includeInvoice) {
         html += `
@@ -1105,77 +1188,94 @@ function closeReceiptPrintModal() {
     focusJanInput();
 }
 
-function saveReceiptAsImage() {
+/* =========================================================
+   指定フォルダへの画像（PNG）レシート直接保存修正
+   ========================================================= */
+async function saveReceiptAsImage() {
     const target = document.getElementById('receipt-capture-area') || document.getElementById('print-receipt-content');
     
-    html2canvas(target, {
-        scale: 2,
-        useCORS: true
-    }).then(canvas => {
-        const link = document.createElement('a');
+    try {
+        const canvas = await html2canvas(target, { scale: 2, useCORS: true });
         const now = new Date();
         const timeStr = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
-        link.download = `レシート_${timeStr}_${now.getTime()}.png`;
+        const fileName = `レシート_${timeStr}_${now.getTime()}.png`;
+
+        // フォルダハンドルがあり権限がある場合はフォルダ内に直接保存
+        let dirHandle = typeof receiptDirectoryHandle !== 'undefined' ? receiptDirectoryHandle : null;
+        if (!dirHandle && typeof savedDirectoryHandle !== 'undefined') dirHandle = savedDirectoryHandle;
+
+        if (dirHandle) {
+            try {
+                const perm = await dirHandle.requestPermission({ mode: 'readwrite' });
+                if (perm === 'granted') {
+                    // canvasをBlob化して直接ファイル生成
+                    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+                    const fileHandle = await dirHandle.getFileHandle(fileName, { create: true });
+                    const writable = await fileHandle.createWritable();
+                    await writable.write(blob);
+                    await writable.close();
+
+                    if (typeof playSound === 'function') playSound('success');
+                    if (typeof speak === 'function') speak("レシート フォルダ に ほぞんし まし た");
+                    closeReceiptPrintModal();
+                    return;
+                }
+            } catch (err) {
+                console.log("フォルダへの直接書き込みに失敗しました。通常のダウンロードを行います", err);
+            }
+        }
+
+        // フォルダが未選択、または書き込み失敗時は標準ダウンロード
+        const link = document.createElement('a');
+        link.download = fileName;
         link.href = canvas.toDataURL('image/png');
         link.click();
 
         if (typeof playSound === 'function') playSound('success');
-        if (typeof speak === 'function') speak("画像 を ほぞんし まし た");
+        if (typeof speak === 'function') speak("画像 を ほぞangし まし た");
+        closeReceiptPrintModal();
 
-        if (typeof closeReceiptPrintModal === 'function') {
-            closeReceiptPrintModal(); 
-        } else {
-            const printModal = document.getElementById('receipt-print-modal');
-            if (printModal) printModal.style.display = 'none';
-        }
-    }).catch(err => {
+    } catch (err) {
         console.error("PNG保存エラー:", err);
         if (typeof playSound === 'function') playSound('error');
-    });
+    }
 }
 
 async function saveReceiptAsText() {
     playSound('click');
 
-    if (!receiptDirectoryHandle && savedDirectoryHandle) {
+    let dirHandle = typeof receiptDirectoryHandle !== 'undefined' ? receiptDirectoryHandle : null;
+    if (!dirHandle && typeof savedDirectoryHandle !== 'undefined') {
         try {
             const perm = await savedDirectoryHandle.requestPermission({ mode: 'readwrite' });
-            if (perm === 'granted') {
-                receiptDirectoryHandle = savedDirectoryHandle;
-            }
-        } catch (err) {
-            console.log("権限の再取得に失敗しました", err);
-        }
+            if (perm === 'granted') dirHandle = savedDirectoryHandle;
+        } catch (err) { console.log(err); }
     }
 
     const content = document.getElementById('print-receipt-content');
     let rawText = content ? (content.innerText || content.textContent) : "";
     
-    let receiptText = "================================\n";
+    receiptText += "================================\n";
     receiptText += "      ハイテク音声レジスター     \n";
     receiptText += "================================\n";
     receiptText += rawText + "\n";
+    receiptText += "================================\n";
+    receiptText += "   返品は7日以内にお願いします。  \n";  // ← この行を追加
     receiptText += "================================\n";
 
     const fileName = `receipt_${Date.now()}.txt`;
     const blob = new Blob([receiptText], { type: 'text/plain;charset=utf-8' });
 
     try {
-        if (receiptDirectoryHandle) {
-            try {
-                const subDirHandle = await receiptDirectoryHandle.getDirectoryHandle('レシート', { create: true });
-                const fileHandle = await subDirHandle.getFileHandle(fileName, { create: true });
-                const writable = await fileHandle.createWritable();
-                
-                await writable.write(blob);
-                await writable.close();
+        if (dirHandle) {
+            const fileHandle = await dirHandle.getFileHandle(fileName, { create: true });
+            const writable = await fileHandle.createWritable();
+            await writable.write(blob);
+            await writable.close();
 
-                playSound('success');
-                closeReceiptPrintModal();
-                return;
-            } catch (err) {
-                console.log("フォルダへの直接保存に失敗したため、通常のブラウザダウンロードを行います", err);
-            }
+            playSound('success');
+            closeReceiptPrintModal();
+            return;
         }
 
         const link = document.createElement('a');
@@ -1199,31 +1299,23 @@ function skipPoints() {
     proceedToPayment();
 }
 
-// キーボードショートカットで本物のレジ操作
+// キーボードショートカット
 document.addEventListener('keydown', (e) => {
-    // レジ画面が開いている時のみ動作
     const regScreen = document.getElementById('register-screen');
     if (!regScreen || !regScreen.classList.contains('active')) return;
 
-    // モーダルが開いている時は無効
     const isModalOpen = Array.from(document.querySelectorAll('.modal, .modal-overlay')).some(m => {
         return window.getComputedStyle(m).display !== 'none';
     });
     if (isModalOpen) return;
 
-    // [＋] キーまたは [Enter] キーのみ（入力なし時）で「現計（お会計）」画面を開く
     if (e.key === '+' || (e.key === 'Enter' && getJanInput() && getJanInput().value === '')) {
         e.preventDefault();
-        if (typeof openCheckoutModal === 'function') {
-            openCheckoutModal();
-        }
+        if (typeof openCheckout === 'function') openCheckout();
     }
 
-    // [Escape] キーでカートを全消去（取卸・クリア）
     if (e.key === 'Escape') {
         e.preventDefault();
-        if (typeof clearCart === 'function') {
-            clearCart();
-        }
+        if (typeof clearCart === 'function') clearCart();
     }
 });

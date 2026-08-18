@@ -109,16 +109,19 @@
         </div>
 
         <div class="home-grid">
-            <button class="home-btn large" onclick="openRegister()">会計スタート (店員用)</button>
-            <button class="home-btn large home-btn-customer" onclick="openCustomerScreen()">客用画面を開く</button>
-            
-            <button class="home-btn" onclick="showScreen('clerk-screen')">担当者管理</button>
-            <button class="home-btn" onclick="requestManagerAuth('product')">商品管理</button>
-            
-            <!-- 追加：タイムカードボタン -->
-            <button class="home-btn full home-btn-timecard" onclick="openTimecardScreen()">⏱️ タイムカード (出勤・退勤)</button>
-            
-            <button class="home-btn full home-btn-customer-mgmt" onclick="requestManagerAuth('customer')">👥 会員・顧客管理 (ポイント・情報)</button>
+    <button id="btn-main-register" class="home-btn large" onclick="openRegister()">会計スタート (店員用)</button>
+    
+    <button class="home-btn large home-btn-customer" onclick="openCustomerScreen()">客用画面を開く</button>
+    
+    <button class="home-btn" onclick="showScreen('clerk-screen')">担当者管理</button>
+    <button class="home-btn" onclick="requestManagerAuth('product')">商品管理</button>
+    
+    <button class="home-btn home-btn-timecard" onclick="openTimecardScreen()" style="grid-column: span 1;">⏱️ タイムカード</button>
+    <button class="home-btn" onclick="openSalesMgmtScreen()" style="background: linear-gradient(to bottom, #7e57c2, #4527a0); border-color: #311b92;">💰 売上管理・精算</button>
+    
+    <button id="btn-restart-business" class="home-btn large" onclick="startBusiness()" style="display: none; grid-column: span 2; background: linear-gradient(to bottom, #ec407a, #c2185b); border-color: #880e4f;">🔄 業務を再開する（準備金入力）</button>
+
+    <button class="home-btn full home-btn-customer-mgmt" onclick="requestManagerAuth('customer')">👥 会員・顧客管理 (ポイント・情報)</button>
             
             <!-- お会計履歴ボタン -->
             <button class="home-btn full" onclick="requestHistoryAuth()">お会計履歴</button>
@@ -347,63 +350,69 @@
         </table>
     </div>
 
-    <!-- レジ画面（店員用） -->
-    <div id="register-screen" class="screen">
-        <div class="reg-header">
-            <button class="back-btn" onclick="goHome()">← ホーム</button>
-            <div class="header-actions">
-                <span id="active-clerk-display" class="active-clerk-display">担当: 未設定</span>
-                <button onclick="togglePauseRegister()" class="btn-pause-reg">レジ休止</button>
-            </div>
+   <!-- レジ画面（店員用） -->
+<div id="register-screen" class="screen">
+    <div class="reg-header">
+        <button class="back-btn" onclick="goHome()">← ホーム</button>
+        <div class="header-actions">
+    <button id="refund-btn" class="btn-refund-reg" onclick="openRefundModal()">返金</button>
+    <span id="active-clerk-display" class="active-clerk-display">担当: 未設定</span>
+    <button onclick="togglePauseRegister()" class="btn-pause-reg">レジ休止</button>
+</div>
+    </div>
+    <div class="reg-layout">
+        <div class="left-pane">
+            <div class="receipt-header">レシート</div>
+            <div class="receipt-body" id="receipt-body"></div>
         </div>
-        <div class="reg-layout">
-            <div class="left-pane">
-                <div class="receipt-header">レシート</div>
-                <div class="receipt-body" id="receipt-body"></div>
+        <div class="right-pane">
+            
+            <div id="active-customer-display">
+                <button class="cust-clear-btn" onclick="clearCustomer()">クリア</button>
+                <div class="cust-info-main">👤 <span id="ac-name"></span> 様 (<span id="ac-age"></span>歳)</div>
+                <div class="cust-info-sub">
+                    <span>🅿️ 保有ポイント: <b id="ac-points"></b> pt</span>
+                    <span id="ac-exp-info"></span>
+                </div>
             </div>
-            <div class="right-pane">
-                
-                <div id="active-customer-display">
-                    <button class="cust-clear-btn" onclick="clearCustomer()">クリア</button>
-                    <div class="cust-info-main">👤 <span id="ac-name"></span> 様 (<span id="ac-age"></span>歳)</div>
-                    <div class="cust-info-sub">
-                        <span>🅿️ 保有ポイント: <b id="ac-points"></b> pt</span>
-                        <span id="ac-exp-info"></span>
-                    </div>
-                </div>
 
-                <div class="display-area">
-                    <div class="jan-input-area">
-                        <input type="text" id="jan-input" placeholder="JAN・会員・店員バーコードをスキャン" autocomplete="off">
-                    </div>
-                    <div class="display-total-label">合計金額</div>
-                    <div class="display-total" id="display-total">¥0</div>
+            <div class="display-area">
+                <div class="jan-input-area">
+                    <input type="text" id="jan-input" placeholder="JAN・会員・店員バーコードをスキャン" autocomplete="off">
                 </div>
+                <div class="display-total-label">合計金額</div>
+                <div class="display-total" id="display-total">¥0</div>
+            </div>
 
-                <div class="fixed-actions-container">
-                    <button class="action-btn red" onclick="applyDynamicDiscount('percent')">% 値引<br><small>(数値を打ってから)</small></button>
-                    <button class="action-btn blue" onclick="applyDynamicDiscount('yen')">円 値引<br><small>(数値を打ってから)</small></button>
-                    <button class="action-btn blue" onclick="applyMultiplyQuantity()">複数<br><small>(数値を打ってから)</small></button>
-                    <button class="action-btn orange" onclick="applyHalfPrice()">半額<br><small>(商品選択/入力)</small></button>
-                    <button class="action-btn red" onclick="removeSelectedOrInputItem()">選択して取消<br><small>(バーコード/選択)</small></button>
-                    <button class="action-btn red" onclick="removeLastItem()">一個取り消す<br><small>(直前)</small></button>
-                    <button class="action-btn blue" onclick="clearCart()">全取消</button>
-                    <button class="action-btn green" onclick="openCheckout()">お会計</button>
+            <div class="fixed-actions-container">
+                <button class="action-btn red" onclick="applyDynamicDiscount('percent')">% 値引<br><small>(数値を打ってから)</small></button>
+                <button class="action-btn blue" onclick="applyDynamicDiscount('yen')">円 値引<br><small>(数値を打ってから)</small></button>
+                <button class="action-btn blue" onclick="applyMultiplyQuantity()">複数<br><small>(数値を打ってから)</small></button>
+                <button class="action-btn orange" onclick="applyHalfPrice()">半額<br><small>(商品選択/入力)</small></button>
+                <button class="action-btn red" onclick="removeSelectedOrInputItem()">選択して取消<br><small>(バーコード/選択)</small></button>
+                <button class="action-btn red" onclick="removeLastItem()">一個取り消す<br><small>(直前)</small></button>
+                <button class="action-btn blue" onclick="clearCart()">全取消</button>
+                <button class="action-btn green" onclick="openCheckout()">お会計</button>
+            </div>
+            
+            <!-- 追加: 種類（ジャンル）選択フィルターバー -->
+            <div id="genre-filter-container" class="genre-filter-container">
+                <!-- JSで動的にボタン生成されます -->
+            </div>
+
+            <div class="controls-area">
+                <div class="numpad">
+                    <button class="num-btn" onclick="typeNum('7')">7</button><button class="num-btn" onclick="typeNum('8')">8</button><button class="num-btn" onclick="typeNum('9')">9</button>
+                    <button class="num-btn" onclick="typeNum('4')">4</button><button class="num-btn" onclick="typeNum('5')">5</button><button class="num-btn" onclick="typeNum('6')">6</button>
+                    <button class="num-btn" onclick="typeNum('1')">1</button><button class="num-btn" onclick="typeNum('2')">2</button><button class="num-btn" onclick="typeNum('3')">3</button>
+                    <button class="num-btn" onclick="typeNum('0')">0</button><button class="num-btn" onclick="typeNum('00')">00</button><button class="num-btn" onclick="clearNum()">C</button>
+                    <button class="num-btn enter-btn" onclick="submitInput()">確定</button>
                 </div>
-                
-                <div class="controls-area">
-                    <div class="numpad">
-                        <button class="num-btn" onclick="typeNum('7')">7</button><button class="num-btn" onclick="typeNum('8')">8</button><button class="num-btn" onclick="typeNum('9')">9</button>
-                        <button class="num-btn" onclick="typeNum('4')">4</button><button class="num-btn" onclick="typeNum('5')">5</button><button class="num-btn" onclick="typeNum('6')">6</button>
-                        <button class="num-btn" onclick="typeNum('1')">1</button><button class="num-btn" onclick="typeNum('2')">2</button><button class="num-btn" onclick="typeNum('3')">3</button>
-                        <button class="num-btn" onclick="typeNum('0')">0</button><button class="num-btn" onclick="typeNum('00')">00</button><button class="num-btn" onclick="clearNum()">C</button>
-                        <button class="num-btn enter-btn" onclick="submitInput()">確定</button>
-                    </div>
-                    <div class="action-grid" id="custom-buttons-area"></div>
-                </div>
+                <div class="action-grid" id="custom-buttons-area"></div>
             </div>
         </div>
     </div>
+</div>
 
     <!-- 履歴画面 -->
     <div id="history-screen" class="screen management-screen">
@@ -738,6 +747,113 @@
         </div>
     </div>
 
+    <!-- 返金取引選択モーダル -->
+<div id="refund-modal" class="modal-overlay">
+    <div class="modal-box large" style="max-width: 550px;">
+        <h3 class="modal-title" style="color: #c62828;">↩️ 返金対象の取引を選択</h3>
+        <p class="modal-desc">1週間以内のお会計履歴から返金する取引を選んで「確定」を押してください。</p>
+        <div style="max-height: 250px; overflow-y: auto; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 4px;">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th style="width: 50px; text-align: center;">選択</th>
+                        <th>時刻</th>
+                        <th>担当</th>
+                        <th>金額</th>
+                        <th>決済方法</th>
+                    </tr>
+                </thead>
+                <tbody id="refund-today-tbody"></tbody>
+            </table>
+        </div>
+        <div class="modal-btn-group">
+            <button onclick="closeRefundModal()" class="modal-btn cancel">キャンセル</button>
+            <button onclick="submitRefund()" class="modal-btn" style="background: #d32f2f; color: white;">確定</button>
+        </div>
+    </div>
+</div>
+
+<!-- 返金金額案内ポップアップ -->
+<div id="refund-complete-modal" class="modal-overlay">
+    <div class="custom-alert-box" style="border: 2px solid #d32f2f;">
+        <div class="custom-alert-msg" id="refund-complete-msg" style="font-size: 20px; color: #c62828;"></div>
+        <button onclick="finishRefundProcess()" class="complete-btn" style="background: #d32f2f;">完了</button>
+    </div>
+</div>
+
+<div id="sales-mgmt-screen" class="screen management-screen">
+        <div class="top-bar">
+            <button class="back-btn" onclick="goHome()">← ホーム</button>
+            <h2 class="top-bar-title">💰 売上管理・精算</h2>
+        </div>
+        
+        <div style="display: flex; gap: 20px; flex-wrap: wrap;">
+            <div style="flex: 1; min-width: 250px; background: #e3f2fd; padding: 20px; border-radius: 8px; border: 1px solid #90caf9;">
+                <h3 style="margin-top:0; color:#1565c0;">システム計算額</h3>
+                <p>準備金 ＋ 本日の現金売上</p>
+                <div id="system-cash-display" style="font-size: 32px; font-weight: bold; color: #0d47a1; margin-bottom: 20px;">¥0</div>
+                <hr style="border: 0; border-top: 1px dashed #90caf9; margin: 15px 0;">
+                <p>本日のキャッシュレス売上</p>
+                <div id="system-cashless-display" style="font-size: 24px; font-weight: bold; color: #00695c;">¥0</div>
+            </div>
+
+            <div style="flex: 1; min-width: 300px; background: #fff3e0; padding: 20px; border-radius: 8px; border: 1px solid #ffcc80;">
+                <h3 style="margin-top:0; color:#e65100;">レジ内の現金を数えて入力</h3>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                    <div><label>1万円札:</label> <input type="number" id="end-10000" class="end-cash-input modal-input" oninput="calculateEndCash()" placeholder="枚"></div>
+                    <div><label>5千円札:</label> <input type="number" id="end-5000" class="end-cash-input modal-input" oninput="calculateEndCash()" placeholder="枚"></div>
+                    <div><label>千円札:</label> <input type="number" id="end-1000" class="end-cash-input modal-input" oninput="calculateEndCash()" placeholder="枚"></div>
+                    <div><label>500円玉:</label> <input type="number" id="end-500" class="end-cash-input modal-input" oninput="calculateEndCash()" placeholder="枚"></div>
+                    <div><label>100円玉:</label> <input type="number" id="end-100" class="end-cash-input modal-input" oninput="calculateEndCash()" placeholder="枚"></div>
+                    <div><label>50円玉:</label> <input type="number" id="end-50" class="end-cash-input modal-input" oninput="calculateEndCash()" placeholder="枚"></div>
+                    <div><label>10円玉:</label> <input type="number" id="end-10" class="end-cash-input modal-input" oninput="calculateEndCash()" placeholder="枚"></div>
+                    <div><label>5円玉:</label> <input type="number" id="end-5" class="end-cash-input modal-input" oninput="calculateEndCash()" placeholder="枚"></div>
+                    <div><label>1円玉:</label> <input type="number" id="end-1" class="end-cash-input modal-input" oninput="calculateEndCash()" placeholder="枚"></div>
+                </div>
+                
+                <h4 style="margin: 20px 0 5px 0;">入力合計額: <span id="end-total-display" style="font-size: 24px; color:#d84315;">¥0</span></h4>
+                <div style="font-size: 20px; font-weight: bold; background: white; padding: 10px; border-radius: 4px; border: 1px solid #ccc;">
+                    過不足: <span id="diff-display">¥0</span>
+                </div>
+
+                <button id="btn-close-business" onclick="closeBusiness()" disabled style="margin-top: 20px; width: 100%; padding: 15px; font-size: 18px; font-weight: bold; background: #d32f2f; color: white; border: none; border-radius: 6px; cursor: pointer;">本日の業務を終了（ログアウト）</button>
+                <p style="font-size: 12px; color: #d32f2f; text-align: center; margin-top: 5px;">※過不足が0円になるとボタンが押せます</p>
+            </div>
+        </div>
+    </div>
+
+    <div id="business-start-modal" class="modal-overlay">
+        <div class="modal-box large" style="max-width: 500px;">
+            <h3 class="modal-title" style="color: #c2185b;">🔄 業務再開 (準備金の入力)</h3>
+            <p class="modal-desc">レジ内に最初に入れておくお金（釣銭準備金）の枚数を入力してください。</p>
+            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; text-align: left;">
+                <div><label style="font-size:12px;">1万円</label><input type="number" id="start-10000" class="start-cash-input modal-input small" oninput="calculateStartCash()"></div>
+                <div><label style="font-size:12px;">5千円</label><input type="number" id="start-5000" class="start-cash-input modal-input small" oninput="calculateStartCash()"></div>
+                <div><label style="font-size:12px;">千円</label><input type="number" id="start-1000" class="start-cash-input modal-input small" oninput="calculateStartCash()"></div>
+                <div><label style="font-size:12px;">500円</label><input type="number" id="start-500" class="start-cash-input modal-input small" oninput="calculateStartCash()"></div>
+                <div><label style="font-size:12px;">100円</label><input type="number" id="start-100" class="start-cash-input modal-input small" oninput="calculateStartCash()"></div>
+                <div><label style="font-size:12px;">50円</label><input type="number" id="start-50" class="start-cash-input modal-input small" oninput="calculateStartCash()"></div>
+                <div><label style="font-size:12px;">10円</label><input type="number" id="start-10" class="start-cash-input modal-input small" oninput="calculateStartCash()"></div>
+                <div><label style="font-size:12px;">5円</label><input type="number" id="start-5" class="start-cash-input modal-input small" oninput="calculateStartCash()"></div>
+                <div><label style="font-size:12px;">1円</label><input type="number" id="start-1" class="start-cash-input modal-input small" oninput="calculateStartCash()"></div>
+            </div>
+            <div style="margin: 15px 0; font-size: 20px; font-weight: bold; text-align: right;">
+                準備金合計: <span id="start-total-display" style="color:#c2185b;">¥0</span>
+            </div>
+            <div class="modal-btn-group">
+                <button onclick="closeStartBusiness()" class="modal-btn cancel">キャンセル</button>
+                <button onclick="confirmStartBusiness()" class="modal-btn" style="background: #c2185b; color: white;">再開を確定</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="business-closed-overlay" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0, 0, 0, 0.9); z-index: 99999; flex-direction: column; justify-content: center; align-items: center; color: white;">
+        <h1 style="font-size: 52px; font-weight: bold; margin-bottom: 20px; text-shadow: 0 4px 10px rgba(0,0,0,0.6); text-align: center;">本日の業務を終了しました</h1>
+        <p style="font-size: 20px; color: #bbb; text-align: center;">すべてのレジ業務が終了し、ログアウトしています。</p>
+        
+        <button onclick="startBusiness()" style="position: absolute; bottom: 30px; right: 30px; padding: 15px 30px; font-size: 18px; font-weight: bold; background: #e91e63; color: white; border: none; border-radius: 8px; cursor: pointer; box-shadow: 0 4px 12px rgba(0,0,0,0.4);">🔄 業務を再開する</button>
+    </div>
+
     <script>
         document.addEventListener('DOMContentLoaded', () => {
             const apiKeyInput = document.getElementById('api-key-input');
@@ -869,9 +985,12 @@
 
     <script src="state.js"></script>
     <script src="utils.js"></script>
-    <script src="management.js"></script>
+    <script src="auth-system.js"></script>
+<script src="master-mgmt.js"></script>
     <script src="register.js"></script>
     <script src="ui.js"></script>
     <script src="keyboarddown.js"></script>
+    <script src="refund.js"></script>
+    <script src="sales-mgmt.js"></script>
 </body>
 </html>
