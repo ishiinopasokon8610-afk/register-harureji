@@ -764,6 +764,23 @@
             <button class="btn-migration" style="background:#f44336; color:white; padding:8px 12px; border:none; border-radius:4px; font-weight:bold; cursor:pointer;" onclick="clearShopLogo()">ロゴを初期化する</button>
         </div>
 
+        <!-- 追加：キャッシュ・Cookie削除に負けないファイルバックアップ -->
+        <div class="migration-block" style="background:#e8f5e9; border:2px solid #81c784; padding:15px; border-radius:6px; margin-bottom:15px;">
+            <h3 class="migration-title" style="color:#2e7d32;">💾 データのバックアップ（キャッシュ・Cookie削除対策）</h3>
+            <p class="migration-desc">
+                ブラウザの「キャッシュ・Cookie（サイトデータ）を削除する」操作をすると、この画面が使っているデータも一緒に消えてしまいます（これはブラウザの仕様で、アプリ側だけでは防げません）。
+                <b>下のボタンでバックアップファイルをパソコンに保存しておけば、万が一データが消えても復元できます。</b>
+                お会計終了時や、商品を登録したあとなど、こまめに保存することをおすすめします。
+                （HTMLファイルを再アップロード・再配置しただけではデータは消えません。消えるのはブラウザ側でデータ削除の操作をしたときのみです）
+            </p>
+            <button class="btn-migration" style="background:#2e7d32; color:white; padding:8px 12px; border:none; border-radius:4px; font-weight:bold; cursor:pointer; margin-right:8px;" onclick="downloadDataBackupFile()">📥 バックアップファイルを保存する</button>
+            <button class="btn-migration" style="background:#1565c0; color:white; padding:8px 12px; border:none; border-radius:4px; font-weight:bold; cursor:pointer;" onclick="document.getElementById('backup-restore-file-input').click()">📂 バックアップファイルから復元する</button>
+            <input type="file" id="backup-restore-file-input" accept="application/json,.json" style="display:none;">
+            <p class="migration-desc" style="margin-top:10px; font-size:12px; color:#555;">
+                📁「レシート保存フォルダ」を設定済みの場合は、そのフォルダにも自動でバックアップ（haru-pos-backup.json）が更新され続けます。
+            </p>
+        </div>
+
         <div class="migration-block danger">
             <h3 class="migration-title danger">🚨 商品・履歴データの初期化 (会員・店員データは残す)</h3>
             <p class="migration-desc">登録されている商品データとレジの履歴を削除します。<b>お客様（会員）データと店員データはそのまま保持されます。</b></p>
@@ -1321,6 +1338,7 @@
     <script src="checkout-image.js"></script>
     <script src="keyboarddown.js"></script>
     <script src="refund.js"></script>
+    <script src="local-backup.js"></script>
     <script src="sales-mgmt.js"></script>
     <script src="discount-system.js"></script>
     <script src="analytics-system.js"></script>

@@ -147,6 +147,10 @@ function openManagerAuthTarget(target) {
         } else if (target === 'discount') {
             showScreen('discount-screen');
             if (typeof renderDiscounts === 'function') renderDiscounts();
+        } else if (target === 'refund-delete') {
+            // 返金時のお会計履歴削除：店長認証成功後にそのまま削除を実行する
+            // （画面遷移は行わない。返金モーダルはそのまま維持する）
+            if (typeof finalizeRefundDeletion === 'function') finalizeRefundDeletion();
         } else {
             showScreen('home-screen');
         }
@@ -514,9 +518,11 @@ function handleResetStep(res) {
     }
 }
 
-function exportAllData() {
-    if (typeof playSound === 'function') playSound('click');
-    const dataObj = {
+// 現在の全データをひとつのオブジェクトにまとめる。
+// exportAllData（コピー用）と local-backup.js（ローカルフォルダへの自動保存）
+// の両方から共通で使う。
+function buildAllDataObject() {
+    return {
         clerks: typeof clerks !== 'undefined' ? clerks : [],
         products: typeof products !== 'undefined' ? products : [],
         customers: typeof customers !== 'undefined' ? customers : [], 
@@ -528,8 +534,14 @@ function exportAllData() {
         // 追加：自動化バーコード（クーポン）・商品の種類・お会計完了画像も機種変更時に一緒に移行できるようにする
         discounts: JSON.parse(localStorage.getItem('pos_discounts') || '[]'),
         customGenres: JSON.parse(localStorage.getItem('pos_custom_genres') || '[]'),
-        checkoutCompleteImage: localStorage.getItem('pos_checkout_complete_image') || ''
+        checkoutCompleteImage: localStorage.getItem('pos_checkout_complete_image') || '',
+        savedAt: new Date().toISOString()
     };
+}
+
+function exportAllData() {
+    if (typeof playSound === 'function') playSound('click');
+    const dataObj = buildAllDataObject();
     const jsonStr = JSON.stringify(dataObj);
     const importInput = document.getElementById('import-data-input');
     if (importInput) importInput.value = jsonStr;
@@ -543,6 +555,56 @@ function exportAllData() {
             showCustomConfirm("コピーに失敗しました。", "こぴー に しっぱい し まし た。", () => {}, false);
         }
     });
+}
+
+// データオブジェクトを実際にlocalStorage・変数へ反映する共通処理。
+// 「貼り付けて取り込む」機能と、「バックアップファイルから復元する」機能の
+// 両方から呼び出される。
+// options.reload : 反映後にページをリロードするか（既定: true）
+// options.silent : 完了メッセージを表示しないか（既定: false）
+function applyImportedDataObject(dataObj, options) {
+    options = options || {};
+    if (dataObj.clerks && typeof clerks !== 'undefined') clerks = dataObj.clerks;
+    if (dataObj.products && typeof products !== 'undefined') products = dataObj.products;
+    if (dataObj.customers && typeof customers !== 'undefined') customers = dataObj.customers;
+    if (dataObj.activeClerkName && typeof activeClerkName !== 'undefined') activeClerkName = dataObj.activeClerkName;
+    if (dataObj.history) localStorage.setItem('pos_history', JSON.stringify(dataObj.history));
+    if (dataObj.timecards) saveTimecardData(dataObj.timecards);
+
+    if (dataObj.apiKey !== undefined) {
+        localStorage.setItem('pos_api_key', dataObj.apiKey);
+    }
+    if (dataObj.shopLogo !== undefined) {
+        localStorage.setItem('pos_shop_logo', dataObj.shopLogo);
+    }
+    if (Array.isArray(dataObj.discounts)) {
+        localStorage.setItem('pos_discounts', JSON.stringify(dataObj.discounts));
+    }
+    if (Array.isArray(dataObj.customGenres)) {
+        localStorage.setItem('pos_custom_genres', JSON.stringify(dataObj.customGenres));
+    }
+    if (dataObj.checkoutCompleteImage) {
+        localStorage.setItem('pos_checkout_complete_image', dataObj.checkoutCompleteImage);
+    }
+
+    if (typeof clerks !== 'undefined') localStorage.setItem('pos_clerks', JSON.stringify(clerks));
+    if (typeof products !== 'undefined') localStorage.setItem('pos_products', JSON.stringify(products));
+    if (typeof customers !== 'undefined') localStorage.setItem('pos_customers', JSON.stringify(customers));
+    if (typeof activeClerkName !== 'undefined') localStorage.setItem('pos_active_clerk', activeClerkName);
+
+    if (options.silent) {
+        if (options.reload !== false) location.reload();
+        return;
+    }
+
+    if (typeof playSound === 'function') playSound('success');
+    if (typeof showCustomConfirm === 'function') {
+        showCustomConfirm("データの取り込みが完了しました！", "でーた の とりこみ が かんりょう し まし た！", () => {
+            if (options.reload !== false) location.reload();
+        }, false);
+    } else if (options.reload !== false) {
+        location.reload();
+    }
 }
 
 function importAllData() {
@@ -561,39 +623,7 @@ function importAllData() {
             if (!res) return;
             try {
                 const dataObj = JSON.parse(text);
-                if (dataObj.clerks && typeof clerks !== 'undefined') clerks = dataObj.clerks;
-                if (dataObj.products && typeof products !== 'undefined') products = dataObj.products;
-                if (dataObj.customers && typeof customers !== 'undefined') customers = dataObj.customers; 
-                if (dataObj.activeClerkName && typeof activeClerkName !== 'undefined') activeClerkName = dataObj.activeClerkName;
-                if (dataObj.history) localStorage.setItem('pos_history', JSON.stringify(dataObj.history));
-                if (dataObj.timecards) saveTimecardData(dataObj.timecards);
-                
-                if (dataObj.apiKey !== undefined) {
-                    localStorage.setItem('pos_api_key', dataObj.apiKey);
-                }
-                if (dataObj.shopLogo !== undefined) {
-                    localStorage.setItem('pos_shop_logo', dataObj.shopLogo);
-                }
-                // 追加：自動化バーコード（クーポン）・商品の種類・お会計完了画像も取り込む
-                if (Array.isArray(dataObj.discounts)) {
-                    localStorage.setItem('pos_discounts', JSON.stringify(dataObj.discounts));
-                }
-                if (Array.isArray(dataObj.customGenres)) {
-                    localStorage.setItem('pos_custom_genres', JSON.stringify(dataObj.customGenres));
-                }
-                if (dataObj.checkoutCompleteImage) {
-                    localStorage.setItem('pos_checkout_complete_image', dataObj.checkoutCompleteImage);
-                }
-
-                if (typeof clerks !== 'undefined') localStorage.setItem('pos_clerks', JSON.stringify(clerks));
-                if (typeof products !== 'undefined') localStorage.setItem('pos_products', JSON.stringify(products));
-                if (typeof customers !== 'undefined') localStorage.setItem('pos_customers', JSON.stringify(customers)); 
-                if (typeof activeClerkName !== 'undefined') localStorage.setItem('pos_active_clerk', activeClerkName);
-
-                if (typeof playSound === 'function') playSound('success');
-                showCustomConfirm("データの取り込みが完了しました！", "でーた の とりこみ が かんりょう し まし た！", () => { 
-                    location.reload(); 
-                }, false);
+                applyImportedDataObject(dataObj);
             } catch(e) {
                 if (typeof playSound === 'function') playSound('error');
                 showCustomConfirm("データの形式が正しくありません。", "でーた の けいしき が ただしく あり ませ ん。", () => {}, true);

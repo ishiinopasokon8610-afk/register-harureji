@@ -127,10 +127,14 @@ async function setupReceiptFolder() {
     playSound('click');
     if ('showDirectoryPicker' in window) {
         try {
-            receiptDirectoryHandle = await window.showDirectoryPicker();
+            // 書き込み権限（readwrite）を最初から要求しておく。
+            // こうしておくことで、レシート保存だけでなく、データの自動バックアップ
+            // （local-backup.js）もユーザー操作なしで裏側で書き込めるようになる。
+            receiptDirectoryHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
             savedDirectoryHandle = receiptDirectoryHandle;
             saveHandleToIndexedDB(receiptDirectoryHandle);
-            showCustomConfirm("レシート保存フォルダが設定され、次回以降も自動保存されます！", "れしーと ほぞん ふぉるだ が せってい さ れ まし た！", () => {}, false);
+            showCustomConfirm("レシート保存フォルダが設定されました！次回以降もレシートが自動保存されるほか、このフォルダにデータのバックアップ（haru-pos-backup.json）も自動で保存されるようになります。", "れしーと ほぞん ふぉるだ が せってい さ れ まし た！", () => {}, false);
+            if (typeof writeBackupToFolderIfAvailable === 'function') writeBackupToFolderIfAvailable();
         } catch (err) {
             console.log(err);
         }

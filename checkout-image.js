@@ -18,6 +18,15 @@ function getCheckoutCompleteImage() {
 }
 
 // 管理画面：画像アップロード（大きすぎる画像は自動で縮小してから保存）
+// ------------------------------------------
+// 注意：localStorageは他のデータ（商品・会員・お会計履歴など）と容量を
+// 共有しており、上限は端末やブラウザによって数MB程度しかない。
+// 以前は常に「幅1920px・画質0.95」の高画質で保存しようとしていたため、
+// 他のデータと合わせて容量オーバー（QuotaExceededError）になり、
+// 画像が保存されないまま（＝お会計完了時に何も表示されない）ことがあった。
+// このため、まず控えめなサイズで保存を試み、それでも入らない場合は
+// 段階的にサイズ・画質を落として再試行し、最終手段まで失敗した場合のみ
+// はっきりとユーザーに知らせるようにする。
 function uploadCheckoutCompleteImage(event) {
     const file = event.target.files && event.target.files[0];
     if (!file) return;
@@ -26,28 +35,77 @@ function uploadCheckoutCompleteImage(event) {
     reader.onload = function (e) {
         const img = new Image();
         img.onload = function () {
-            // 客用画面いっぱいに表示するため、高解像度・高画質で保存する
-            const maxW = 1920;
-            const scale = Math.min(1, maxW / img.width);
-            const canvas = document.createElement('canvas');
-            canvas.width = Math.round(img.width * scale);
-            canvas.height = Math.round(img.height * scale);
-            const ctx = canvas.getContext('2d');
-            ctx.imageSmoothingEnabled = true;
-            ctx.imageSmoothingQuality = 'high';
-            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            // 画質を落としながら段階的に保存を試みる設定
+            // （幅px, JPEG画質）の順に、入るサイズが見つかるまで試す
+            const attempts = [
+                { maxW: 1280, quality: 0.8 },
+                { maxW: 1280, quality: 0.6 },
+                { maxW: 960, quality: 0.6 },
+                { maxW: 960, quality: 0.45 },
+                { maxW: 640, quality: 0.5 },
+                { maxW: 480, quality: 0.5 }
+            ];
 
-            const dataUrl = canvas.toDataURL('image/jpeg', 0.95);
-            try {
-                localStorage.setItem(CHECKOUT_IMAGE_KEY, dataUrl);
+            let saved = false;
+            let lastErr = null;
+
+            for (const attempt of attempts) {
+                const scale = Math.min(1, attempt.maxW / img.width);
+                const canvas = document.createElement('canvas');
+                canvas.width = Math.round(img.width * scale);
+                canvas.height = Math.round(img.height * scale);
+                const ctx = canvas.getContext('2d');
+                ctx.imageSmoothingEnabled = true;
+                ctx.imageSmoothingQuality = 'high';
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+                const dataUrl = canvas.toDataURL('image/jpeg', attempt.quality);
+
+                try {
+                    localStorage.setItem(CHECKOUT_IMAGE_KEY, dataUrl);
+                    // 実際に読み出せるかまで確認する（一部ブラウザではsetItemが
+                    // 例外を投げずに保存に失敗するケースがあるため）
+                    if (localStorage.getItem(CHECKOUT_IMAGE_KEY) === dataUrl) {
+                        saved = true;
+                        break;
+                    }
+                } catch (err) {
+                    lastErr = err;
+                    // 容量オーバーの場合は次の（より小さい）設定で再試行する
+                }
+            }
+
+            if (saved) {
                 if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
                 if (typeof playSound === 'function') playSound('success');
-            } catch (err) {
-                console.warn('画像の保存に失敗しました（サイズが大きすぎる可能性があります）:', err);
+                if (typeof showCustomConfirm === 'function') {
+                    showCustomConfirm("お会計完了時の表示画像を保存しました。", "がぞう を ほぞん し まし た。", () => {}, false);
+                }
+            } else {
+                console.warn('画像の保存に失敗しました（容量オーバーの可能性）:', lastErr);
                 if (typeof playSound === 'function') playSound('error');
+                if (typeof showCustomConfirm === 'function') {
+                    showCustomConfirm(
+                        "画像を保存できませんでした。保存容量が不足している可能性があります。お会計履歴を整理する（データ管理画面から古いデータを初期化する）か、もっと小さい画像でお試しください。",
+                        "がぞう を ほぞん でき ませ ん でし た。",
+                        () => {}, false
+                    );
+                } else {
+                    alert('画像を保存できませんでした（容量不足の可能性があります）。');
+                }
             }
 
             renderCheckoutImagePreview();
+            // 選択済みのファイルをクリアし、同じファイルを選び直しても
+            // onchangeが再度発火するようにする
+            event.target.value = '';
+        };
+        img.onerror = function () {
+            if (typeof playSound === 'function') playSound('error');
+            if (typeof showCustomConfirm === 'function') {
+                showCustomConfirm("画像の読み込みに失敗しました。別の画像でお試しください。", "がぞう の よみこみ に しっぱい し まし た。", () => {}, false);
+            }
+            event.target.value = '';
         };
         img.src = e.target.result;
     };

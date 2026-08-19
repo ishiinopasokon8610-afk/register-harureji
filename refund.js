@@ -99,13 +99,37 @@ function submitRefund() {
 }
 
 // 「完了」を押して通常のレジ画面へ復帰 ＆ お会計履歴から対象データを削除
+// ------------------------------------------
+// お会計履歴の削除は店長のみ可能（履歴画面の削除と同じルール）。
+// 現金を返す作業自体は担当者が行えるが、削除の実行だけは
+// 店長認証（バーコード認証）を通過するまで行われない。
 function finishRefundProcess() {
+    const isManager = (typeof managerAuthDone !== 'undefined' && managerAuthDone) ||
+        sessionStorage.getItem('pos_manager_auth') === 'true';
+
+    if (!isManager) {
+        if (typeof playSound === 'function') playSound('error');
+        if (typeof requestManagerAuth === 'function') {
+            // 認証が成功すると auth-system.js 側から finalizeRefundDeletion() が呼ばれる
+            requestManagerAuth('refund-delete');
+        } else if (typeof showCustomConfirm === 'function') {
+            showCustomConfirm("お会計履歴の削除は店長のみ可能です。", "りれき の さくじょ は てんちょう のみ かのう です。", () => {}, false);
+        }
+        return;
+    }
+
+    finalizeRefundDeletion();
+}
+
+// 実際の削除・後片付け処理（店長認証済みの場合のみ呼び出される）
+function finalizeRefundDeletion() {
     // 選択された取引をお会計履歴（pos_history）から削除
     if (selectedRefundIndex !== null) {
         let historyData = JSON.parse(localStorage.getItem('pos_history') || '[]');
         if (selectedRefundIndex >= 0 && selectedRefundIndex < historyData.length) {
             historyData.splice(selectedRefundIndex, 1);
             localStorage.setItem('pos_history', JSON.stringify(historyData));
+            if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
         }
         selectedRefundIndex = null;
     }
@@ -118,9 +142,11 @@ function finishRefundProcess() {
     if (typeof playSound === 'function') playSound('success');
 
     // ポップアップを閉じる
-    document.getElementById('refund-complete-modal').style.display = 'none';
+    const completeModal = document.getElementById('refund-complete-modal');
+    if (completeModal) completeModal.style.display = 'none';
 
     // 背景色を通常に戻す
     document.body.classList.remove('refund-mode');
-    document.getElementById('register-screen').classList.remove('refund-mode');
+    const registerScreen = document.getElementById('register-screen');
+    if (registerScreen) registerScreen.classList.remove('refund-mode');
 }
