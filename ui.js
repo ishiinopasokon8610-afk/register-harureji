@@ -134,7 +134,7 @@ async function setupReceiptFolder() {
             savedDirectoryHandle = receiptDirectoryHandle;
             saveHandleToIndexedDB(receiptDirectoryHandle);
             showCustomConfirm("レシート保存フォルダが設定されました！次回以降もレシートが自動保存されるほか、このフォルダにデータのバックアップ（haru-pos-backup.json）も自動で保存されるようになります。", "れしーと ほぞん ふぉるだ が せってい さ れ まし た！", () => {}, false);
-            if (typeof writeBackupToFolderIfAvailable === 'function') writeBackupToFolderIfAvailable();
+            if (typeof writeBackupToFolderIfAvailable === 'function') writeBackupToFolderIfAvailable(true);
         } catch (err) {
             console.log(err);
         }
@@ -192,6 +192,12 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     if (typeof populateGenreSelects === 'function') populateGenreSelects();
+
+    // 追加：客用ディスプレイ設定チェックボックスの初期状態を反映
+    const custDisplayCheck = document.getElementById('customer-display-device-check');
+    if (custDisplayCheck && typeof isCustomerDisplayDevice === 'function') {
+        custDisplayCheck.checked = isCustomerDisplayDevice();
+    }
 
     checkOrientation();
 });

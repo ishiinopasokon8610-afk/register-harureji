@@ -1,8 +1,9 @@
 // ==========================================
-// ハイテク音声レジスター - 商品・お会計履歴の複数端末同期システム
+// ハイテク音声レジスター - 商品・お会計履歴・タイムカードの複数端末同期システム
 // すでに割引バーコード（discount-system.js）は同期対応済み。
-// ここでは「商品マスタ（pos_products）」と「お会計履歴（pos_history）」を
-// 他の端末（スマホ・レジ端末など）ともリアルタイムに同期する。
+// ここでは「商品マスタ（pos_products）」「お会計履歴（pos_history）」
+// 「タイムカード（pos_timecard）」を他の端末（スマホ・レジ端末など）とも
+// リアルタイムに同期する。
 //
 // master-mgmt.js / register.js は直接編集せず、
 // 定期的にデータの変化を検知して自動的にAbly経由で送信する方式をとる
@@ -13,6 +14,7 @@ const SYNC_DEVICE_ID = 'dev_' + Date.now().toString(36) + '_' + Math.random().to
 
 let lastSyncedProductsSnapshot = null;
 let lastSyncedHistorySnapshot = null;
+let lastSyncedTimecardSnapshot = null;
 
 function getHistoryFromStorage() {
     try {
@@ -20,6 +22,31 @@ function getHistoryFromStorage() {
     } catch (e) {
         return [];
     }
+}
+
+function getTimecardFromStorage() {
+    try {
+        return JSON.parse(localStorage.getItem('pos_timecard') || '[]');
+    } catch (e) {
+        return [];
+    }
+}
+
+// タイムカードどうしをマージする（同じ記録[id]は、より多く打刻されている方を優先する）
+function mergeTimecardLists(localList, remoteList) {
+    const fillCount = (r) => ['clockIn', 'breakStart', 'breakEnd', 'clockOut'].filter(k => r && r[k]).length;
+    const map = new Map();
+    const keyOf = (item) => item.id || `${item.date}_${item.clerkName}`;
+
+    [...localList, ...remoteList].forEach(item => {
+        const key = keyOf(item);
+        const existing = map.get(key);
+        if (!existing || fillCount(item) >= fillCount(existing)) {
+            map.set(key, item);
+        }
+    });
+
+    return Array.from(map.values()).sort((a, b) => (b.id || 0) - (a.id || 0));
 }
 
 // 会計履歴どうしをマージする（同じ取引を重複させない）
@@ -56,6 +83,15 @@ function broadcastHistorySync() {
     }
 }
 
+function broadcastTimecardSync() {
+    if (typeof channel === 'undefined' || !channel) return;
+    try {
+        channel.publish('timecard-sync', { timecards: getTimecardFromStorage(), senderId: SYNC_DEVICE_ID, time: Date.now() });
+    } catch (err) {
+        console.warn('タイムカードの同期送信に失敗しました:', err);
+    }
+}
+
 // 2秒ごとに、商品・会計履歴がローカルで変化していないかチェックし、
 // 変化していれば他端末へ自動送信する
 setInterval(() => {
@@ -75,6 +111,14 @@ setInterval(() => {
     } else if (currentHistorySnapshot !== lastSyncedHistorySnapshot) {
         lastSyncedHistorySnapshot = currentHistorySnapshot;
         broadcastHistorySync();
+    }
+
+    const currentTimecardSnapshot = localStorage.getItem('pos_timecard') || '[]';
+    if (lastSyncedTimecardSnapshot === null) {
+        lastSyncedTimecardSnapshot = currentTimecardSnapshot;
+    } else if (currentTimecardSnapshot !== lastSyncedTimecardSnapshot) {
+        lastSyncedTimecardSnapshot = currentTimecardSnapshot;
+        broadcastTimecardSync();
     }
 }, 2000);
 
@@ -118,6 +162,22 @@ setInterval(() => {
             if (typeof renderAnalytics === 'function') {
                 const analyticsScreen = document.getElementById('analytics-screen');
                 if (analyticsScreen && analyticsScreen.classList.contains('active')) renderAnalytics();
+            }
+        });
+
+        channel.subscribe('timecard-sync', (msg) => {
+            if (!msg || !msg.data || msg.data.senderId === SYNC_DEVICE_ID) return;
+            if (!Array.isArray(msg.data.timecards)) return;
+
+            const localTimecards = getTimecardFromStorage();
+            const merged = mergeTimecardLists(localTimecards, msg.data.timecards);
+            localStorage.setItem('pos_timecard', JSON.stringify(merged));
+            lastSyncedTimecardSnapshot = JSON.stringify(merged);
+            if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
+
+            const timecardScreen = document.getElementById('timecard-screen');
+            if (timecardScreen && timecardScreen.classList.contains('active') && typeof renderTimecardTable === 'function') {
+                renderTimecardTable();
             }
         });
     } else {

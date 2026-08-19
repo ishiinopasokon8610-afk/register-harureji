@@ -1,4 +1,4 @@
-let clerks = JSON.parse(localStorage.getItem('pos_clerks')) || [{id:1, name:'店長', kana: 'テンチョウ', barcode: '', age: 30, voiceEnabled: true}];
+let clerks = JSON.parse(localStorage.getItem('pos_clerks')) || [{id:1, name:'店長', kana: 'テンチョウ', barcode: '1', age: 30, voiceEnabled: true}];
 let products = JSON.parse(localStorage.getItem('pos_products')) || [];
 let customers = JSON.parse(localStorage.getItem('pos_customers')) || [];
 let activeClerkName = localStorage.getItem('pos_active_clerk') || '店長';
@@ -40,6 +40,24 @@ let managerAuthTarget = 'customer';
 
 let receiptDirectoryHandle = null;
 let savedDirectoryHandle = null;
+
+// この端末を一意に識別するID（Ably経由のブロードキャストで「自分自身が送った
+// イベントかどうか」を判定するために使う。年齢確認モーダルの表示などで使用）
+const POS_DEVICE_ID = 'dev_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2);
+
+// 追加：この端末を「客用ディスプレイ」として使うかどうかの設定。
+// 複数端末を使っている場合、年齢確認モーダルやお会計完了画像は
+// 本来お客様が見る1台の端末だけに表示したいため、この設定で限定する。
+function isCustomerDisplayDevice() {
+    return localStorage.getItem('pos_is_customer_display_device') === 'true';
+}
+
+function toggleCustomerDisplayDevice() {
+    const checkbox = document.getElementById('customer-display-device-check');
+    const enabled = checkbox ? checkbox.checked : false;
+    localStorage.setItem('pos_is_customer_display_device', enabled ? 'true' : 'false');
+    if (typeof playSound === 'function') playSound('click');
+}
 
 let managerAuthDone = sessionStorage.getItem('pos_manager_auth') === 'true';
 

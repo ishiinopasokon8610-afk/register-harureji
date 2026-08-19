@@ -519,8 +519,7 @@ function handleResetStep(res) {
 }
 
 // 現在の全データをひとつのオブジェクトにまとめる。
-// exportAllData（コピー用）と local-backup.js（ローカルフォルダへの自動保存）
-// の両方から共通で使う。
+// local-backup.js（JSONファイルへの手動保存・自動保存の両方）から共通で使う。
 function buildAllDataObject() {
     return {
         clerks: typeof clerks !== 'undefined' ? clerks : [],
@@ -539,27 +538,16 @@ function buildAllDataObject() {
     };
 }
 
-function exportAllData() {
-    if (typeof playSound === 'function') playSound('click');
-    const dataObj = buildAllDataObject();
-    const jsonStr = JSON.stringify(dataObj);
-    const importInput = document.getElementById('import-data-input');
-    if (importInput) importInput.value = jsonStr;
-
-    navigator.clipboard.writeText(jsonStr).then(() => {
-        if (typeof showCustomConfirm === 'function') {
-            showCustomConfirm("すべてのデータを出力・コピーしました！", "すべての でーた を しゅつりょく し まし た！", () => {}, false);
-        }
-    }).catch(() => {
-        if (typeof showCustomConfirm === 'function') {
-            showCustomConfirm("コピーに失敗しました。", "こぴー に しっぱい し まし た。", () => {}, false);
-        }
-    });
-}
+// ------------------------------------------
+// 【送る／受け取る】のクリップボード貼り付け方式は廃止しました。
+// 現在は local-backup.js のJSONファイル書き出し・読み込み
+// （downloadDataBackupFile / restoreDataFromBackupFileInput）に統一しています。
+// buildAllDataObject() と applyImportedDataObject() は、その仕組みから
+// 引き続き利用される共通処理として残しています。
+// ------------------------------------------
 
 // データオブジェクトを実際にlocalStorage・変数へ反映する共通処理。
-// 「貼り付けて取り込む」機能と、「バックアップファイルから復元する」機能の
-// 両方から呼び出される。
+// 「バックアップファイルから復元する」機能から呼び出される。
 // options.reload : 反映後にページをリロードするか（既定: true）
 // options.silent : 完了メッセージを表示しないか（既定: false）
 function applyImportedDataObject(dataObj, options) {
@@ -604,31 +592,6 @@ function applyImportedDataObject(dataObj, options) {
         }, false);
     } else if (options.reload !== false) {
         location.reload();
-    }
-}
-
-function importAllData() {
-    if (typeof playSound === 'function') playSound('click');
-    const importInput = document.getElementById('import-data-input');
-    if (!importInput) return;
-    const text = importInput.value.trim();
-    if (!text) { 
-        if (typeof showCustomConfirm === 'function') {
-            showCustomConfirm("データが入力されていません。", "でーた が にゅうりょく さ れ て い ませ ん。", () => {}, false); 
-        }
-        return; 
-    }
-    if (typeof showCustomConfirm === 'function') {
-        showCustomConfirm("既存のデータが上書きされます。よろしいですか？", "きそん の データ が うわがき さ れ ます。 よろしい です か？", (res) => {
-            if (!res) return;
-            try {
-                const dataObj = JSON.parse(text);
-                applyImportedDataObject(dataObj);
-            } catch(e) {
-                if (typeof playSound === 'function') playSound('error');
-                showCustomConfirm("データの形式が正しくありません。", "でーた の けいしき が ただしく あり ませ ん。", () => {}, true);
-            }
-        }, true);
     }
 }
 

@@ -163,19 +163,17 @@ function hideCheckoutCompleteImage() {
     overlay.classList.remove('img-slide-up');
 }
 
-// レジ側：お会計完了時に呼び出す（同一端末・別端末どちらの客用画面にも対応）
+// レジ側：お会計完了時に呼び出す（客用ディスプレイに設定されている端末にのみ表示する）
 function triggerCheckoutCompleteImage() {
     const dataUrl = getCheckoutCompleteImage();
     if (!dataUrl) return;
 
-    // 同じ端末内に客用画面のDOMがあり、かつ「今まさに客用画面を表示中」の場合だけ、
-    // その場で直接表示する（店員側のレジ画面には出さない）
-    const customerScreen = document.getElementById('customer-screen');
-    if (customerScreen && customerScreen.classList.contains('active')) {
+    // この端末自身が「客用ディスプレイ」に設定されている場合は、その場で直接表示する
+    if (typeof isCustomerDisplayDevice === 'function' && isCustomerDisplayDevice()) {
         displayCheckoutCompleteImage(dataUrl);
     }
 
-    // 他端末（別デバイスの客用画面）へ、Ably経由で画像データを送信
+    // 他端末へ、Ably経由で画像データを送信する（受信側で客用ディスプレイ設定を確認する）
     if (typeof channel !== 'undefined' && channel) {
         try {
             channel.publish('checkout-image-event', { image: dataUrl, senderId: CHECKOUT_IMAGE_DEVICE_ID });
@@ -185,7 +183,7 @@ function triggerCheckoutCompleteImage() {
     }
 }
 
-// 別端末の客用画面からAblyメッセージを受信するための購読登録。
+// 別端末からAblyメッセージを受信するための購読登録。
 // channel（Ably）の初期化はレジ/客画面を開いたタイミングで行われるため、
 // 準備ができるまで少し待ってから一度だけ登録する。
 (function waitForChannelAndSubscribeCheckoutImage() {
@@ -195,7 +193,9 @@ function triggerCheckoutCompleteImage() {
                 // 自分自身が送信したイベントのエコー（Ablyはデフォルトで送信者にも配信される）は、
                 // すでにローカルで表示処理済みなので無視する
                 if (msg.data.senderId === CHECKOUT_IMAGE_DEVICE_ID) return;
-                // 他端末からの受信は、その端末が客用画面かどうかに関わらず常に表示する
+                // 「客用ディスプレイ」に設定されている端末以外では表示しない
+                // （そうしないと複数端末を使っている場合、全端末に表示されてしまうため）
+                if (typeof isCustomerDisplayDevice === 'function' && !isCustomerDisplayDevice()) return;
                 displayCheckoutCompleteImage(msg.data.image);
             }
         });

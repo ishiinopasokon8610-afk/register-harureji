@@ -195,7 +195,7 @@
         <div class="home-header">
             <!-- 文字を消してロゴ画像を表示するように変更 -->
             <!-- ホーム画面のロゴ（サイズ拡大版） -->
-<img id="home-shop-logo" src="https://illust8.com/wp-content/uploads/2022/04/cash-register_16279.png" alt="ここにロゴを設定できます。" style="max-height: 150px; width: auto; margin-bottom: 10px;">
+<img id="home-shop-logo" src="https://illust8.com/wp-content/uploads/2022/04/cash-register_16279.png" alt="ここにロゴを設定できます。" class="home-shop-logo-img">
         </div>
         
         <!-- API設定コンテナ -->
@@ -768,10 +768,7 @@
         <div class="migration-block" style="background:#e8f5e9; border:2px solid #81c784; padding:15px; border-radius:6px; margin-bottom:15px;">
             <h3 class="migration-title" style="color:#2e7d32;">💾 データのバックアップ（キャッシュ・Cookie削除対策）</h3>
             <p class="migration-desc">
-                ブラウザの「キャッシュ・Cookie（サイトデータ）を削除する」操作をすると、この画面が使っているデータも一緒に消えてしまいます（これはブラウザの仕様で、アプリ側だけでは防げません）。
-                <b>下のボタンでバックアップファイルをパソコンに保存しておけば、万が一データが消えても復元できます。</b>
-                お会計終了時や、商品を登録したあとなど、こまめに保存することをおすすめします。
-                （HTMLファイルを再アップロード・再配置しただけではデータは消えません。消えるのはブラウザ側でデータ削除の操作をしたときのみです）
+                ブラウザのデータ一括削除や、iOS/Safari等の自動クリーンアップ機能（長期間未操作の場合）によって、IndexedDBのデータが消去される場合があります。万が一に備え、こまめなバックアップを推奨します
             </p>
             <button class="btn-migration" style="background:#2e7d32; color:white; padding:8px 12px; border:none; border-radius:4px; font-weight:bold; cursor:pointer; margin-right:8px;" onclick="downloadDataBackupFile()">📥 バックアップファイルを保存する</button>
             <button class="btn-migration" style="background:#1565c0; color:white; padding:8px 12px; border:none; border-radius:4px; font-weight:bold; cursor:pointer;" onclick="document.getElementById('backup-restore-file-input').click()">📂 バックアップファイルから復元する</button>
@@ -787,19 +784,6 @@
             <button class="btn-migration danger" onclick="confirmResetAllData()">商品と履歴データを初期化する</button>
         </div>
 
-        <div class="migration-block export">
-            <h3 class="migration-title export">【送る】 今使っている端末のデータを出力 (全情報)</h3>
-            <p class="migration-desc">現在登録されているすべてのデータ（商品、会員、担当者、履歴など）をコードとして出力・コピーします。</p>
-            <button class="btn-migration export" onclick="exportAllData()">全データをコピーする</button>
-        </div>
-        
-        <div class="migration-block import">
-            <h3 class="migration-title import">【受け取る】 他の端末からのデータを取り込む</h3>
-            <p class="migration-desc">別の端末でコピーしたデータを下の欄に貼り付けて取り込んでください。</p>
-            <textarea id="import-data-input" placeholder="ここに、別の端末でコピーしたデータを貼り付けてください" class="migration-textarea"></textarea>
-            <button class="btn-migration import" onclick="importAllData()">貼り付けたデータを取り込む</button>
-        </div>
-
         <!-- 追加：お会計完了時に客画面へ表示する画像の設定 -->
         <div class="migration-block" style="background:#fff3e0; border:2px solid #ffb74d; padding:15px; border-radius:6px; margin-top:15px;">
             <h3 class="migration-title" style="color:#e65100;">🖼️ お会計完了時に客画面へ表示する画像の設定</h3>
@@ -809,6 +793,20 @@
             <img id="checkout-image-preview" src="" alt="" style="max-width:240px; max-height:160px; display:none; border:1px solid #ccc; border-radius:4px; margin-bottom:10px; object-fit:contain;">
             <br>
             <button class="btn-migration" style="background:#f44336; color:white; padding:8px 12px; border:none; border-radius:4px; font-weight:bold; cursor:pointer;" onclick="clearCheckoutCompleteImage()">画像を削除する</button>
+        </div>
+
+        <!-- 追加：客用ディスプレイ端末の指定（年齢確認・お会計完了画像を表示する端末を限定する） -->
+        <div class="migration-block" style="background:#ede7f6; border:2px solid #9575cd; padding:15px; border-radius:6px; margin-top:15px;">
+            <h3 class="migration-title" style="color:#4527a0;">🖥️ この端末を「客用ディスプレイ」にする</h3>
+            <p class="migration-desc">
+                複数端末を同時に使っている場合、「年齢確認をお願いします」画面やお会計完了時の表示画像は、
+                本来お客様が見る1台の端末だけに表示したいはずです。ここにチェックを入れた端末だけが
+                それらを表示するようになります（チェックを入れていない端末には表示されません）。
+            </p>
+            <label style="font-weight:bold; display:flex; align-items:center; gap:8px;">
+                <input type="checkbox" id="customer-display-device-check" onchange="toggleCustomerDisplayDevice()">
+                この端末を客用ディスプレイとして使う
+            </label>
         </div>
     </div>
 

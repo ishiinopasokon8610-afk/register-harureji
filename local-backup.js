@@ -112,7 +112,10 @@ function restoreDataFromBackupFileInput(event) {
 
 let lastFolderBackupSnapshot = null;
 
-async function writeBackupToFolderIfAvailable() {
+// isInitialSetup: true の場合のみファイルが無ければ新規作成する（フォルダ設定直後の初回書き込み用）。
+// それ以外（定期実行・データ更新時）は、ファイルがすでに存在する場合のみ上書き保存する。
+// → ユーザーがバックアップファイルを手動で削除した場合、そのまま尊重して自動では作り直さない。
+async function writeBackupToFolderIfAvailable(isInitialSetup = false) {
     const handle = (typeof receiptDirectoryHandle !== 'undefined' && receiptDirectoryHandle)
         || (typeof savedDirectoryHandle !== 'undefined' && savedDirectoryHandle);
     if (!handle) return; // フォルダ未設定なら何もしない（②は対応ブラウザ・設定済みの場合のみ）
@@ -123,6 +126,15 @@ async function writeBackupToFolderIfAvailable() {
         if (handle.queryPermission) {
             const perm = await handle.queryPermission({ mode: 'readwrite' });
             if (perm !== 'granted') return; // 再許可はユーザー操作が必要なため、ここでは静かに諦める
+        }
+
+        if (!isInitialSetup) {
+            // ファイルがすでに存在するか確認する（無ければ = 手動で削除された可能性があるため作り直さない）
+            try {
+                await handle.getFileHandle(LOCAL_BACKUP_FILENAME, { create: false });
+            } catch (notFoundErr) {
+                return; // ファイルが無い場合は何もしない
+            }
         }
 
         const dataObj = buildAllDataObject();
@@ -207,15 +219,16 @@ async function checkFolderBackupForRestoreOnStartup() {
             return result;
         };
 
-        // 起動直後にも一度バックアップを試みる
+        // 起動直後にも一度バックアップを試みる（すでにファイルがある場合のみ更新）
         writeBackupToFolderIfAvailable();
         checkFolderBackupForRestoreOnStartup();
     }
     tryHook();
 })();
 
-// 念のため定期的にもフォルダへバックアップ（5分ごと）
-setInterval(() => { writeBackupToFolderIfAvailable(); }, 5 * 60 * 1000);
+// 何分かに1回、フォルダへ自動バックアップする（3分ごと）。
+// ※ ユーザーがバックアップファイルを削除していた場合は作り直さない（writeBackupToFolderIfAvailable内で判定）。
+setInterval(() => { writeBackupToFolderIfAvailable(); }, 3 * 60 * 1000);
 
 document.addEventListener('DOMContentLoaded', () => {
     const restoreInput = document.getElementById('backup-restore-file-input');

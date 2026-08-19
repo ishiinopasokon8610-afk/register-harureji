@@ -639,7 +639,7 @@ function checkAndAddToCart(prod) {
     if (prod.ageCheck && !ageVerifiedCurrentTransaction) {
         pendingAgeCheckItem = prod;
         showAgeCheckModals();
-        if (channel) channel.publish('age-check-event', { action: 'start', item: prod });
+        if (channel) channel.publish('age-check-event', { action: 'start', item: prod, senderId: POS_DEVICE_ID });
     } else {
         addToCart(prod.name, prod.price, prod.taxRate, prod.genre);
     }
@@ -647,10 +647,10 @@ function checkAndAddToCart(prod) {
 
 function handleAgeCheckResult(agreed) {
     if (agreed) {
-        if (channel) channel.publish('age-check-event', { action: 'success' });
+        if (channel) channel.publish('age-check-event', { action: 'success', senderId: POS_DEVICE_ID });
         else onAgeCheckSuccess();
     } else {
-        if (channel) channel.publish('age-check-event', { action: 'cancel' });
+        if (channel) channel.publish('age-check-event', { action: 'cancel', senderId: POS_DEVICE_ID });
         else onAgeCheckCancel();
     }
 }

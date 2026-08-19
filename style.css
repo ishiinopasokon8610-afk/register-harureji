@@ -439,6 +439,48 @@ body { font-family: 'Meiryo', sans-serif; margin: 0; padding: 0; background-colo
         flex-wrap: wrap;
     }
 
+    /* 追加：スマホ幅ではボタン類が画面に収まりきらなくなるため、
+       サイズ・余白・文字を全体的に一段階コンパクトにする */
+    .fixed-actions-container .action-btn {
+        height: 42px;
+        font-size: 11px;
+        padding: 2px;
+    }
+    .fixed-actions-container .action-btn small {
+        font-size: 8px;
+    }
+    .numpad-extra-actions {
+        gap: 3px;
+    }
+    .extra-fn-btn {
+        font-size: 9px;
+        min-height: 28px;
+        padding: 3px 1px;
+    }
+    .extra-fn-btn small {
+        font-size: 7px;
+    }
+    .num-btn {
+        font-size: 16px;
+        min-height: 34px;
+    }
+    .action-grid {
+        grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
+        gap: 5px;
+        padding: 6px;
+    }
+    .action-btn {
+        min-height: 52px;
+        font-size: 10px;
+    }
+    .action-btn b {
+        font-size: 10px;
+    }
+    .action-btn small {
+        font-size: 8px;
+    }
+
+
     /* 客用画面：フォントサイズと右側パネルをスマホ幅に合わせて縮小 */
     .customer-card {
         width: 95%;
@@ -552,7 +594,23 @@ body { font-family: 'Meiryo', sans-serif; margin: 0; padding: 0; background-colo
 .age-btn-accept { background: #4caf50; }
 
 /* ホーム画面追加 */
-.home-header { display: flex; align-items: center; justify-content: center; gap: 15px; margin-bottom: 20px; margin-top: 10px; }
+.home-header { display: flex; align-items: center; justify-content: center; gap: 15px; margin-bottom: 20px; margin-top: 10px; width: 100%; box-sizing: border-box; padding: 0 10px; }
+
+/* 追加：ホーム画面ロゴ。横長・大きすぎる画像でも画面からはみ出さないようにする */
+.home-shop-logo-img {
+    max-height: 150px;
+    max-width: 90%;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+    margin-bottom: 10px;
+}
+@media screen and (max-width: 700px) {
+    .home-shop-logo-img {
+        max-height: 90px;
+        max-width: 85%;
+    }
+}
 .home-logo { max-width: 55px; height: auto; filter: drop-shadow(0px 2px 4px rgba(0,0,0,0.2)); }
 .home-title { color: #2c3e50; margin: 0; font-size: 30px; }
 .api-label { font-size: 13px; font-weight: bold; color: #555; }

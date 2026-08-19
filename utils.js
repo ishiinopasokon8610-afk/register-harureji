@@ -189,7 +189,14 @@ function initAbly() {
             });
 
             channel.subscribe('age-check-event', (message) => {
-                const data = message.data;
+                const data = message.data || {};
+                // 「自分自身が発生させたイベント」は必ず反応する（自分の会計フローを完了させるため）。
+                // それ以外の端末は、「客用ディスプレイ」に設定されている場合のみ反応する
+                // （そうしないと、店舗内の他のレジ端末にまで年齢確認画面が出てしまうため）。
+                const isOwnDevice = data.senderId && typeof POS_DEVICE_ID !== 'undefined' && data.senderId === POS_DEVICE_ID;
+                const isCustDisplay = typeof isCustomerDisplayDevice === 'function' && isCustomerDisplayDevice();
+                if (!isOwnDevice && !isCustDisplay) return;
+
                 if (data.action === 'start') {
                     pendingAgeCheckItem = data.item;
                     showAgeCheckModals();
