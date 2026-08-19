@@ -705,27 +705,9 @@ function deleteProduct(index) {
     }
 }
 
-function generateCustomButtons() {
-    const area = document.getElementById('custom-buttons-area');
-    if (!area || typeof products === 'undefined') return;
-    area.innerHTML = ''; 
-    products.forEach(prod => {
-        const btn = document.createElement('button');
-        btn.className = 'action-btn';
-        const ageBadge = prod.ageCheck ? ' <span style="color:red; font-weight:bold;">[🔞]</span>' : '';
-        btn.innerHTML = `<b>${prod.name}${ageBadge}</b><small>¥${prod.price.toLocaleString()} [${prod.jan}]</small>`;
-        btn.onclick = function() { 
-            if (typeof playSound === 'function') playSound('beep'); 
-            if (typeof lastScannedBarcode !== 'undefined') lastScannedBarcode = prod.jan;
-            if (typeof checkAndAddToCart === 'function') checkAndAddToCart(prod); 
-            if (typeof getJanInput === 'function') {
-                const input = getJanInput();
-                if (input) input.focus(); 
-            }
-        };
-        area.appendChild(btn);
-    });
-}
+// ※ よく使う商品の並び替えなどを含む実際の描画処理は register.js 側の
+//    generateCustomButtons() で行っている（読み込み順の都合上、こちらの
+//    古い定義は使われていなかったため削除）。
 
 function openUnknownProdModal(jan) {
     if (typeof pendingUnknownJan !== 'undefined') pendingUnknownJan = jan;

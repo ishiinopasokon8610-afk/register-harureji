@@ -74,6 +74,7 @@ function verifyManagerAuth() {
         closeManagerAuth();
         if (typeof managerAuthDone !== 'undefined') managerAuthDone = true;
         sessionStorage.setItem('pos_manager_auth', 'true');
+        sessionStorage.setItem('pos_manager_auth_time', Date.now().toString());
         
         updateManagerButtonState();
         const apiSettings = document.getElementById('api-settings-container');
@@ -94,6 +95,7 @@ function lockManagerAuth() {
     if (typeof playSound === 'function') playSound('click');
     if (typeof managerAuthDone !== 'undefined') managerAuthDone = false;
     sessionStorage.removeItem('pos_manager_auth');
+    sessionStorage.removeItem('pos_manager_auth_time');
 
     updateManagerButtonState();
     const apiSettings = document.getElementById('api-settings-container');
@@ -105,6 +107,31 @@ function lockManagerAuth() {
     if (typeof playSound === 'function') playSound('success');
     if (typeof speak === 'function') speak("てんちょう ロック を かけ まし た");
 }
+
+// ------------------------------------------
+// 店長ロックの自動タイムアウト（10分間操作がなくても、認証状態を保持していないよう
+// 一定時間で自動的にロックし直す）
+// ------------------------------------------
+const MANAGER_AUTH_TIMEOUT_MS = 10 * 60 * 1000; // 10分
+
+function checkManagerAuthExpiry() {
+    if (typeof managerAuthDone === 'undefined' || !managerAuthDone) return;
+    const grantedAt = parseInt(sessionStorage.getItem('pos_manager_auth_time') || '0', 10);
+    if (!grantedAt || (Date.now() - grantedAt) > MANAGER_AUTH_TIMEOUT_MS) {
+        managerAuthDone = false;
+        sessionStorage.removeItem('pos_manager_auth');
+        sessionStorage.removeItem('pos_manager_auth_time');
+        updateManagerButtonState();
+        const apiSettings = document.getElementById('api-settings-container');
+        if (apiSettings) apiSettings.style.display = 'none';
+        if (typeof speak === 'function') speak("じかん が たった ため、 てんちょう ロック が じどう で かかり まし た");
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    checkManagerAuthExpiry(); // リロード直後、すでに期限切れの場合は即座にロックする
+    setInterval(checkManagerAuthExpiry, 30 * 1000);
+});
 
 function openManagerAuthTarget(target) {
     if (typeof showScreen === 'function') {
@@ -497,7 +524,11 @@ function exportAllData() {
         history: JSON.parse(localStorage.getItem('pos_history')) || [],
         timecards: getTimecardData(),
         apiKey: localStorage.getItem('pos_api_key') || '',
-        shopLogo: localStorage.getItem('pos_shop_logo') || ''
+        shopLogo: localStorage.getItem('pos_shop_logo') || '',
+        // 追加：自動化バーコード（クーポン）・商品の種類・お会計完了画像も機種変更時に一緒に移行できるようにする
+        discounts: JSON.parse(localStorage.getItem('pos_discounts') || '[]'),
+        customGenres: JSON.parse(localStorage.getItem('pos_custom_genres') || '[]'),
+        checkoutCompleteImage: localStorage.getItem('pos_checkout_complete_image') || ''
     };
     const jsonStr = JSON.stringify(dataObj);
     const importInput = document.getElementById('import-data-input');
@@ -542,6 +573,16 @@ function importAllData() {
                 }
                 if (dataObj.shopLogo !== undefined) {
                     localStorage.setItem('pos_shop_logo', dataObj.shopLogo);
+                }
+                // 追加：自動化バーコード（クーポン）・商品の種類・お会計完了画像も取り込む
+                if (Array.isArray(dataObj.discounts)) {
+                    localStorage.setItem('pos_discounts', JSON.stringify(dataObj.discounts));
+                }
+                if (Array.isArray(dataObj.customGenres)) {
+                    localStorage.setItem('pos_custom_genres', JSON.stringify(dataObj.customGenres));
+                }
+                if (dataObj.checkoutCompleteImage) {
+                    localStorage.setItem('pos_checkout_complete_image', dataObj.checkoutCompleteImage);
                 }
 
                 if (typeof clerks !== 'undefined') localStorage.setItem('pos_clerks', JSON.stringify(clerks));

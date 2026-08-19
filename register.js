@@ -93,10 +93,21 @@ function generateCustomButtons() {
         filteredProducts = products.filter(p => (p.genre || 'その他商品') === selectedGenreFilter);
     }
 
+    // 追加：商品名での検索絞り込み
+    const searchInput = document.getElementById('product-name-search');
+    const searchTerm = searchInput ? searchInput.value.trim().toLowerCase() : '';
+    if (searchTerm) {
+        filteredProducts = filteredProducts.filter(p => (p.name || '').toLowerCase().includes(searchTerm));
+    }
+
     if (filteredProducts.length === 0) {
-        area.innerHTML = `<div style="grid-column: 1/-1; text-align: center; color: #888; padding: 20px;">「${selectedGenreFilter}」に該当する商品はありません</div>`;
+        const msg = searchTerm ? `「${searchTerm}」に該当する商品はありません` : `「${selectedGenreFilter}」に該当する商品はありません`;
+        area.innerHTML = `<div style="grid-column: 1/-1; text-align: center; color: #888; padding: 20px;">${msg}</div>`;
         return;
     }
+
+    // 追加：よく使う（利用回数が多い）商品ほど上の方に表示する
+    filteredProducts = filteredProducts.slice().sort((a, b) => (b.usageCount || 0) - (a.usageCount || 0));
 
     filteredProducts.forEach(prod => {
         const btn = document.createElement('button');
@@ -104,7 +115,9 @@ function generateCustomButtons() {
         btn.style.position = 'relative';
         
         const genreTag = prod.genre ? `<span class="prod-genre-badge">${prod.genre}</span>` : '';
-        btn.innerHTML = `${genreTag}<b>${prod.name}</b><small>¥${prod.price.toLocaleString()}</small>`;
+        const frequentTag = (prod.usageCount || 0) >= 3 ? '<span class="prod-frequent-badge">⭐よく使う</span>' : '';
+        const safeName = (typeof escapeHtml === 'function') ? escapeHtml(prod.name) : prod.name;
+        btn.innerHTML = `${genreTag}${frequentTag}<b>${safeName}</b><small>¥${prod.price.toLocaleString()}</small>`;
         
         btn.onclick = () => {
             playSound('click');
@@ -600,7 +613,29 @@ function showAgeCheckModals() {
     }
 }
 
+// 「よく使う商品」をレジ画面の上の方に表示するための利用回数カウント
+let productUsageSaveTimer = null;
+function incrementProductUsageCount(prod) {
+    if (!prod || !prod.jan || typeof products === 'undefined') return;
+    const idx = products.findIndex(p => p.jan === prod.jan);
+    if (idx === -1) return;
+    products[idx].usageCount = (products[idx].usageCount || 0) + 1;
+
+    // 連続スキャン時に何度も保存しないよう、少し待ってからまとめて保存する
+    clearTimeout(productUsageSaveTimer);
+    productUsageSaveTimer = setTimeout(() => {
+        localStorage.setItem('pos_products', JSON.stringify(products));
+        if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
+    }, 1500);
+}
+
+// 追加：商品名検索ボックスが入力されるたびに商品ボタン一覧を再描画する
+function filterProductButtonsByName() {
+    generateCustomButtons();
+}
+
 function checkAndAddToCart(prod) {
+    incrementProductUsageCount(prod);
     if (prod.ageCheck && !ageVerifiedCurrentTransaction) {
         pendingAgeCheckItem = prod;
         showAgeCheckModals();
@@ -1268,6 +1303,9 @@ async function completeTransaction() {
         if (historyList.length > 3000) { historyList = historyList.slice(0, 3000); }
         localStorage.setItem('pos_history', JSON.stringify(historyList));
         if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
+
+        // 使い切りバーコード（自動化バーコード）を、会計成立と同時に自動削除する
+        if (typeof cleanupOneTimeDiscountBarcodes === 'function') cleanupOneTimeDiscountBarcodes();
 
         closeCheckout();
         promptReceiptAndInvoice();

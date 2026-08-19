@@ -226,11 +226,13 @@
             <!-- お会計履歴ボタン -->
             <!-- お会計履歴 ＆ 割引バーコード登録 -->
 <button class="home-btn" onclick="requestHistoryAuth()">お会計履歴</button>
-<button class="home-btn" onclick="requestManagerAuth('discount')">🏷️ 自動化バーコード作成</button>
+<button class="home-btn" onclick="showScreen('discount-screen'); if (typeof renderDiscounts === 'function') renderDiscounts();">🏷️ 自動化バーコード作成</button>
 
 <button class="home-btn" onclick="openAnalyticsScreen()" style="background: linear-gradient(to bottom, #26a69a, #00695c); border-color: #004d40;">📊 分析</button>
+<button class="home-btn" onclick="openLanguageMenu()" style="background: linear-gradient(to bottom, #5c6bc0, #283593); border-color: #1a237e;">🌐 言語 / Language</button>
 
             <button class="home-btn full home-btn-receipt" onclick="setupReceiptFolder()">📁 レシート保存フォルダを設定する（自動保存対応）</button>
+            <button class="home-btn full" id="notif-toggle-btn" onclick="enableDesktopNotifications()" style="background: linear-gradient(to bottom, #8e24aa, #4a148c); border-color: #38006b;">🔕 デスクトップ通知を有効にする</button>
             <button class="home-btn full home-btn-migration" onclick="requestManagerAuth('migration')">データ管理・ロゴ設定</button>
         </div>
     </div>
@@ -519,6 +521,20 @@
                 </div>
             </div>
 
+            <div style="border-top:1px dashed #ccc; padding-top:10px; text-align:left;">
+                <b>③ 適用できる期間を指定する（任意・空欄なら期限なし）</b>
+                <div style="display:flex; gap:10px; margin-top:8px; align-items:center; flex-wrap:wrap;">
+                    <span>開始日:</span>
+                    <input type="date" id="new-disc-date-from" style="padding:8px; border:1px solid #ccc; border-radius:4px;">
+                    <span>終了日:</span>
+                    <input type="date" id="new-disc-date-to" style="padding:8px; border:1px solid #ccc; border-radius:4px;">
+                </div>
+            </div>
+
+            <div style="border-top:1px dashed #ccc; padding-top:10px; text-align:left;">
+                <label style="font-weight:bold;"><input type="checkbox" id="new-disc-one-time"> ④ 使い切りバーコードにする（会計成立と同時に自動削除・任意）</label>
+            </div>
+
             <button onclick="addDiscountBarcode()" style="align-self:flex-start; padding:10px 30px;">この内容でバーコードを登録</button>
         </div>
 
@@ -563,6 +579,20 @@
                 </div>
             </div>
 
+            <div style="text-align:left; border-top:1px dashed #ccc; padding-top:10px; margin-bottom:10px;">
+                <b>③ 適用できる期間を指定する（任意・空欄なら期限なし）</b>
+                <div style="display:flex; gap:10px; margin-top:8px; align-items:center; flex-wrap:wrap;">
+                    <span>開始日:</span>
+                    <input type="date" id="edit-disc-date-from" style="padding:8px; border:1px solid #ccc; border-radius:4px;">
+                    <span>終了日:</span>
+                    <input type="date" id="edit-disc-date-to" style="padding:8px; border:1px solid #ccc; border-radius:4px;">
+                </div>
+            </div>
+
+            <div style="text-align:left; border-top:1px dashed #ccc; padding-top:10px; margin-bottom:10px;">
+                <label style="font-weight:bold;"><input type="checkbox" id="edit-disc-one-time"> ④ 使い切りバーコードにする（会計成立と同時に自動削除・任意）</label>
+            </div>
+
             <div class="error-msg" id="edit-disc-error">割引名を入力し、商品追加または割引のどちらか一方以上を設定してください</div>
             <div class="modal-btn-group">
                 <button onclick="closeEditDiscModal()" class="modal-btn cancel">キャンセル</button>
@@ -599,6 +629,26 @@
         </div>
     </div>
 
+    <!-- 言語切り替えモーダル（自動翻訳） -->
+    <div id="language-menu-modal" class="modal-overlay">
+        <div class="modal-box medium" style="text-align:center;">
+            <h3 class="modal-title">🌐 言語を選択 / Select Language</h3>
+            <p class="modal-desc" style="margin-bottom:14px;">画面全体が自動翻訳されます（Google翻訳）</p>
+            <div style="display:flex; flex-direction:column; gap:10px;">
+                <button onclick="setAppLanguage('ja')" style="background:#455a64;">🇯🇵 日本語</button>
+                <button onclick="setAppLanguage('en')" style="background:#455a64;">🇺🇸 English</button>
+                <button onclick="setAppLanguage('zh-CN')" style="background:#455a64;">🇨🇳 中文（简体）</button>
+                <button onclick="setAppLanguage('ko')" style="background:#455a64;">🇰🇷 한국어</button>
+            </div>
+            <div class="modal-btn-group" style="margin-top:14px;">
+                <button onclick="closeLanguageMenu()" class="modal-btn cancel" style="width:100%;">閉じる / Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Google翻訳ウィジェット用（非表示・裏で動かすだけ） -->
+    <div id="google_translate_element" style="display:none;"></div>
+
    <!-- レジ画面（店員用） -->
 <div id="register-screen" class="screen">
     <div class="reg-header">
@@ -630,6 +680,11 @@
                 <div class="jan-input-area">
                     <input type="text" id="jan-input" placeholder="JAN・会員・店員バーコードをスキャン" autocomplete="off">
                 </div>
+                <div id="reg-info-bar" style="display:flex; justify-content:space-between; align-items:center; gap:8px; font-size:13px; color:#555; margin:6px 2px; flex-wrap:wrap;">
+                    <span>🔢 スキャン数: <b id="reg-scan-count">0</b>点</span>
+                    <span>💴 課税対象: <b id="reg-taxable-amount">¥0</b></span>
+                    <span id="reg-tax-exempt-badge" style="display:none; color:#fff; background:#d32f2f; font-weight:bold; padding:2px 8px; border-radius:10px;">🚫 免税適用中</span>
+                </div>
                 <div class="display-total-label">合計金額</div>
                 <div class="display-total" id="display-total">¥0</div>
             </div>
@@ -645,6 +700,11 @@
                 <button class="action-btn green" onclick="openCheckout()">お会計</button>
             </div>
             
+            <!-- 追加: 商品名で検索するボックス -->
+            <div class="product-search-box">
+                <input type="text" id="product-name-search" placeholder="🔍 商品名で検索..." oninput="filterProductButtonsByName()">
+            </div>
+
             <!-- 追加: 種類（ジャンル）選択フィルターバー -->
             <div id="genre-filter-container" class="genre-filter-container">
                 <!-- JSで動的にボタン生成されます -->
@@ -1264,5 +1324,9 @@
     <script src="sales-mgmt.js"></script>
     <script src="discount-system.js"></script>
     <script src="analytics-system.js"></script>
+    <script src="language-system.js"></script>
+    <script src="sync-system.js"></script>
+    <script src="register-info-system.js"></script>
+    <script src="notifications-system.js"></script>
 </body>
 </html>

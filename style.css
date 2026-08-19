@@ -477,6 +477,16 @@ body { font-family: 'Meiryo', sans-serif; margin: 0; padding: 0; background-colo
         max-width: 100%;
         flex: 1 1 100%;
     }
+
+    /* 自動化バーコード作成画面：日付範囲などの入力欄が折り返すように */
+    #discount-screen input[type="date"] {
+        flex: 1 1 45%;
+        min-width: 130px;
+    }
+    #discount-screen .input-form input,
+    #discount-screen .input-form select {
+        min-width: 0;
+    }
 }
 
 /* API設定コンテナ */
@@ -720,6 +730,20 @@ body { font-family: 'Meiryo', sans-serif; margin: 0; padding: 0; background-colo
     background: #004d40 !important;
 }
 
+/* 追加：商品名検索ボックス */
+.product-search-box {
+    margin-bottom: 6px;
+}
+.product-search-box input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 8px 12px;
+    font-size: 14px;
+    border: 1px solid #b0bec5;
+    border-radius: 6px;
+    background: #fff;
+}
+
 /* ジャンル選択フィルタータブ */
 .genre-filter-container {
     display: flex;
@@ -769,6 +793,21 @@ body { font-family: 'Meiryo', sans-serif; margin: 0; padding: 0; background-colo
     border-radius: 3px;
     border: 1px solid #90caf9;
     pointer-events: none;
+}
+
+/* 追加：よく使う商品バッジ */
+.prod-frequent-badge {
+    position: absolute;
+    top: 3px;
+    right: 3px;
+    font-size: 8px;
+    background: #fff3e0;
+    color: #e65100;
+    padding: 1px 4px;
+    border-radius: 3px;
+    border: 1px solid #ffb74d;
+    pointer-events: none;
+    font-weight: bold;
 }
 
 /* 返金ボタンのスタイル */

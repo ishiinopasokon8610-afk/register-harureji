@@ -9,6 +9,10 @@
 
 const CHECKOUT_IMAGE_KEY = 'pos_checkout_complete_image';
 
+// この端末を識別するID（同じ端末が自分で送信したAblyイベントを、
+// 受信時に二重表示しないようにするために使う）
+const CHECKOUT_IMAGE_DEVICE_ID = 'dev_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2);
+
 function getCheckoutCompleteImage() {
     return localStorage.getItem(CHECKOUT_IMAGE_KEY) || '';
 }
@@ -70,16 +74,11 @@ function renderCheckoutImagePreview() {
 }
 
 // 客用画面側：画面いっぱいにアニメーションで表示する
-// ※ 同一端末でレジ画面と客用画面を切り替えて使っている場合、
-//   このタイミングで客用画面が表示されていなければ（＝店員側のレジ画面を見ている場合）、
-//   店員側の画面には表示しない。客用画面が実際に表示されているときだけ表示する。
+// ※ この関数自体は「今どの画面がアクティブか」を判定しない（常に表示する）。
+//   同一端末で店員側の画面にも出さないための判定は、呼び出し側（triggerCheckoutCompleteImage /
+//   Ablyの受信ハンドラ）で行う。
 function displayCheckoutCompleteImage(dataUrl) {
     if (!dataUrl) return;
-
-    const customerScreen = document.getElementById('customer-screen');
-    if (customerScreen && !customerScreen.classList.contains('active')) {
-        return; // 今この端末で客用画面が表示されていない → 表示しない
-    }
 
     const overlay = document.getElementById('customer-checkout-image-overlay');
     const imgEl = document.getElementById('customer-checkout-image');
@@ -111,13 +110,17 @@ function triggerCheckoutCompleteImage() {
     const dataUrl = getCheckoutCompleteImage();
     if (!dataUrl) return;
 
-    // 同じブラウザ内に客用画面のDOMがある場合（同一端末構成）は直接表示
-    displayCheckoutCompleteImage(dataUrl);
+    // 同じ端末内に客用画面のDOMがあり、かつ「今まさに客用画面を表示中」の場合だけ、
+    // その場で直接表示する（店員側のレジ画面には出さない）
+    const customerScreen = document.getElementById('customer-screen');
+    if (customerScreen && customerScreen.classList.contains('active')) {
+        displayCheckoutCompleteImage(dataUrl);
+    }
 
-    // 別端末の客用画面へ、Ably経由で画像データを送信
+    // 他端末（別デバイスの客用画面）へ、Ably経由で画像データを送信
     if (typeof channel !== 'undefined' && channel) {
         try {
-            channel.publish('checkout-image-event', { image: dataUrl });
+            channel.publish('checkout-image-event', { image: dataUrl, senderId: CHECKOUT_IMAGE_DEVICE_ID });
         } catch (err) {
             console.warn('客用画面への画像送信に失敗しました:', err);
         }
@@ -131,6 +134,10 @@ function triggerCheckoutCompleteImage() {
     if (typeof channel !== 'undefined' && channel) {
         channel.subscribe('checkout-image-event', (msg) => {
             if (msg && msg.data && msg.data.image) {
+                // 自分自身が送信したイベントのエコー（Ablyはデフォルトで送信者にも配信される）は、
+                // すでにローカルで表示処理済みなので無視する
+                if (msg.data.senderId === CHECKOUT_IMAGE_DEVICE_ID) return;
+                // 他端末からの受信は、その端末が客用画面かどうかに関わらず常に表示する
                 displayCheckoutCompleteImage(msg.data.image);
             }
         });

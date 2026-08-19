@@ -28,6 +28,8 @@ let editDiscStagedProducts = [];
 
 // 同じ取引内で二重適用しないための管理（バーコード単位）
 let usedDiscountBarcodesInTransaction = new Set();
+// 「使い切りバーコード」として今回の会計で使用されたものを記録し、会計成立と同時に削除する
+let usedOneTimeDiscBarcodesInTransaction = new Set();
 
 // 年齢確認待ちで一時中断している割引処理のキュー
 let pendingDiscountQueue = null; // { disc, idx, remainingQtyForRow }
@@ -87,6 +89,16 @@ function getDiscountContentText(disc) {
     if (disc.discount) {
         const d = disc.discount;
         parts.push(d.type === 'percent' ? `💴 ${d.value}% 値引き` : `💴 ¥${(d.value || 0).toLocaleString()} 値引き`);
+    }
+
+    if (disc.validFrom || disc.validTo) {
+        const from = disc.validFrom || '指定なし';
+        const to = disc.validTo || '指定なし';
+        parts.push(`📅 適用期間: ${from} 〜 ${to}`);
+    }
+
+    if (disc.oneTime) {
+        parts.push(`♻️ 使い切り（会計成立と同時に自動削除）`);
     }
 
     if (parts.length === 0) return '-';
@@ -172,6 +184,15 @@ function renderStagedProductRows(prefix) {
     }).join('');
 }
 
+// バーコードの適用期間チェック（YYYY-MM-DD形式。どちらか未設定なら期限なし扱い）
+function isDiscountBarcodeInValidPeriod(disc) {
+    if (!disc.validFrom && !disc.validTo) return true;
+    const todayStr = new Date().toLocaleDateString('sv-SE'); // YYYY-MM-DD 形式
+    if (disc.validFrom && todayStr < disc.validFrom) return false;
+    if (disc.validTo && todayStr > disc.validTo) return false;
+    return true;
+}
+
 /* =========================================================
    新規登録
    ========================================================= */
@@ -181,6 +202,9 @@ function addDiscountBarcode() {
     const useDiscountCb = document.getElementById('new-disc-use-discount');
     const typeInput = document.getElementById('new-disc-type');
     const valueInput = document.getElementById('new-disc-value');
+    const dateFromInput = document.getElementById('new-disc-date-from');
+    const dateToInput = document.getElementById('new-disc-date-to');
+    const oneTimeCb = document.getElementById('new-disc-one-time');
 
     const barcode = (barcodeInput && barcodeInput.value.trim()) ? barcodeInput.value.trim() : Date.now().toString();
     const name = nameInput ? nameInput.value.trim() : '';
@@ -221,7 +245,10 @@ function addDiscountBarcode() {
         name,
         enabled: true,
         products: JSON.parse(JSON.stringify(newDiscStagedProducts)),
-        discount: discountObj
+        discount: discountObj,
+        validFrom: dateFromInput && dateFromInput.value ? dateFromInput.value : null,
+        validTo: dateToInput && dateToInput.value ? dateToInput.value : null,
+        oneTime: oneTimeCb ? oneTimeCb.checked : false
     };
 
     const existingIndex = discountBarcodes.findIndex(d => d.barcode === barcode);
@@ -240,6 +267,9 @@ function addDiscountBarcode() {
     if (nameInput) nameInput.value = '';
     if (valueInput) valueInput.value = '';
     if (useDiscountCb) useDiscountCb.checked = false;
+    if (dateFromInput) dateFromInput.value = '';
+    if (dateToInput) dateToInput.value = '';
+    if (oneTimeCb) oneTimeCb.checked = false;
     toggleDiscValueRow('new');
     newDiscStagedProducts = [];
 
@@ -282,6 +312,13 @@ function editDiscountBarcode(index) {
         document.getElementById('edit-disc-value').value = '';
     }
     toggleDiscValueRow('edit');
+
+    const dateFromInput = document.getElementById('edit-disc-date-from');
+    const dateToInput = document.getElementById('edit-disc-date-to');
+    if (dateFromInput) dateFromInput.value = disc.validFrom || '';
+    if (dateToInput) dateToInput.value = disc.validTo || '';
+    const oneTimeCb = document.getElementById('edit-disc-one-time');
+    if (oneTimeCb) oneTimeCb.checked = !!disc.oneTime;
 
     const err = document.getElementById('edit-disc-error');
     if (err) err.style.display = 'none';
@@ -328,6 +365,12 @@ function saveEditDisc() {
     disc.name = name;
     disc.products = JSON.parse(JSON.stringify(editDiscStagedProducts));
     disc.discount = discountObj;
+    const dateFromInput = document.getElementById('edit-disc-date-from');
+    const dateToInput = document.getElementById('edit-disc-date-to');
+    disc.validFrom = dateFromInput && dateFromInput.value ? dateFromInput.value : null;
+    disc.validTo = dateToInput && dateToInput.value ? dateToInput.value : null;
+    const oneTimeCb = document.getElementById('edit-disc-one-time');
+    disc.oneTime = oneTimeCb ? oneTimeCb.checked : false;
 
     if (err) err.style.display = 'none';
     saveDiscounts();
@@ -380,7 +423,11 @@ function saveDiscounts() {
 function broadcastDiscounts() {
     if (typeof channel !== 'undefined' && channel) {
         try {
-            channel.publish('discount-sync', { discounts: discountBarcodes, time: Date.now() });
+            channel.publish('discount-sync', {
+                discounts: discountBarcodes,
+                time: Date.now(),
+                senderId: (typeof SYNC_DEVICE_ID !== 'undefined') ? SYNC_DEVICE_ID : null
+            });
         } catch (err) {
             console.warn('割引バーコードの同期送信に失敗しました:', err);
         }
@@ -493,6 +540,16 @@ function closeBarcodeCameraScan() {
 //   商品自動追加のみのバーコード（例：飲食店のセットメニュー）は、
 //   同じ会計内で何度でもスキャンして繰り返し追加できる（同じセットを複数注文する用途のため）。
 function applyDiscountBarcode(disc) {
+    if (!isDiscountBarcodeInValidPeriod(disc)) {
+        if (typeof playSound === 'function') playSound('error');
+        if (typeof showCustomConfirm === 'function') {
+            const from = disc.validFrom || '指定なし';
+            const to = disc.validTo || '指定なし';
+            showCustomConfirm(`このクーポンの適用期間外です（適用期間: ${from} 〜 ${to}）。`, "この くーぽん は てきよう きかんがい です。", () => { if (typeof focusJanInput === 'function') focusJanInput(); }, false);
+        }
+        return;
+    }
+
     if (disc.discount && usedDiscountBarcodesInTransaction.has(disc.barcode)) {
         if (typeof playSound === 'function') playSound('error');
         if (typeof showCustomConfirm === 'function') {
@@ -503,7 +560,19 @@ function applyDiscountBarcode(disc) {
 
     if (typeof playSound === 'function') playSound('beep');
     if (disc.discount) usedDiscountBarcodesInTransaction.add(disc.barcode);
+    if (disc.oneTime) usedOneTimeDiscBarcodesInTransaction.add(disc.barcode);
     processDiscountProducts(disc, 0);
+}
+
+// お会計が成立したタイミングで register.js から呼び出す。
+// 「使い切りバーコード」として今回使用されたものを一覧から自動的に削除する。
+function cleanupOneTimeDiscountBarcodes() {
+    if (usedOneTimeDiscBarcodesInTransaction.size === 0) return;
+    const toDelete = new Set(usedOneTimeDiscBarcodesInTransaction);
+    discountBarcodes = discountBarcodes.filter(d => !toDelete.has(d.barcode));
+    saveDiscounts();
+    if (document.getElementById('discount-tbody')) renderDiscounts();
+    usedOneTimeDiscBarcodesInTransaction.clear();
 }
 
 // 登録された商品を1件ずつ順番にカートへ追加していく
@@ -591,8 +660,9 @@ function applyDiscountValue(disc) {
         const originalUpdateReceipt = updateReceipt;
         window.updateReceipt = function(...args) {
             const result = originalUpdateReceipt.apply(this, args);
-            if (typeof cart !== 'undefined' && cart.length === 0 && usedDiscountBarcodesInTransaction.size > 0) {
-                usedDiscountBarcodesInTransaction.clear();
+            if (typeof cart !== 'undefined' && cart.length === 0) {
+                if (usedDiscountBarcodesInTransaction.size > 0) usedDiscountBarcodesInTransaction.clear();
+                if (usedOneTimeDiscBarcodesInTransaction.size > 0) usedOneTimeDiscBarcodesInTransaction.clear();
             }
             return result;
         };
