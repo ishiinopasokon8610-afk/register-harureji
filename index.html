@@ -121,6 +121,23 @@
 
     <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
 
+    <!-- Firebase（店長認証・データのクラウドバックアップ用） -->
+    <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+    <script>
+      // Firebaseコンソール「プロジェクトの設定 > マイアプリ」からコピーした設定
+      const firebaseConfig = {
+        apiKey: "AIzaSyAK6G4aDoCg04GyV5e4rn_wb1zawUs1cCc",
+        authDomain: "register-harureji.firebaseapp.com",
+        projectId: "register-harureji",
+        storageBucket: "register-harureji.firebasestorage.app",
+        messagingSenderId: "17949520906",
+        appId: "1:17949520906:web:2f80088d5fc591e38c9bf3"
+      };
+      firebase.initializeApp(firebaseConfig);
+    </script>
+
     <!-- Ably Realtimeライブラリの読み込み -->
     <script src="https://cdn.ably.com/lib/ably.min-1.js"></script>
     <!-- PDF生成・ダウンロード用ライブラリ (html2canvas & jsPDF) -->
@@ -263,19 +280,26 @@
             <div class="customer-cart-list" id="customer-cart-list">
                 <div class="customer-cart-empty">商品がスキャンされるとここに表示されます</div>
             </div>
-            <div class="customer-total-area">
-                <div>
-                    <div class="customer-total-label">ご請求金額</div>
-                    <div id="customer-total">¥0</div>
-                </div>
-                <div>
-                    <div class="customer-total-label">お預かり</div>
-                    <div id="customer-deposit">¥0</div>
-                </div>
-                <div>
-                    <div class="customer-total-label">お釣り</div>
-                    <div id="customer-change">¥0</div>
-                </div>
+        </div>
+
+        <!-- 修正：以前は .customer-card の中にネストされていたが、
+             .customer-card の transform（中央寄せ用）が position:fixed の
+             基準点になってしまい、画面（ビューポート）ではなくカード基準で
+             固定されてしまっていた（＝写真表示中に金額が見えなくなる原因）。
+             customer-card の外（customer-screen 直下）に出し、常に画面の
+             本当の下端に固定されるようにする。 -->
+        <div class="customer-total-area">
+            <div>
+                <div class="customer-total-label">ご請求金額</div>
+                <div id="customer-total">¥0</div>
+            </div>
+            <div>
+                <div class="customer-total-label">お預かり</div>
+                <div id="customer-deposit">¥0</div>
+            </div>
+            <div>
+                <div class="customer-total-label">お釣り</div>
+                <div id="customer-change">¥0</div>
             </div>
         </div>
     </div>
@@ -437,7 +461,10 @@
             <input type="number" id="bulk-price-input" placeholder="新しい値段" class="bulk-input price">
             <span>円 /</span>
             <input type="number" id="bulk-tax-input" placeholder="税率" class="bulk-input tax">
-            <span>%</span>
+            <span>% /</span>
+            <select id="bulk-genre-select" class="bulk-input">
+                <option value="">種類（変更しない）</option>
+            </select>
             <button onclick="applyBulkEdit()" class="btn-bulk-apply">適用する</button>
             <button onclick="confirmBulkDelete()" class="btn-bulk-delete">選択した商品を削除</button>
         </div>
@@ -771,10 +798,12 @@
                 ブラウザのデータ一括削除や、iOS/Safari等の自動クリーンアップ機能（長期間未操作の場合）によって、IndexedDBのデータが消去される場合があります。万が一に備え、こまめなバックアップを推奨します
             </p>
             <button class="btn-migration" style="background:#2e7d32; color:white; padding:8px 12px; border:none; border-radius:4px; font-weight:bold; cursor:pointer; margin-right:8px;" onclick="downloadDataBackupFile()">📥 バックアップファイルを保存する</button>
-            <button class="btn-migration" style="background:#1565c0; color:white; padding:8px 12px; border:none; border-radius:4px; font-weight:bold; cursor:pointer;" onclick="document.getElementById('backup-restore-file-input').click()">📂 バックアップファイルから復元する</button>
+            <button class="btn-migration" style="background:#1565c0; color:white; padding:8px 12px; border:none; border-radius:4px; font-weight:bold; cursor:pointer; margin-right:8px;" onclick="document.getElementById('backup-restore-file-input').click()">📂 バックアップファイルから復元する</button>
+            <button class="btn-migration" style="background:#00838f; color:white; padding:8px 12px; border:none; border-radius:4px; font-weight:bold; cursor:pointer; margin-right:8px;" onclick="restoreFromCloudBackupManual()">☁️ クラウドから復元する</button>
+            <button class="btn-migration" style="background:#6d4c41; color:white; padding:8px 12px; border:none; border-radius:4px; font-weight:bold; cursor:pointer;" onclick="testCloudBackupConnection()">🔎 クラウド接続テスト</button>
             <input type="file" id="backup-restore-file-input" accept="application/json,.json" style="display:none;">
             <p class="migration-desc" style="margin-top:10px; font-size:12px; color:#555;">
-                📁「レシート保存フォルダ」を設定済みの場合は、そのフォルダにも自動でバックアップ（haru-pos-backup.json）が更新され続けます。
+                📁「レシート保存フォルダ」を設定済みの場合は、そのフォルダにも自動でバックアップ（haru-pos-backup.json）が更新され続けます。クラウドにも数分おきに自動でバックアップされており（画像は対象外）、「☁️ クラウドから復元する」ボタンでいつでも直近のクラウドバックアップから復元できます。
             </p>
         </div>
 
@@ -807,6 +836,18 @@
                 <input type="checkbox" id="customer-display-device-check" onchange="toggleCustomerDisplayDevice()">
                 この端末を客用ディスプレイとして使う
             </label>
+        </div>
+
+        <!-- 追加：店長認証バーコードの変更（Firebase Authenticationのパスワードを変更する） -->
+        <div class="migration-block" style="background:#fce4ec; border:2px solid #f06292; padding:15px; border-radius:6px; margin-top:15px;">
+            <h3 class="migration-title" style="color:#ad1457;">🔑 店長認証バーコードの変更</h3>
+            <p class="migration-desc">
+                店長認証で使うバーコード（暗証番号）を変更できます。数字のみで入力してください。<br>
+                この画面を開けている＝すでに店長認証済みなので、そのまま変更できます。
+            </p>
+            <input type="text" id="manager-new-barcode-input" placeholder="新しいバーコード（数字）" inputmode="numeric" pattern="[0-9]*" style="padding:8px; border-radius:4px; border:1px solid #ccc; margin-bottom:10px; width:220px;">
+            <br>
+            <button class="btn-migration" style="background:#ad1457; color:white; padding:8px 12px; border:none; border-radius:4px; font-weight:bold; cursor:pointer;" onclick="changeManagerPassword()">この番号に変更する</button>
         </div>
     </div>
 
@@ -1330,6 +1371,7 @@
     <script src="member-rank.js"></script>
     <script src="utils.js"></script>
     <script src="auth-system.js"></script>
+    <script src="firebase-manager-auth.js"></script>
 <script src="master-mgmt.js"></script>
     <script src="register.js"></script>
     <script src="ui.js"></script>
@@ -1337,6 +1379,7 @@
     <script src="keyboarddown.js"></script>
     <script src="refund.js"></script>
     <script src="local-backup.js"></script>
+    <script src="firebase-cloud-backup.js"></script>
     <script src="sales-mgmt.js"></script>
     <script src="discount-system.js"></script>
     <script src="analytics-system.js"></script>

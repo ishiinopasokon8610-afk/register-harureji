@@ -1,0 +1,19 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // クラウドバックアップ用のドキュメント。
+    // 「Firebaseにサインインしていること」だけを条件にしている
+    // （店長ログインでも、匿名サインインでもOK＝レジ端末が常時バックアップできるように）。
+    // 読み書きどちらもサインイン必須なので、URLとAPIキーを知っているだけの
+    // 第三者が直接データを読み書きすることはできない。
+    match /pos_cloud_backup/{docId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // 上記以外は明示的にブロック（デフォルト拒否）
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

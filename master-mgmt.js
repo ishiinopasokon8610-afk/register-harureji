@@ -63,6 +63,16 @@ function populateGenreSelects() {
         sel.innerHTML = genres.map(g => `<option value="${escapeHtml(g)}">${escapeHtml(g)}</option>`).join('');
         sel.value = genres.includes(currentVal) ? currentVal : 'その他商品';
     });
+    // 一括操作バーの「種類」プルダウンも更新する。
+    // こちらは「変更しない」（空値）が既定値のままの選択肢一覧のため、
+    // 上のgenre-select-dynamicとは別扱いにして、先頭の「変更しない」を維持する。
+    const bulkGenreSel = document.getElementById('bulk-genre-select');
+    if (bulkGenreSel) {
+        const currentVal = bulkGenreSel.value;
+        bulkGenreSel.innerHTML = '<option value="">種類（変更しない）</option>' +
+            genres.map(g => `<option value="${escapeHtml(g)}">${escapeHtml(g)}</option>`).join('');
+        bulkGenreSel.value = genres.includes(currentVal) ? currentVal : '';
+    }
 }
 
 // ------------------------------------------
@@ -512,11 +522,13 @@ function toggleAllProds() {
 function applyBulkEdit() {
     const newPriceStr = document.getElementById('bulk-price-input').value;
     const newTaxStr = document.getElementById('bulk-tax-input').value;
+    const bulkGenreSel = document.getElementById('bulk-genre-select');
+    const newGenre = bulkGenreSel ? bulkGenreSel.value : '';
 
-    if (newPriceStr === "" && newTaxStr === "") {
+    if (newPriceStr === "" && newTaxStr === "" && newGenre === "") {
         if (typeof playSound === 'function') playSound('error');
         if (typeof showCustomConfirm === 'function') {
-            showCustomConfirm("新しい価格か税率のどちらかを入力してください。", "あたらしい かかく か ぜいりつ の どちらか を にゅうりょく し て ください。", () => {}, true);
+            showCustomConfirm("新しい価格・税率・種類のいずれかを入力（選択）してください。", "あたらしい かかく か ぜいりつ か しゅるい の どれか を にゅうりょく し て ください。", () => {}, true);
         }
         return;
     }
@@ -526,6 +538,7 @@ function applyBulkEdit() {
         const idx = parseInt(cb.value);
         if (newPriceStr !== "") products[idx].price = parseInt(newPriceStr);
         if (newTaxStr !== "") products[idx].taxRate = parseInt(newTaxStr);
+        if (newGenre !== "") products[idx].genre = newGenre;
     });
 
     localStorage.setItem('pos_products', JSON.stringify(products)); if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
@@ -535,6 +548,7 @@ function applyBulkEdit() {
     
     document.getElementById('bulk-price-input').value = "";
     document.getElementById('bulk-tax-input').value = "";
+    if (bulkGenreSel) bulkGenreSel.value = "";
     document.getElementById('check-all-prods').checked = false;
     document.getElementById('bulk-edit-bar').style.display = 'none';
     if (typeof speak === 'function') speak("いっかつ てきよう し まし た");

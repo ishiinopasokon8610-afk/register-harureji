@@ -1,3 +1,10 @@
+:root {
+    /* 客用画面いちばん下の「ご請求金額／お預かり／お釣り」バーの高さ。
+       .customer-total-area（バー本体）と .customer-checkout-image-overlay（お会計完了画像。
+       バーと重ならないよう下にこの高さ分の余白を空ける）の両方で同じ値を参照することで、
+       画面サイズが変わってバーの高さが伸縮しても、常にズレなく連動するようにしている。 */
+    --customer-total-height: clamp(96px, 14vh, 180px);
+}
 body { font-family: 'Meiryo', sans-serif; margin: 0; padding: 0; background-color: #e8f5e9; color: #333; user-select: none; }
 .screen { display: none; height: 100vh; flex-direction: column; box-sizing: border-box; }
 .screen.active { display: flex; }
@@ -181,8 +188,47 @@ body { font-family: 'Meiryo', sans-serif; margin: 0; padding: 0; background-colo
 .change-display { font-size: 24px; color: #2e7d32; font-weight: bold; margin: 10px 0; background: #e8f5e9; padding: 8px; border-radius: 4px; }
 .complete-btn { background: #4caf50; color: white; font-size: 16px; padding: 12px; border: none; border-radius: 6px; cursor: pointer; width: 100%; font-weight: bold; white-space: nowrap; }
 
-#customer-screen { background: linear-gradient(135deg, #1e3c72, #2a5298); color: white; justify-content: center; align-items: center; text-align: center; padding: 20px; position: relative; }
-.customer-card { background: rgba(255, 255, 255, 0.1); backdrop-filter: blur(10px); border: 2px solid rgba(255,255,255,0.3); border-radius: 15px; padding: 25px; width: 80%; max-width: 600px; box-shadow: 0 8px 32px rgba(0,0,0,0.3); display: flex; flex-direction: column; max-height: 85vh; box-sizing: border-box; }
+#customer-screen {
+    background: linear-gradient(135deg, #1e3c72, #2a5298);
+    color: white;
+    text-align: center;
+    padding: 20px;
+    padding-bottom: 116px;
+    position: relative;
+    /* スマホ対応：アドレスバーの表示/非表示で高さが変わる端末でも
+       金額バーが画面外に押し出されないよう、対応ブラウザでは動的ビューポート
+       単位（dvh）を使う。未対応ブラウザは .screen の 100vh がそのまま効く。 */
+    height: 100dvh;
+    box-sizing: border-box;
+}
+/* 修正：以前は customer-card を画面中央に配置していたため、商品点数が増えると
+   カードが伸びて画面下部の金額バー（.customer-total-area）の裏に隠れてしまっていた。
+   カードを「上端〜金額バーの上端」の範囲に固定し、その中で
+   見出し（.customer-header-msg）を少し上寄りに、商品リスト（.customer-cart-list）が
+   残りの高さを常に埋めるレイアウトに変更。これでバーと重なることがなくなる。
+   overflow:hidden を付けて、万一中身が高さを超えてもページ全体が
+   スクロール可能になってしまわないようにする（＝金額バーが見えなくなる不具合の対策）。 */
+.customer-card {
+    background: rgba(255, 255, 255, 0.1);
+    backdrop-filter: blur(10px);
+    border: 2px solid rgba(255,255,255,0.3);
+    border-radius: 15px;
+    padding: clamp(20px, 3vw, 50px);
+    width: 92%;
+    max-width: 1100px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
+    position: fixed;
+    top: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    /* 金額バーの上端ぴったりで止める（--customer-total-height はバーと共通の変数） */
+    bottom: calc(var(--customer-total-height) + 20px);
+    z-index: 10;
+    overflow: hidden;
+}
 
 #active-customer-display { display: none; background: #e3f2fd; padding: 10px; border: 1px solid #90caf9; border-radius: 6px; margin-bottom: 8px; color: #0d47a1; box-shadow: 0 2px 4px rgba(0,0,0,0.05); text-align: left; position: relative;}
 .cust-info-main { font-size: 16px; font-weight: bold; }
@@ -270,9 +316,12 @@ body { font-family: 'Meiryo', sans-serif; margin: 0; padding: 0; background-colo
     left: 0;
     right: 0;
     top: 0;
-    bottom: 0;
+    /* 画面いちばん下に固定表示される .customer-total-area
+       （ご請求金額／お預かり／お釣り）と重ならないよう、その高さ分だけ余白を空ける。
+       バー側と同じ --customer-total-height 変数を使うことで、画面サイズが変わって
+       バーの高さが伸縮しても自動的に連動する（ズレて重なることがない）。 */
+    bottom: var(--customer-total-height);
     width: 100%;
-    height: 100%;
     justify-content: center;
     align-items: center;
     z-index: 5000;
@@ -623,14 +672,44 @@ body { font-family: 'Meiryo', sans-serif; margin: 0; padding: 0; background-colo
 /* 客用画面追加 */
 .customer-back-container { position: absolute; top: 10px; left: 10px; }
 #customer-last-barcode { position: absolute; bottom: 15px; left: 15px; font-size: 14px; color: #a7ffeb; font-family: monospace; background: rgba(0,0,0,0.4); padding: 6px 12px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.2); z-index: 10; }
-.customer-header-msg { margin-top: 0; margin-bottom: 10px; font-size: 24px; color: #a7ffeb; }
-.customer-cart-list { margin: 5px 0; flex: 1; min-height: 80px; max-height: 250px; overflow-y: auto; text-align: left; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 6px; }
+/* 「真ん中より少し上」に来るよう、見出しの上に少し余白を持たせる。
+   見出し自体は customer-card の中で height:auto のまま、下の cart-list が
+   flex:1 で残りの高さ（見出し〜金額バーの間）を全部埋める。 */
+.customer-header-msg { margin-top: clamp(20px, 8vh, 90px); margin-bottom: clamp(10px, 1.5vw, 24px); font-size: clamp(24px, 3.2vw, 46px); color: #a7ffeb; }
+.customer-cart-list { margin: 5px 0; flex: 1; min-height: 0; overflow-y: auto; text-align: left; background: rgba(0,0,0,0.2); padding: clamp(10px, 1.5vw, 24px); border-radius: 6px; font-size: clamp(18px, 2vw, 28px); box-sizing: border-box; }
 .customer-cart-empty { color: #ccc; text-align: center; }
-.customer-total-area { display: flex; justify-content: space-around; margin-top: 15px; border-top: 1px solid rgba(255,255,255,0.2); padding-top: 10px; }
-.customer-total-label { font-size: 14px; color: #e0f2f1; }
-#customer-total { font-size: 28px; font-weight: bold; color: #ffeb3b; }
-#customer-deposit { font-size: 28px; font-weight: bold; color: #ffffff; }
-#customer-change { font-size: 28px; font-weight: bold; color: #69f0ae; }
+.customer-cart-row { display: flex; justify-content: space-between; gap: 16px; margin-bottom: clamp(6px, 0.8vw, 14px); font-size: inherit; }
+.customer-cart-row .ccr-name { overflow-wrap: anywhere; }
+.customer-cart-row .ccr-price { white-space: nowrap; font-weight: bold; }
+/* ご請求金額／お預かり／お釣りは、お会計完了画像（.customer-checkout-image-overlay）が
+   表示されている間も消えないよう、画面下部に固定表示する。
+   z-index を画像オーバーレイ（5000）より大きくしてあるので、常に画像の手前（上）に表示される。
+   画像オーバーレイ側は下に CUSTOMER_TOTAL_AREA_HEIGHT 分の余白（bottom）を空けて、
+   この表示と重ならないようにしている。 */
+.customer-total-area {
+    display: flex;
+    justify-content: space-around;
+    align-items: center;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 5500;
+    min-height: var(--customer-total-height);
+    box-sizing: border-box;
+    margin-top: 0;
+    border-top: 2px solid rgba(255,255,255,0.25);
+    padding: clamp(12px, 2vh, 28px) 20px;
+    background: #001e1c; /* 修正：以前は rgba(0,30,28,0.92) で半透明だったため、
+                             真下にある商品リスト（お会計完了直後、cartがまだクリア
+                             される前の状態）がうっすら透けて見えてしまっていた。
+                             完全に不透明な色にして透けないようにする。 */
+    box-shadow: 0 -6px 18px rgba(0,0,0,0.45);
+}
+.customer-total-label { font-size: clamp(14px, 1.4vw, 22px); color: #e0f2f1; }
+#customer-total { font-size: clamp(30px, 4.2vw, 58px); font-weight: bold; color: #ffeb3b; }
+#customer-deposit { font-size: clamp(30px, 4.2vw, 58px); font-weight: bold; color: #ffffff; }
+#customer-change { font-size: clamp(30px, 4.2vw, 58px); font-weight: bold; color: #69f0ae; }
 
 /* 管理画面・モーダル汎用部品 */
 .modal-box.small { width: 300px; text-align: center; }
@@ -678,6 +757,7 @@ body { font-family: 'Meiryo', sans-serif; margin: 0; padding: 0; background-colo
 .bulk-input { padding: 6px; border: 1px solid #ccc; border-radius: 4px; }
 .bulk-input.price { width: 110px; }
 .bulk-input.tax { width: 70px; }
+#bulk-genre-select { min-width: 140px; }
 .btn-bulk-apply { background: #fbc02d; color: #000; border: 1px solid #f9a825; padding: 6px 12px; border-radius: 4px; font-weight: bold; cursor: pointer; }
 .btn-bulk-delete { background: #f44336; color: white; border: none; padding: 6px 12px; border-radius: 4px; font-weight: bold; cursor: pointer; margin-left: auto; }
 .input-prod-jan { max-width: 200px; }

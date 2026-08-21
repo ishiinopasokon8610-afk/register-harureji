@@ -148,11 +148,12 @@ function displayCheckoutCompleteImage(dataUrl) {
     void overlay.offsetWidth; // 強制リフローでアニメーションを毎回再生させる
     overlay.classList.add('img-slide-up');
 
+    // 以前はここで7秒後に自動的に非表示にしていたが、
+    // 「次のお会計が始まるまで画像を消さない」仕様に変更したため、
+    // タイマーによる自動非表示は行わない。
+    // 非表示にするのは hideCheckoutCompleteImage()（＝次のお会計の最初の
+    // 商品がスキャンされたタイミング。下の hideCheckoutImageOnNewTransaction 参照）のみ。
     clearTimeout(overlay._hideTimer);
-    overlay._hideTimer = setTimeout(() => {
-        overlay.style.display = 'none';
-        overlay.classList.remove('img-slide-up');
-    }, 7000);
 }
 
 function hideCheckoutCompleteImage() {
@@ -183,6 +184,19 @@ function triggerCheckoutCompleteImage() {
     }
 }
 
+// レジ側／客用画面側どちらでも呼べる：表示中の画像を消し、他端末（客用ディスプレイ）にも
+// Ably経由で「消してください」を伝える。次のお会計が始まったタイミングで呼ばれる。
+function hideCheckoutCompleteImageAndBroadcast() {
+    hideCheckoutCompleteImage();
+    if (typeof channel !== 'undefined' && channel) {
+        try {
+            channel.publish('checkout-image-hide-event', { senderId: CHECKOUT_IMAGE_DEVICE_ID });
+        } catch (err) {
+            console.warn('客用画面への非表示通知の送信に失敗しました:', err);
+        }
+    }
+}
+
 // 別端末からAblyメッセージを受信するための購読登録。
 // channel（Ably）の初期化はレジ/客画面を開いたタイミングで行われるため、
 // 準備ができるまで少し待ってから一度だけ登録する。
@@ -199,9 +213,41 @@ function triggerCheckoutCompleteImage() {
                 displayCheckoutCompleteImage(msg.data.image);
             }
         });
+
+        // 別端末（レジ端末）で次のお会計が始まった時に届く「画像を消してください」通知
+        channel.subscribe('checkout-image-hide-event', (msg) => {
+            if (!msg || !msg.data) return;
+            if (msg.data.senderId === CHECKOUT_IMAGE_DEVICE_ID) return;
+            if (typeof isCustomerDisplayDevice === 'function' && !isCustomerDisplayDevice()) return;
+            hideCheckoutCompleteImage();
+        });
     } else {
         setTimeout(waitForChannelAndSubscribeCheckoutImage, 500);
     }
+})();
+
+// レジ側：次のお会計が始まった瞬間（＝カートが空の状態から最初の商品が
+// スキャンされた瞬間）に、前回のお会計完了画像を消す。
+// register.js は直接編集せず、addToCart を安全にラップして実現する
+// （他のファイルと同じフック方式。詳細は register-info-system.js 等を参照）。
+(function hideCheckoutImageOnNewTransaction() {
+    function tryHook() {
+        if (typeof addToCart !== 'function') {
+            setTimeout(tryHook, 300);
+            return;
+        }
+        const originalAddToCart = addToCart;
+        window.addToCart = function (...args) {
+            // フック時点でカートが空 ＝ これから追加される商品が新しい会計の1品目
+            const isNewTransaction = (typeof cart !== 'undefined') && cart.length === 0;
+            const result = originalAddToCart.apply(this, args);
+            if (isNewTransaction) {
+                hideCheckoutCompleteImageAndBroadcast();
+            }
+            return result;
+        };
+    }
+    tryHook();
 })();
 
 document.addEventListener('DOMContentLoaded', () => {

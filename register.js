@@ -236,7 +236,7 @@ function updateCustomerDisplay() {
     if (typeof selectedPayment !== 'undefined' && (selectedPayment === 'クレジット' || selectedPayment === 'QR決済')) {
         if (titleEl && titleEl !== listEl) titleEl.style.display = 'none';
         listEl.innerHTML = `
-            <div style="display: flex; align-items: center; justify-content: center; height: 100%; min-height: 160px; text-align: center; color: #80d8ff; font-size: 22px; font-weight: bold; padding: 20px; line-height: 1.6;">
+            <div style="display: flex; align-items: center; justify-content: center; height: 100%; min-height: 80px; text-align: center; color: #80d8ff; font-size: clamp(20px, 2.6vw, 34px); font-weight: bold; padding: 10px; line-height: 1.5; box-sizing: border-box;">
                 店員の指示に従ってお支払いください。
             </div>
         `;
@@ -253,23 +253,17 @@ function updateCustomerDisplay() {
     listEl.innerHTML = '';
     cart.forEach(item => {
         const div = document.createElement('div');
-        div.style.display = 'flex';
-        div.style.justifyContent = 'space-between';
-        div.style.marginBottom = '6px';
-        div.style.fontSize = '16px';
+        div.className = 'customer-cart-row';
         const safeName = (typeof escapeHtml === 'function') ? escapeHtml(item.name) : item.name;
-        div.innerHTML = `<span>${safeName} ${item.qty > 1 ? 'x'+item.qty : ''}</span> <span>¥${(item.price * item.qty).toLocaleString()}</span>`;
+        div.innerHTML = `<span class="ccr-name">${safeName} ${item.qty > 1 ? 'x'+item.qty : ''}</span> <span class="ccr-price">¥${(item.price * item.qty).toLocaleString()}</span>`;
         listEl.appendChild(div);
     });
     
     if (usedPoints && usedPoints > 0) {
         const pDiv = document.createElement('div');
-        pDiv.style.display = 'flex';
-        pDiv.style.justifyContent = 'space-between';
-        pDiv.style.marginBottom = '6px';
-        pDiv.style.fontSize = '16px';
+        pDiv.className = 'customer-cart-row';
         pDiv.style.color = '#ff80ab';
-        pDiv.innerHTML = `<span>ポイント利用</span> <span>- ¥${usedPoints.toLocaleString()}</span>`;
+        pDiv.innerHTML = `<span class="ccr-name">ポイント利用</span> <span class="ccr-price">- ¥${usedPoints.toLocaleString()}</span>`;
         listEl.appendChild(pDiv);
     }
 

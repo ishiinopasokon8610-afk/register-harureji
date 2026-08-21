@@ -8,6 +8,30 @@ let currentHistoryViewer = null;
 // ------------------------------------------
 // 店長認証 & 共通分岐
 // ------------------------------------------
+
+// 店長認証済みかどうかの判定。
+// 【注意】以前はここを「sessionStorage の pos_manager_auth フラグが 'true' かどうか」
+// だけで判定している箇所が複数あった。これだと本物のバーコードを知らない人でも、
+// ブラウザの検証（devtools）コンソールを開いて
+//   sessionStorage.setItem('pos_manager_auth', 'true')
+// と1行打ち込むだけで、店長権限が必要な画面（履歴削除・タイムカード削除など）を
+// 突破できてしまっていた。
+// これを防ぐため、ローカルのフラグに加えて「Firebase Authに“匿名ではなく”
+// 実際にサインインしているか」も必ず一緒に確認する。firebase.auth().currentUser は
+// 本物の店長バーコード（＝Firebaseのパスワード）で認証しない限り手に入らないため、
+// devtoolsで変数やsessionStorageの値を書き換えるだけでは突破できない。
+function isManagerAuthorized() {
+    const hasLocalFlag = (typeof managerAuthDone !== 'undefined' && managerAuthDone) || sessionStorage.getItem('pos_manager_auth') === 'true';
+    if (!hasLocalFlag) return false;
+
+    // firebase-manager-auth.js が読み込まれていない等、Firebase未対応環境では
+    // 従来通りローカルフラグのみで判定する（後方互換のためのフォールバック）
+    if (typeof firebase === 'undefined' || typeof firebase.auth !== 'function') return hasLocalFlag;
+
+    const user = firebase.auth().currentUser;
+    return !!user && user.isAnonymous === false;
+}
+
 function updateManagerButtonState() {
     const lockBtn = document.getElementById('manager-lock-btn');
     if (!lockBtn) return;
@@ -371,7 +395,7 @@ function renderTimecardTable() {
     tbody.innerHTML = '';
 
     const records = getTimecardData();
-    const isManager = (typeof managerAuthDone !== 'undefined' && managerAuthDone) || sessionStorage.getItem('pos_manager_auth') === 'true';
+    const isManager = isManagerAuthorized();
 
     const clearBtn = document.getElementById('timecard-clear-btn');
     if (clearBtn) clearBtn.style.display = isManager ? 'inline-block' : 'none';
@@ -398,7 +422,7 @@ function renderTimecardTable() {
 }
 
 function clearAllTimecards() {
-    if ((typeof managerAuthDone === 'undefined' || !managerAuthDone) && sessionStorage.getItem('pos_manager_auth') !== 'true') {
+    if (!isManagerAuthorized()) {
         if (typeof playSound === 'function') playSound('error');
         if (typeof showCustomConfirm === 'function') {
             showCustomConfirm("全タイムカードの削除は店長のみ可能です。", "てんちょう のみ かのう です。", () => {}, true);
@@ -534,6 +558,9 @@ function buildAllDataObject() {
         discounts: JSON.parse(localStorage.getItem('pos_discounts') || '[]'),
         customGenres: JSON.parse(localStorage.getItem('pos_custom_genres') || '[]'),
         checkoutCompleteImage: localStorage.getItem('pos_checkout_complete_image') || '',
+        // 追加：本日の釣銭準備金・営業終了状態も機種変更/復元時に一緒に戻せるようにする
+        startCash: localStorage.getItem('pos_start_cash') || '',
+        businessClosed: localStorage.getItem('pos_business_closed') || '',
         savedAt: new Date().toISOString()
     };
 }
@@ -573,6 +600,16 @@ function applyImportedDataObject(dataObj, options) {
     }
     if (dataObj.checkoutCompleteImage) {
         localStorage.setItem('pos_checkout_complete_image', dataObj.checkoutCompleteImage);
+    }
+    if (dataObj.startCash !== undefined && dataObj.startCash !== '') {
+        localStorage.setItem('pos_start_cash', dataObj.startCash);
+    }
+    if (dataObj.businessClosed !== undefined) {
+        if (dataObj.businessClosed) {
+            localStorage.setItem('pos_business_closed', dataObj.businessClosed);
+        } else {
+            localStorage.removeItem('pos_business_closed');
+        }
     }
 
     if (typeof clerks !== 'undefined') localStorage.setItem('pos_clerks', JSON.stringify(clerks));
@@ -649,7 +686,7 @@ function renderHistory() {
 
     const exportBtn = document.querySelector('.csv-export-btn');
     const historyBtnContainer = document.querySelector('.history-btn-container');
-    const isManager = (currentHistoryViewer === 'manager') || (typeof managerAuthDone !== 'undefined' && managerAuthDone) || (sessionStorage.getItem('pos_manager_auth') === 'true');
+    const isManager = (currentHistoryViewer === 'manager') || isManagerAuthorized();
 
     if (exportBtn) exportBtn.style.display = isManager ? 'inline-block' : 'none';
     if (historyBtnContainer) historyBtnContainer.style.display = isManager ? 'flex' : 'none';
@@ -668,7 +705,7 @@ function renderHistory() {
 }
 
 function deleteSelectedHistory() {
-    if (currentHistoryViewer !== 'manager' && (typeof managerAuthDone === 'undefined' || !managerAuthDone) && sessionStorage.getItem('pos_manager_auth') !== 'true') {
+    if (currentHistoryViewer !== 'manager' && !isManagerAuthorized()) {
         if (typeof playSound === 'function') playSound('error');
         if (typeof showCustomConfirm === 'function') {
             showCustomConfirm("履歴の削除は店長のみ可能です。", "りれき の さくじょ は てんちょう のみ かのう です。", () => {}, true);
@@ -698,7 +735,7 @@ function deleteSelectedHistory() {
 }
 
 function clearAllHistory() {
-    if (currentHistoryViewer !== 'manager' && (typeof managerAuthDone === 'undefined' || !managerAuthDone) && sessionStorage.getItem('pos_manager_auth') !== 'true') {
+    if (currentHistoryViewer !== 'manager' && !isManagerAuthorized()) {
         if (typeof playSound === 'function') playSound('error');
         if (typeof showCustomConfirm === 'function') {
             showCustomConfirm("すべての履歴の削除は店長のみ可能です。", "すべての りれき の さくじょ は てんちょう のみ かのう です。", () => {}, true);
@@ -727,7 +764,7 @@ function exportHistorycsv() {
         if (typeof playSound === 'function') playSound('click');
         
         // currentHistoryViewer === 'manager' の判定を追加修正
-        const isManager = (currentHistoryViewer === 'manager') || (typeof managerAuthDone !== 'undefined' && managerAuthDone) || (sessionStorage.getItem('pos_manager_auth') === 'true');
+        const isManager = (currentHistoryViewer === 'manager') || isManagerAuthorized();
 
         if (!isManager) {
             if (typeof playSound === 'function') playSound('error');
