@@ -28,7 +28,9 @@ const AUTH_ROLES = {
             'register-use',        // レジ使用
             'view-history',        // 履歴閲覧
             'customer-scan',       // 会員スキャン
-            'view-own-sales'       // 自分の売上確認
+            'view-own-sales',      // 自分の売上確認
+            'timecard-use',        // 自分のタイムカード打刻
+            'discount-manage'      // 自動化バーコード（割引/自動追加）の登録・編集
         ],
         sessionTimeout: SESSION_TIMEOUT_MS
     },
@@ -78,6 +80,15 @@ function login(name, barcode, roleId = 'staff') {
     localStorage.setItem(AUTH_SESSION_KEY, sessionId);
     localStorage.setItem(`pos_login_time_${sessionId}`, Date.now().toString());
 
+    // アプリ全体で使われている「現在の担当者」も、ログインした本人に合わせておく
+    // （レジのレシート表示・音声案内・年齢確認の記録者名などに使われる）
+    if (roleId.toUpperCase() !== 'CUSTOMER') {
+        try {
+            if (typeof window !== 'undefined') window.activeClerkName = name;
+            localStorage.setItem('pos_active_clerk', name);
+        } catch (e) {}
+    }
+
     // セッションタイムアウト設定
     setupSessionTimeout(role.sessionTimeout);
 
@@ -115,6 +126,13 @@ function hasPermission(permission) {
     // 'all' 権限がある場合は全て許可
     if (role.permissions.includes('all')) return true;
 
+    // 店員としてログインしていても、その場でFirebaseの店長認証（バーコード）に
+    // 成功していれば、一時的に'all'相当の操作を許可する。
+    // （firebase-manager-auth.js による、既存の「店長認証」フローとの整合性）
+    if (permission === 'all' && typeof isManagerAuthorized === 'function' && isManagerAuthorized()) {
+        return true;
+    }
+
     return role.permissions.includes(permission);
 }
 
@@ -151,6 +169,36 @@ function setupSessionTimeout(timeoutMs) {
             );
         }
     }, timeoutMs);
+}
+
+/**
+ * セッションの有効期限切れを確認する（アプリ再起動・タブ再読み込み時にも必ず効くようにする）。
+ * ------------------------------------------
+ * setupSessionTimeout() の setTimeout はページを閉じる/再読み込みすると消えてしまうため、
+ * それだけではブラウザを再起動した場合にログイン状態が無期限に残ってしまう。
+ * ここでは実際のログイン時刻(pos_login_time_*)と現在時刻を比較し、
+ * ロールごとの制限時間を超えていれば強制的にログアウトする。
+ */
+function checkStaffSessionExpiry() {
+    const session = getCurrentSession();
+    if (!session.role || !session.sessionId) return;
+
+    const role = AUTH_ROLES[session.role.toUpperCase()];
+    if (!role) return;
+
+    const loginTime = parseInt(session.loginTime || '0', 10);
+    if (!loginTime || (Date.now() - loginTime) > role.sessionTimeout) {
+        logout();
+        if (typeof playSound === 'function') playSound('error');
+        if (typeof showCustomConfirm === 'function') {
+            showCustomConfirm(
+                'セッションがタイムアウトしました。再度ログインしてください。',
+                'せっしょん が たいむあうと しました',
+                () => { window.location.hash = '#home'; },
+                true
+            );
+        }
+    }
 }
 
 /**
@@ -221,8 +269,8 @@ function canAccessScreen(screenId) {
         'sales-mgmt-screen': 'all',
         'history-screen': 'view-history',
         'analytics-screen': 'all',
-        'discount-screen': 'all',
-        'timecard-screen': 'all'
+        'discount-screen': 'discount-manage',
+        'timecard-screen': 'timecard-use' // 店員が自分で出退勤を打刻できるようにする
     };
 
     const requiredPermission = screenPermissions[screenId];
@@ -249,7 +297,7 @@ function renderAuthUI() {
         statusDiv.innerHTML = `
             <div style="font-size: 12px; color: #666;">
                 ${role.icon} ${role.name}: <b>${session.user?.name || 'unknown'}</b>
-                <button onclick="logout(); window.location.hash='#home';" style="margin-left: 8px; padding: 2px 8px; font-size: 10px; background: #f44336; color: white; border: none; border-radius: 3px; cursor: pointer;">ログアウト</button>
+                <button onclick="logout(); if (typeof showStaffLoginGate === 'function') { showStaffLoginGate('home-screen'); } else { window.location.hash='#home'; }" style="margin-left: 8px; padding: 2px 8px; font-size: 10px; background: #f44336; color: white; border: none; border-radius: 3px; cursor: pointer;">ログアウト</button>
             </div>
         `;
     }
@@ -316,6 +364,9 @@ function canViewSaleData(saleCreatedBy) {
  * 初期化：DOMContentLoaded時に呼ぶ
  */
 function initAuthSystem() {
+    // 再起動・再読み込みをまたいだ期限切れを最初に確認する
+    checkStaffSessionExpiry();
+
     // タイムアウト設定
     const session = getCurrentSession();
     if (session.role) {
@@ -338,5 +389,6 @@ function initAuthSystem() {
 // DOMContentLoaded時に初期化
 document.addEventListener('DOMContentLoaded', initAuthSystem);
 
-// 定期的に認証UIを更新
+// 定期的に認証UIを更新・セッション期限を確認
 setInterval(renderAuthUI, 30000); // 30秒ごと
+setInterval(checkStaffSessionExpiry, 30000); // 30秒ごと

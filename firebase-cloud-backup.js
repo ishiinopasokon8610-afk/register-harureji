@@ -22,8 +22,26 @@
 // 既存の window.haruPosBackupNow をラップして相乗りする。
 // ==========================================
 
-const CLOUD_BACKUP_COLLECTION = 'pos_cloud_backup';
-const CLOUD_BACKUP_LATEST_DOC_ID = 'latest'; // 「データが消えた時の復元用」の共通・保険ドキュメント
+const CLOUD_BACKUP_LATEST_DOC_ID = 'latest'; // 「データが消えた時の復元用」の、店舗内共通・保険ドキュメント
+
+// ------------------------------------------------------------
+// セキュリティ強化（店舗ごとの分離）
+// ------------------------------------------------------------
+// 以前はすべての店舗が同じ「pos_cloud_backup」コレクションを共有しており、
+// Firestoreにサインインしていれば（匿名サインインも含め）誰でも
+// 他店舗のバックアップ（顧客データ・売上履歴など）を読み書きできてしまっていた。
+// 特に固定ID「latest」は、店舗を問わず必ず存在する共通の保険ドキュメントだったため、
+// 店舗IDを知らなくても中身を読まれてしまう状態だった。
+//
+// これを、店舗ID(shopId)ごとの領域 shops/{shopId}/backups/{docId} に分離し、
+// firestore.rules 側で「対応する店舗の合言葉ハッシュ(pwHash)が一致する
+// 書き込みのみ許可」するように変更した。shop-id-system.js が
+// 合言葉のハッシュをあらかじめ shops/{shopId}/config/auth に登録する。
+function getCloudBackupCollectionRef() {
+    if (typeof getOrCreateShopId !== 'function') return null;
+    const shopId = getOrCreateShopId();
+    return firebase.firestore().collection('shops').doc(shopId).collection('backups');
+}
 
 // 複数端末で使う場合に備え、端末ごとに別ドキュメントへバックアップする。
 // 一度発行したIDはこの端末のlocalStorageにずっと保存され、再起動しても変わらない
@@ -57,7 +75,7 @@ function describeCloudBackupError(err) {
         return '【原因】Firebase Consoleで「匿名（Anonymous）」ログインが有効になっていません。\n\n【対処】Firebase Console → Authentication → Sign-in method（ログイン方法）→「匿名」を選択して有効にしてください。';
     }
     if (code === 'permission-denied') {
-        return '【原因】Firestoreのセキュリティルールが正しく公開されていません（サインインはできています）。\n\n【対処】Firebase Console → Firestore Database → ルール タブで、firestore.rulesの内容が反映・公開されているか確認してください。';
+        return '【原因】Firestoreのセキュリティルールが正しく公開されていないか、店舗の「合言葉」がまだ設定・同期されていない可能性があります（サインインはできています）。\n\n【対処】① Firebase Console → Firestore Database → ルール タブで、firestore.rulesの内容が反映・公開されているか確認してください。\n② ホーム画面の「データ管理・ロゴ設定」→ 店舗ID・設定 で、合言葉を入力して保存し直してください。';
     }
     if (code === 'unavailable' || code === 'network-request-failed') {
         return '【原因】通信エラーです。インターネット接続をご確認のうえ、しばらくしてからもう一度お試しください。';
@@ -118,8 +136,28 @@ async function testCloudBackupConnection() {
             await firebase.auth().signInAnonymously();
         }
 
-        const testRef = firebase.firestore().collection(CLOUD_BACKUP_COLLECTION).doc(getCloudBackupDocId());
-        await testRef.set({ connectionTestAt: new Date().toISOString() }, { merge: true });
+        const passphrase = (typeof getShopPassphrase === 'function') ? getShopPassphrase() : '';
+        if (!passphrase) {
+            if (typeof showCustomConfirm === 'function') {
+                showCustomConfirm(
+                    "店舗の「合言葉」がまだ設定されていません。クラウドバックアップを使う前に、データ管理・ロゴ設定 → 店舗ID・設定 から合言葉を保存してください。",
+                    "あいことば が まだ せってい さ れ て い ませ ん。",
+                    () => {}, false
+                );
+            }
+            return;
+        }
+        // 合言葉がFirestore側にまだ登録されていなければ、先に登録しておく
+        if (typeof syncShopPassphraseToFirestore === 'function') {
+            await syncShopPassphraseToFirestore(passphrase);
+        }
+        const pwHash = (typeof hashShopPassphrase === 'function') ? await hashShopPassphrase(passphrase) : null;
+
+        const collectionRef = getCloudBackupCollectionRef();
+        if (!collectionRef) throw new Error('店舗IDシステム(shop-id-system.js)が読み込まれていません');
+
+        const testRef = collectionRef.doc(getCloudBackupDocId());
+        await testRef.set({ connectionTestAt: new Date().toISOString(), pwHash: pwHash }, { merge: true });
         const snap = await testRef.get();
 
         if (snap.exists) {
@@ -160,11 +198,21 @@ async function writeCloudBackupIfAvailable() {
     if (!isFirestoreReady()) return;
     if (!firebase.auth().currentUser) return; // サインインが終わるまでは書き込まない
 
+    const passphrase = (typeof getShopPassphrase === 'function') ? getShopPassphrase() : '';
+    if (!passphrase) return; // 合言葉未設定の店舗はクラウドバックアップを行わない（firestore.rulesでも拒否される）
+
+    const collectionRef = getCloudBackupCollectionRef();
+    if (!collectionRef) return;
+
     const backupObj = buildCloudBackupObject();
     if (!backupObj) return;
 
+    const pwHash = (typeof hashShopPassphrase === 'function') ? await hashShopPassphrase(passphrase) : null;
+    if (!pwHash) return;
+    backupObj.pwHash = pwHash; // firestore.rulesがこのフィールドを合言葉ハッシュと照合する
+
     // ローカルにまだ実データが無い（＝キャッシュ削除直後などで空の可能性がある）場合、
-    // 共通の復元用ドキュメント（latest）をその空データで上書きしてしまうと、
+    // 店舗内共通の復元用ドキュメント（latest）をその空データで上書きしてしまうと、
     // 他の端末や過去の自分自身が積み上げた「本物のバックアップ」が消えてしまう。
     // そのため latest への書き込みは、実データがある場合のみに限定する。
     // （端末ごとの個別ドキュメントへの保存は、空でも害がないのでそのまま行う）
@@ -173,19 +221,13 @@ async function writeCloudBackupIfAvailable() {
         (Array.isArray(backupObj.clerks) && backupObj.clerks.length > 1); // 初期値は店長1人だけなので1件は「空」扱い
 
     try {
-        await firebase.firestore()
-            .collection(CLOUD_BACKUP_COLLECTION)
-            .doc(getCloudBackupDocId())
-            .set(backupObj);
+        await collectionRef.doc(getCloudBackupDocId()).set(backupObj);
 
-        // 「データが消えた時に復元できる場所」を常に最新に保つための共通ドキュメント。
+        // 「データが消えた時に復元できる場所」を常に最新に保つための、店舗内共通ドキュメント。
         // 端末ごとのIDはlocalStorageと一緒に消えてしまうため、
         // 復元チェックはこちら（固定ID）だけを見るようにする。
         if (hasRealData) {
-            await firebase.firestore()
-                .collection(CLOUD_BACKUP_COLLECTION)
-                .doc(CLOUD_BACKUP_LATEST_DOC_ID)
-                .set(backupObj);
+            await collectionRef.doc(CLOUD_BACKUP_LATEST_DOC_ID).set(backupObj);
         }
     } catch (err) {
         // 1MB上限超過（商品数・履歴が非常に多い場合など）やネットワークエラーは
@@ -211,10 +253,9 @@ async function checkCloudBackupForRestoreOnStartup() {
     if (!isFirestoreReady()) return;
 
     try {
-        const snap = await firebase.firestore()
-            .collection(CLOUD_BACKUP_COLLECTION)
-            .doc(CLOUD_BACKUP_LATEST_DOC_ID)
-            .get();
+        const collectionRef = getCloudBackupCollectionRef();
+        if (!collectionRef) return;
+        const snap = await collectionRef.doc(CLOUD_BACKUP_LATEST_DOC_ID).get();
 
         if (!snap.exists) return;
         const dataObj = snap.data();
@@ -249,10 +290,14 @@ async function restoreFromCloudBackupManual() {
     }
 
     try {
-        const snap = await firebase.firestore()
-            .collection(CLOUD_BACKUP_COLLECTION)
-            .doc(CLOUD_BACKUP_LATEST_DOC_ID)
-            .get();
+        const collectionRef = getCloudBackupCollectionRef();
+        if (!collectionRef) {
+            if (typeof showCustomConfirm === 'function') {
+                showCustomConfirm("店舗IDシステムが読み込まれていません。", "しょっぷあいでぃー が つかえ ませ ん。", () => {}, false);
+            }
+            return;
+        }
+        const snap = await collectionRef.doc(CLOUD_BACKUP_LATEST_DOC_ID).get();
 
         if (!snap.exists) {
             if (typeof showCustomConfirm === 'function') {

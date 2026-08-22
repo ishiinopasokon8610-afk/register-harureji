@@ -39,6 +39,41 @@ function isFirebaseAuthReady() {
 }
 
 /* =========================================================
+   店長セッションの永続化を「タブを閉じるまで」に限定する
+   ------------------------------------------
+   【残っていたなりすましの抜け道】
+   Firebase Authは既定で「ブラウザを閉じても、次に開いた時も
+   サインイン状態が残る（LOCAL永続化）」ようになっている。
+   そのため、店長が「店長ロック」ボタンを押さずにタブだけ閉じて
+   離席すると、店長としてのFirebaseセッションがブラウザに残り続けてしまう。
+   この状態で別の人が devtools から
+     sessionStorage.setItem('pos_manager_auth', 'true')
+   を実行すると、isManagerAuthorized() の「匿名でなければOK」という
+   判定をすり抜けて店長権限を得られてしまう（ローカルのフラグは
+   sessionStorage＝タブを閉じると消えるが、Firebase側のセッションは
+   別の仕組みで生き残ってしまうため、両者の寿命がズレていた）。
+
+   【対策】
+   認証の永続化を SESSION（そのタブを閉じたら消える）に変更し、
+   ローカルのフラグ(sessionStorage)と同じ寿命に揃える。
+   クラウドバックアップ用の匿名サインイン(firebase-cloud-backup.js)は
+   タブを開き直すたびに自動で再サインインする作りになっているため、
+   これによってバックアップ機能が止まることはない。
+   ========================================================= */
+(function setManagerAuthSessionPersistence() {
+    function tryHook() {
+        if (!isFirebaseAuthReady()) {
+            setTimeout(tryHook, 300);
+            return;
+        }
+        firebase.auth().setPersistence(firebase.auth.Auth.Persistence.SESSION).catch((e) => {
+            console.warn('Firebase認証の永続化設定(SESSION)に失敗しました:', e);
+        });
+    }
+    tryHook();
+})();
+
+/* =========================================================
    verifyManagerAuth() を Firebase 版に置き換える
    ========================================================= */
 (function overrideVerifyManagerAuth() {
@@ -63,6 +98,11 @@ function isFirebaseAuthReady() {
             inputEl.disabled = true;
 
             try {
+                // サインイン直前に念のためもう一度SESSION永続化を指定する
+                // （他の匿名サインイン処理との読み込みタイミングの前後で
+                // 　万が一LOCAL永続化のまま店長セッションが張られてしまうのを防ぐため）。
+                await firebase.auth().setPersistence(firebase.auth.Auth.Persistence.SESSION).catch(() => {});
+
                 // ここでバーコードの値（4桁）に固定PREFIXを付けてパスワード形式にし、
                 // Firebaseへ送信する。実際の正誤判定はFirebaseのサーバー側で行われる。
                 await firebase.auth().signInWithEmailAndPassword(MANAGER_AUTH_EMAIL, MANAGER_AUTH_PREFIX + val);
@@ -139,25 +179,88 @@ function isFirebaseAuthReady() {
    managerAuthDone / sessionStorage をクリアするだけなので、
    Firebase側のセッションも一緒に切るためにここでも監視する。
    ------------------------------------------
-   【重要な修正】以前はここで「isDone が false かつ currentUser がいれば無条件で signOut」
+   【重要な修正・その1】以前はここで「isDone が false かつ currentUser がいれば無条件で signOut」
    していたため、クラウドバックアップ用の匿名セッション（isDoneは常にfalseになる）まで
    30秒おきに毎回ログアウトさせてしまい、クラウドバックアップが実質的に機能しなくなっていた
    （匿名サインイン→ほぼ即座にこのタイマーでサインアウト、の繰り返し）。
    店長セッション（匿名ではない = isAnonymous === false）だけを対象にする。
+
+   【重要な修正・その2：なりすまし対策の強化】
+   上の isDone は sessionStorage の値をそのまま見ているだけなので、
+   devtoolsコンソールから
+     sessionStorage.setItem('pos_manager_auth', 'true')
+   を実行し続けられると、「10分経ってタイムアウトしたはずの店長セッション」を
+   このチェックだけでは検知できず、居座り続けたFirebaseの店長セッションと
+   組み合わさって権限を取り戻されてしまう（isDoneがtrueの間は何もしないため）。
+   
+   これを防ぐため、isDone（改ざん可能なローカル値）だけでなく、
+   Firebaseが実際にサインインした時刻として発行する
+   user.metadata.lastSignInTime（サーバー側の認証結果に基づく値で、
+   sessionStorageのようにdevtoolsから単純に書き換えられるものではない）からの
+   経過時間も必ず確認し、どちらか一方でも期限切れの条件を満たせば
+   問答無用でサインアウトする。
    ========================================================= */
+const MANAGER_FIREBASE_SESSION_MAX_MS = 10 * 60 * 1000; // auth-system.js の MANAGER_AUTH_TIMEOUT_MS と同じ値
 setInterval(() => {
     if (!isFirebaseAuthReady()) return;
+    const user = firebase.auth().currentUser;
+    if (!user || user.isAnonymous !== false) return; // 匿名（バックアップ用）セッションは対象外
+
     const isDone = (typeof managerAuthDone !== 'undefined' && managerAuthDone) ||
         sessionStorage.getItem('pos_manager_auth') === 'true';
-    const user = firebase.auth().currentUser;
-    if (!isDone && user && user.isAnonymous === false) {
+
+    const lastSignInMs = (user.metadata && user.metadata.lastSignInTime) ? new Date(user.metadata.lastSignInTime).getTime() : 0;
+    const realElapsedMs = lastSignInMs ? (Date.now() - lastSignInMs) : Infinity;
+    const isReallyExpiredByFirebase = realElapsedMs > MANAGER_FIREBASE_SESSION_MAX_MS;
+
+    if (!isDone || isReallyExpiredByFirebase) {
         firebase.auth().signOut()
             .catch(() => {})
             .finally(() => {
+                // ローカル側のフラグも念のため必ず揃えてロック状態にしておく
+                if (typeof managerAuthDone !== 'undefined') managerAuthDone = false;
+                sessionStorage.removeItem('pos_manager_auth');
+                sessionStorage.removeItem('pos_manager_auth_time');
+                if (typeof updateManagerButtonState === 'function') updateManagerButtonState();
+                const apiSettings = document.getElementById('api-settings-container');
+                if (apiSettings) apiSettings.style.display = 'none';
+
                 if (typeof ensureAnonymousAuthForBackup === 'function') ensureAnonymousAuthForBackup();
             });
     }
 }, 30 * 1000);
+
+/* =========================================================
+   isManagerAuthorized() に、店長用メールアドレスの一致確認を追加する
+   ------------------------------------------
+   これまでは「匿名でなければ店長」という判定だった。
+   通常の運用ではこれで十分だが、念のための多重防御として、
+   サインイン中のアカウントが本当に店長用アカウント(MANAGER_AUTH_EMAIL)
+   かどうかも確認する。将来的に他の非匿名アカウント（例：顧客ログイン等）が
+   同じアプリに追加された場合でも、それだけで誤って店長権限が
+   与えられてしまうことがないようにするため。
+   ========================================================= */
+(function hardenIsManagerAuthorized() {
+    function tryHook() {
+        if (typeof isManagerAuthorized !== 'function' || !isFirebaseAuthReady()) {
+            setTimeout(tryHook, 300);
+            return;
+        }
+
+        const originalIsManagerAuthorized = isManagerAuthorized;
+        window.isManagerAuthorized = function () {
+            if (!originalIsManagerAuthorized()) return false;
+
+            const user = firebase.auth().currentUser;
+            // 元の判定をすでに通っている(=非匿名でサインイン済み)はずだが、念のため再確認する
+            if (!user || user.isAnonymous !== false) return false;
+            if (user.email !== MANAGER_AUTH_EMAIL) return false;
+
+            return true;
+        };
+    }
+    tryHook();
+})();
 
 /* =========================================================
    店長認証バーコード（＝Firebase Authのパスワード）の変更

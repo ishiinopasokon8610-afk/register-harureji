@@ -16,6 +16,10 @@ let lastSyncedProductsSnapshot = null;
 let lastSyncedHistorySnapshot = null;
 let lastSyncedTimecardSnapshot = null;
 
+// 商品マスタの「前回ポーリング時点でのスナップショット」（jan→商品データの複製）。
+// 次回ポーリング時にこれと比較することで、「何が変わったか（追加/編集/削除）」を検出する。
+let lastKnownProductsList = null;
+
 function getHistoryFromStorage() {
     try {
         return JSON.parse(localStorage.getItem('pos_history') || '[]');
@@ -30,6 +34,93 @@ function getTimecardFromStorage() {
     } catch (e) {
         return [];
     }
+}
+
+/* =========================================================
+   商品マスタの「マージ型」同期
+   ------------------------------------------
+   【以前の問題】
+   products配列を「丸ごと置き換え」していたため、ほぼ同時（数秒以内）に
+   別々の端末で別々の商品を追加・編集すると、後から届いた方の配列で
+   先に届いていた側の変更ごと上書きされ、消えてしまうことがあった。
+   （例：レジAで商品①を追加した直後に、レジBで商品②を追加すると、
+   　　　届く順番によってはどちらかが消える）
+
+   【対応】
+   会計履歴・タイムカードと同じ「マージ方式」にする。
+   各商品にupdatedAt（最終更新時刻）を持たせ、jan（商品コード）をキーに
+   「新しい方を採用」して統合する。削除については、削除したという記録
+   （tombstone）をupdatedAt付きで別途保持し、他端末の古い商品データに
+   よって復活してしまわないようにする。
+   ========================================================= */
+
+function getDeletedProductsFromStorage() {
+    try {
+        return JSON.parse(localStorage.getItem('pos_deleted_products') || '[]');
+    } catch (e) {
+        return [];
+    }
+}
+
+// 削除記録（tombstone）どうしをマージする（同じjanは、より新しい削除時刻を優先）。
+// 90日より古い削除記録は、際限なく増え続けないよう間引く。
+function mergeDeletedProductLists(localList, remoteList) {
+    const map = new Map();
+    [...(localList || []), ...(remoteList || [])].forEach(d => {
+        if (!d || !d.jan) return;
+        const existing = map.get(d.jan);
+        if (!existing || d.deletedAt > existing.deletedAt) map.set(d.jan, d);
+    });
+    const cutoff = Date.now() - 90 * 24 * 60 * 60 * 1000;
+    return Array.from(map.values()).filter(d => d.deletedAt >= cutoff);
+}
+
+// この端末で商品が削除されたことを記録する
+function recordDeletedProduct(jan, deletedAt) {
+    if (!jan) return;
+    const list = getDeletedProductsFromStorage();
+    list.push({ jan: jan, deletedAt: deletedAt || Date.now() });
+    localStorage.setItem('pos_deleted_products', JSON.stringify(mergeDeletedProductLists(list, [])));
+}
+
+// 商品配列を jan → 商品データ（複製） のMapに変換する。
+// 複製するのは、後から products 配列側だけを書き換えても
+// このMap（＝前回スナップショット）が引きずられて変わってしまわないようにするため。
+function getProductsMapByJan(list) {
+    const map = new Map();
+    (list || []).forEach(p => {
+        if (p && p.jan) map.set(p.jan, JSON.parse(JSON.stringify(p)));
+    });
+    return map;
+}
+
+// 商品どうしをマージする（jan単位で、updatedAtが新しい方を採用。削除記録があれば除外する）
+function mergeProductLists(localList, remoteList, deletedList) {
+    const deletedMap = new Map();
+    (deletedList || []).forEach(d => {
+        if (d && d.jan) deletedMap.set(d.jan, d);
+    });
+
+    const map = new Map();
+    [...(localList || []), ...(remoteList || [])].forEach(p => {
+        if (!p || !p.jan) return;
+        const existing = map.get(p.jan);
+        const pTime = p.updatedAt || 0;
+        if (!existing || pTime >= (existing.updatedAt || 0)) {
+            map.set(p.jan, p);
+        }
+    });
+
+    deletedMap.forEach((d, jan) => {
+        const p = map.get(jan);
+        // 削除記録の時刻より後に更新されていない商品だけを、実際に除外する
+        // （削除された後に別端末で「同じjanで再登録」された場合は残す）
+        if (p && (p.updatedAt || 0) <= d.deletedAt) {
+            map.delete(jan);
+        }
+    });
+
+    return Array.from(map.values());
 }
 
 // タイムカードどうしをマージする（同じ記録[id]は、より多く打刻されている方を優先する）
@@ -68,7 +159,12 @@ function mergeHistoryLists(localList, remoteList) {
 function broadcastProductsSync() {
     if (typeof channel === 'undefined' || !channel || typeof products === 'undefined') return;
     try {
-        channel.publish('products-sync', { products: products, senderId: SYNC_DEVICE_ID, time: Date.now() });
+        channel.publish('products-sync', {
+            products: products,
+            deletedProducts: getDeletedProductsFromStorage(),
+            senderId: SYNC_DEVICE_ID,
+            time: Date.now()
+        });
     } catch (err) {
         console.warn('商品データの同期送信に失敗しました:', err);
     }
@@ -98,9 +194,37 @@ setInterval(() => {
     if (typeof products !== 'undefined') {
         const currentProductsSnapshot = JSON.stringify(products);
         if (lastSyncedProductsSnapshot === null) {
+            // 初回は基準を記録するだけ（送信はしない）
             lastSyncedProductsSnapshot = currentProductsSnapshot;
+            lastKnownProductsList = getProductsMapByJan(products);
         } else if (currentProductsSnapshot !== lastSyncedProductsSnapshot) {
-            lastSyncedProductsSnapshot = currentProductsSnapshot;
+            const now = Date.now();
+
+            // 追加・変更された商品に updatedAt を付与する
+            // （updatedAt自体は比較対象から除外し、中身が変わった商品だけを対象にする）
+            products.forEach(p => {
+                if (!p || !p.jan) return;
+                const prev = lastKnownProductsList ? lastKnownProductsList.get(p.jan) : null;
+                const prevCompare = prev ? JSON.stringify({ ...prev, updatedAt: undefined }) : null;
+                const curCompare = JSON.stringify({ ...p, updatedAt: undefined });
+                if (!prev || prevCompare !== curCompare) {
+                    p.updatedAt = now;
+                }
+            });
+
+            // 前回は存在したのに今回消えている商品 → 削除されたとみなし、tombstoneを記録
+            if (lastKnownProductsList) {
+                const currentJans = new Set(products.filter(p => p && p.jan).map(p => p.jan));
+                lastKnownProductsList.forEach((prevP, jan) => {
+                    if (!currentJans.has(jan)) {
+                        recordDeletedProduct(jan, now);
+                    }
+                });
+            }
+
+            localStorage.setItem('pos_products', JSON.stringify(products));
+            lastSyncedProductsSnapshot = JSON.stringify(products);
+            lastKnownProductsList = getProductsMapByJan(products);
             broadcastProductsSync();
         }
     }
@@ -129,9 +253,17 @@ setInterval(() => {
             if (!msg || !msg.data || msg.data.senderId === SYNC_DEVICE_ID) return;
             if (!Array.isArray(msg.data.products)) return;
 
-            products = msg.data.products;
+            const remoteDeleted = Array.isArray(msg.data.deletedProducts) ? msg.data.deletedProducts : [];
+            const mergedDeleted = mergeDeletedProductLists(getDeletedProductsFromStorage(), remoteDeleted);
+            const merged = mergeProductLists(products, msg.data.products, mergedDeleted);
+
+            products = merged;
             localStorage.setItem('pos_products', JSON.stringify(products));
+            localStorage.setItem('pos_deleted_products', JSON.stringify(mergedDeleted));
+            // マージ結果を「送信済み」として記録しておく（この処理自体を次回ポーリングで
+            // 「ローカルでの変化」と誤検知して再送信ループになるのを防ぐため）
             lastSyncedProductsSnapshot = JSON.stringify(products);
+            lastKnownProductsList = getProductsMapByJan(products);
             if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
 
             // 商品一覧・割引バーコード作成画面のプルダウンなど、開いている画面があれば更新する

@@ -48,6 +48,113 @@ function setShopPassphrase(passphrase) {
 }
 
 /**
+ * 合言葉をSHA-256でハッシュ化する（16進数文字列で返す）。
+ * 合言葉そのものはFirestoreに保存せず、このハッシュだけを送信・保存する。
+ */
+async function hashShopPassphrase(passphrase) {
+    const enc = new TextEncoder().encode(passphrase || '');
+    const digest = await crypto.subtle.digest('SHA-256', enc);
+    return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+/**
+ * 現在の合言葉ハッシュをFirestoreの shops/{shopId}/config/auth に登録・更新する。
+ * firestore.rules 側で、書き込み（クラウドバックアップ）はこのハッシュと
+ * 一致した場合のみ許可されるようになっている。
+ * @param {string} oldPassphrase - 既に合言葉が登録済みの場合、変更のために必要な「現在の」合言葉
+ */
+async function syncShopPassphraseToFirestore(oldPassphrase) {
+    if (typeof firebase === 'undefined' || typeof firebase.firestore !== 'function') return false;
+    if (!firebase.auth().currentUser) {
+        try { await firebase.auth().signInAnonymously(); } catch (e) { console.warn('合言葉の同期に失敗しました（未サインイン）:', e); return false; }
+    }
+
+    const shopId = getOrCreateShopId();
+    const passphrase = getShopPassphrase();
+    if (!passphrase) return false;
+
+    const newHash = await hashShopPassphrase(passphrase);
+    const docRef = firebase.firestore().collection('shops').doc(shopId).collection('config').doc('auth');
+
+    try {
+        const snap = await docRef.get();
+        if (!snap.exists) {
+            // 初回登録
+            await docRef.set({ passphraseHash: newHash, createdAt: Date.now() });
+        } else {
+            // 既存の合言葉から変更する場合：現在の合言葉ハッシュを証明として一緒に送る
+            const oldHash = await hashShopPassphrase(oldPassphrase !== undefined ? oldPassphrase : passphrase);
+            await docRef.update({ passphraseHash: newHash, oldPassphraseHash: oldHash, updatedAt: Date.now() });
+        }
+
+        // 【復元用索引】合言葉ハッシュ → 店舗ID の対応を別コレクションに記録しておく。
+        // キャッシュ削除等で端末から店舗ID（localStorage）だけが失われた場合でも、
+        // 合言葉さえ分かれば restoreShopIdFromPassphrase() でこの索引を引いて
+        // 同じ店舗IDに戻れるようにするため。店舗IDそのものは変更しない（既存データは無傷）。
+        try {
+            await firebase.firestore().collection('shop_passphrase_lookup').doc(newHash).set(
+                { shopId: shopId, updatedAt: Date.now() },
+                { merge: true }
+            );
+        } catch (lookupErr) {
+            console.warn('店舗ID復元用の索引登録に失敗しました（バックアップ本体には影響ありません）:', lookupErr);
+        }
+
+        return true;
+    } catch (err) {
+        console.warn('合言葉のクラウド同期に失敗しました（オンライン時に自動で再試行されます）:', err);
+        return false;
+    }
+}
+
+/**
+ * 【方針A: 合言葉からの自動復元】
+ * キャッシュ削除等で店舗ID（localStorageの pos_shop_id）が失われた端末で、
+ * 合言葉を入力してもらい、shop_passphrase_lookup 索引から元の店舗IDを探し出して復元する。
+ * @param {string} passphrase - 以前この店舗で設定していた合言葉
+ * @returns {Promise<boolean>} 復元できたか
+ */
+async function restoreShopIdFromPassphrase(passphrase) {
+    if (!passphrase || passphrase.trim() === '') return false;
+    if (typeof firebase === 'undefined' || typeof firebase.firestore !== 'function') return false;
+
+    if (!firebase.auth().currentUser) {
+        try { await firebase.auth().signInAnonymously(); } catch (e) {
+            console.warn('店舗ID復元用のサインインに失敗しました:', e);
+            return false;
+        }
+    }
+
+    try {
+        const hash = await hashShopPassphrase(passphrase.trim());
+        const snap = await firebase.firestore().collection('shop_passphrase_lookup').doc(hash).get();
+        if (!snap.exists) return false;
+
+        const data = snap.data();
+        if (!data || !data.shopId) return false;
+
+        setShopId(data.shopId);
+        setShopPassphrase(passphrase.trim());
+        return true;
+    } catch (err) {
+        console.warn('合言葉からの店舗ID復元に失敗しました:', err);
+        return false;
+    }
+}
+
+/**
+ * 【方針B: 手入力での復元（保険）】
+ * 事前にコピーしておいた店舗IDを直接貼り付けて復元する。
+ * 合言葉を覚えていない・索引がまだ無い古いデータのケースの保険。
+ * @param {string} shopId
+ */
+function setShopId(shopId) {
+    if (!shopId || shopId.trim() === '') return false;
+    localStorage.setItem(SHOP_ID_KEY, shopId.trim());
+    return true;
+}
+
+/**
  * 保存されている店舗パスフレーズを取得
  */
 function getShopPassphrase() {
@@ -220,8 +327,94 @@ function renderShopIdSettings() {
                     したがって、このパスフレーズを安全に保つことで、自動的に他店舗のデータアクセスを防ぎます。
                 </p>
             </div>
+
+            <hr style="margin: 16px 0; border: none; border-top: 1px solid #c5cae9;">
+
+            <div style="margin-bottom: 12px;">
+                <h4 style="color: #1a237e; margin: 0 0 6px 0;">🔁 店舗IDの復元（キャッシュ削除等でデータが見つからない時）</h4>
+
+                <p style="font-size: 12px; color: #555; margin: 0 0 6px 0;">
+                    ① 以前この店舗で使っていた「合言葉」を入力して復元:
+                </p>
+                <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 10px;">
+                    <input type="password" id="shop-restore-passphrase-input" placeholder="以前の合言葉" style="flex: 1; padding: 8px; border: 1px solid #ccc; border-radius: 4px;">
+                    <button onclick="restoreShopIdFromPassphraseUI()" style="flex: 0; padding: 8px 12px; background: #ff9800; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; white-space: nowrap;">合言葉で復元</button>
+                </div>
+
+                <p style="font-size: 12px; color: #555; margin: 0 0 6px 0;">
+                    ② 合言葉が分からない場合は、事前にコピーしておいた店舗IDを直接貼り付け:
+                </p>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <input type="text" id="shop-restore-id-input" placeholder="shop_xxxxx_xxxxx_x" style="flex: 1; padding: 8px; border: 1px solid #ccc; border-radius: 4px; font-family: monospace; font-size: 12px;">
+                    <button onclick="restoreShopIdManualUI()" style="flex: 0; padding: 8px 12px; background: #607d8b; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; white-space: nowrap;">IDで復元</button>
+                </div>
+            </div>
         </div>
     `;
+}
+
+/**
+ * 「合言葉で復元」ボタンのハンドラ
+ */
+async function restoreShopIdFromPassphraseUI() {
+    const input = document.getElementById('shop-restore-passphrase-input');
+    const passphrase = input ? input.value.trim() : '';
+    if (!passphrase) {
+        if (typeof playSound === 'function') playSound('error');
+        return;
+    }
+
+    const ok = await restoreShopIdFromPassphrase(passphrase);
+    if (ok) {
+        if (typeof showCustomConfirm === 'function') {
+            showCustomConfirm(
+                '店舗IDを復元しました。ページを再読み込みしてデータを取得します。',
+                'てんぽ を ふっきゅう し まし た',
+                () => { location.reload(); },
+                false
+            );
+        } else {
+            location.reload();
+        }
+    } else {
+        if (typeof playSound === 'function') playSound('error');
+        if (typeof showCustomConfirm === 'function') {
+            showCustomConfirm(
+                'この合言葉に一致する店舗が見つかりませんでした。合言葉が違うか、この合言葉ではまだ一度もクラウド保存を行ったことがない可能性があります。',
+                'みつかり ませ ん でし た',
+                () => {},
+                false
+            );
+        }
+    }
+}
+
+/**
+ * 「IDで復元」ボタンのハンドラ
+ */
+function restoreShopIdManualUI() {
+    const input = document.getElementById('shop-restore-id-input');
+    const shopId = input ? input.value.trim() : '';
+    if (!shopId) {
+        if (typeof playSound === 'function') playSound('error');
+        return;
+    }
+
+    if (typeof showCustomConfirm === 'function') {
+        showCustomConfirm(
+            `店舗IDを「${shopId}」に設定し直します。よろしいですか？（ページが再読み込みされます）`,
+            'てんぽあいでぃー を せってい し なおし ます',
+            (res) => {
+                if (!res) return;
+                setShopId(shopId);
+                location.reload();
+            },
+            true
+        );
+    } else {
+        setShopId(shopId);
+        location.reload();
+    }
 }
 
 function togglePassphraseVisibility(inputId) {
@@ -230,7 +423,7 @@ function togglePassphraseVisibility(inputId) {
     input.type = (input.type === 'password') ? 'text' : 'password';
 }
 
-function saveShopPassphrase() {
+async function saveShopPassphrase() {
     const input = document.getElementById('shop-passphrase-input');
     const passphrase = input ? input.value.trim() : '';
     if (!passphrase) {
@@ -240,8 +433,17 @@ function saveShopPassphrase() {
         }
         return;
     }
+    // クラウド側の検証（更新の場合の「証明」）には、上書きされる前の現在の合言葉が必要
+    const previousPassphrase = getShopPassphrase();
+
     setShopPassphrase(passphrase);
     localStorage.setItem('pos_shop_passphrase', passphrase);
+
+    const synced = await syncShopPassphraseToFirestore(previousPassphrase);
+    if (!synced) {
+        console.warn('合言葉はローカルには保存されましたが、クラウド側との同期は失敗しました。オンラインになった時に再度「保存」を押してください。');
+    }
+
     if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
     if (typeof playSound === 'function') playSound('success');
     if (typeof speak === 'function') speak('ぱすふれーず を ほぞん し まし た');
@@ -270,4 +472,21 @@ document.addEventListener('DOMContentLoaded', () => {
     if (container) {
         renderShopIdSettings();
     }
+
+    // 既にローカルに合言葉が設定済みなのに、まだFirestore側に登録されていない
+    // （＝このセキュリティ強化より前から使っていた店舗）場合に備え、
+    // 起動時にも一度だけ同期を試みる（失敗しても静かに諦める。次回保存時に再試行される）。
+    (function trySyncExistingPassphrase() {
+        function attempt() {
+            if (typeof firebase === 'undefined' || typeof firebase.firestore !== 'function') {
+                setTimeout(attempt, 1000);
+                return;
+            }
+            const passphrase = getShopPassphrase();
+            if (passphrase) {
+                syncShopPassphraseToFirestore(passphrase).catch(() => {});
+            }
+        }
+        setTimeout(attempt, 2000);
+    })();
 });

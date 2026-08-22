@@ -78,20 +78,55 @@ function populateGenreSelects() {
 // ------------------------------------------
 // 顧客管理系
 // ------------------------------------------
-function renderCustomers() {
+
+// 個人情報の表示制限：
+// 会員管理画面の一覧は、店内の誰でものぞき込める場所に表示されがちなため、
+// 電話番号・住所・生年月日は初期状態ではマスク（●●●で伏字）表示にしておき、
+// 必要な時だけ店員がボタンを押して該当の会員だけ表示できるようにする。
+// 表示中の会員のバーコードだけをこのSetで覚えておく（メモリ上のみ・保存しない）。
+// 一覧を開き直したり、データが更新されたりしたら自動的にまた全件マスクに戻る。
+let revealedCustomerBarcodes = new Set();
+
+// 元の文字の「形」（スペースやハイフン・スラッシュの位置）だけ残して、
+// それ以外の文字（数字・かな漢字など）をすべて伏字にする。
+// 例: "090-1234-5678" → "●●●-●●●●-●●●●" / "1990-01-01" → "●●●●-●●-●●"
+function maskSensitiveText(str) {
+    if (str === undefined || str === null || str === '') return '-';
+    return String(str).replace(/[^\s\-\/]/g, '●');
+}
+
+function toggleCustomerInfoReveal(barcode) {
+    if (typeof playSound === 'function') playSound('click');
+    if (revealedCustomerBarcodes.has(barcode)) {
+        revealedCustomerBarcodes.delete(barcode);
+    } else {
+        revealedCustomerBarcodes.add(barcode);
+        if (typeof speak === 'function') speak("こじんじょうほう を ひょうじ し ます");
+    }
+    renderCustomers(true);
+}
+
+// preserveReveal: true の場合のみ、現在表示中(revealedCustomerBarcodes)の状態を維持する。
+// それ以外（画面を開いた直後・会員の追加編集・データ同期など）は必ずマスク状態に戻す。
+function renderCustomers(preserveReveal) {
+    if (!preserveReveal) revealedCustomerBarcodes.clear();
+
     const tbody = document.getElementById('customer-tbody');
     if (!tbody || typeof customers === 'undefined') return;
     tbody.innerHTML = '';
     customers.forEach((cust, index) => {
         const currentAge = typeof calculateAge === 'function' ? calculateAge(cust) : '-';
-        const bdayText = cust.birthday ? `<br><small style="color:#666;">生年月日: ${cust.birthday}</small>` : '';
-        
-        let displayName = cust.name || `${cust.lastName || ''} ${cust.firstName || ''}`;
+        const isRevealed = revealedCustomerBarcodes.has(cust.barcode);
+
+        const birthdayDisplay = cust.birthday ? (isRevealed ? escapeHtml(cust.birthday) : maskSensitiveText(cust.birthday)) : '';
+        const bdayText = cust.birthday ? `<br><small style="color:#666;">生年月日: ${birthdayDisplay}</small>` : '';
+
+        let displayName = escapeHtml(cust.name || `${cust.lastName || ''} ${cust.firstName || ''}`);
         let displayKana = '';
         if (cust.lastKana || cust.firstKana) {
-            displayKana = `<br><small style="color:#666;">フリガナ: ${cust.lastKana || ''} ${cust.firstKana || ''}</small>`;
+            displayKana = `<br><small style="color:#666;">フリガナ: ${escapeHtml(cust.lastKana || '')} ${escapeHtml(cust.firstKana || '')}</small>`;
         } else if (cust.kana) {
-            displayKana = `<br><small style="color:#666;">フリガナ: ${cust.kana}</small>`;
+            displayKana = `<br><small style="color:#666;">フリガナ: ${escapeHtml(cust.kana)}</small>`;
         }
 
         const exp = typeof checkPointExpiry === 'function' ? checkPointExpiry(cust) : { expired: false, expiringSoon: false };
@@ -113,16 +148,22 @@ function renderCustomers() {
             `;
         }
 
+        const phoneDisplay = isRevealed ? escapeHtml(cust.phone || '-') : maskSensitiveText(cust.phone);
+        const addressDisplay = isRevealed ? escapeHtml(cust.address || '-') : maskSensitiveText(cust.address);
+        const revealBtnLabel = isRevealed ? '🙈 隠す' : '👁 個人情報を表示';
+        const safeBarcodeForJs = String(cust.barcode).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+
         const tr = document.createElement('tr');
         tr.innerHTML = `
-            <td style="font-family:monospace; font-weight:bold; color:#0066cc;">${cust.barcode}</td>
+            <td style="font-family:monospace; font-weight:bold; color:#0066cc;">${escapeHtml(cust.barcode)}</td>
             <td><b>${displayName}</b> (${currentAge}歳)${displayKana}${bdayText}</td>
             <td style="text-align:center;">${rankCellHtml}</td>
             <td style="color:#d81b60; font-weight:bold;">${cust.points} pt ${expText}</td>
-            <td style="font-size:12px;">📞 ${cust.phone || '-'}<br>🏠 ${cust.address || '-'}</td>
+            <td style="font-size:12px;">📞 ${phoneDisplay}<br>🏠 ${addressDisplay}</td>
             <td>
                 <button class="select-btn" style="background:#ff9800; margin-right:4px;" onclick="editCustomer(${index})">変更</button>
-                <button class="del-btn" onclick="withdrawCustomer(${index})">退会</button>
+                <button class="del-btn" style="margin-right:4px;" onclick="withdrawCustomer(${index})">退会</button>
+                <button style="background:#607d8b; color:#fff; border:none; border-radius:4px; padding:6px 10px; cursor:pointer; font-size:12px;" onclick="toggleCustomerInfoReveal('${safeBarcodeForJs}')">${revealBtnLabel}</button>
             </td>
         `;
         tbody.appendChild(tr);

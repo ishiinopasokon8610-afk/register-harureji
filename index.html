@@ -2,6 +2,61 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
+
+    <!-- ==========================================
+         ドメインロック（domain-lock.js の中身をそのままインライン埋め込み）
+         許可していないURLで開かれた場合、正規URLへ自動でリダイレクトする。
+         別ファイルとして丸ごと差し替えられるリスクを減らすため、
+         外部読み込み（<script src="domain-lock.js">）ではなくここに直接埋め込んでいる。
+         設定は下の ALLOWED_HOSTNAMES / CANONICAL_URL を書き換えるだけでよい。
+         ========================================== -->
+    <script>
+    (function () {
+        // ↓↓↓ ここに、本番で使う正式なドメインを入れてください（例: 'example.com'） ↓↓↓
+        const ALLOWED_HOSTNAMES = [
+            'ishiinopasokon8610-afk.github.io',
+            'localhost',
+            '127.0.0.1'
+            // ↑ localhost/127.0.0.1 はローカルでの動作確認用。本番公開が全て終わったら削除してよい
+        ];
+
+        // 許可されていないドメインで開かれた時に、飛ばしたい「本物のURL」
+        const CANONICAL_URL = 'https://ishiinopasokon8610-afk.github.io/register-harureji/';
+
+        const currentHost = window.location.hostname;
+        // file:// でローカルのHTMLファイルを直接開いた場合はhostnameが空文字になるため、
+        // ここでも通常通り読み込みを続けさせる（USBメモリ配布・手元での動作確認などを想定）
+        const isFileProtocol = window.location.protocol === 'file:';
+        const isAllowed = isFileProtocol || ALLOWED_HOSTNAMES.indexOf(currentHost) !== -1;
+
+        if (isAllowed) return; // 正規のURL、またはローカルファイル → 何もせず通常通り読み込みを続ける
+
+        // 1. これから読み込まれる予定の他のCSS/JSファイルを止める
+        //    （document.write で新しいHTMLを丸ごと上書きすることで、
+        //      これ以降に書かれている <link>/<script> タグの読み込み自体を止める。
+        //      redirect中の一瞬、コピーサイトの中身が見えてしまわないようにするため）
+        document.open();
+        document.write(
+            '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>移動しています…</title>' +
+            '<style>body{font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#222;color:#eee;text-align:center;}</style>' +
+            '</head><body><div>正しいページに移動しています…</div></body></html>'
+        );
+        document.close();
+
+        // 2. 本物のURLへ移動する（location.replace()なので履歴に残らない）
+        try {
+            const canonicalHost = new URL(CANONICAL_URL).hostname;
+            if (ALLOWED_HOSTNAMES.indexOf(canonicalHost) === -1) {
+                console.warn('domain-lock: CANONICAL_URLのホスト名がALLOWED_HOSTNAMESに含まれていません。設定を見直してください。');
+            }
+        } catch (e) {}
+        window.location.replace(CANONICAL_URL);
+
+        // 3. 後続のスクリプトが動いてしまわないよう、例外を投げて処理を止める
+        throw new Error('domain-lock: 許可されていないドメインのため ' + CANONICAL_URL + ' へ移動します (' + currentHost + ')');
+    })();
+    </script>
+
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>haruレジ</title>
     <!-- ウェブアイコン（Favicon）の設定 -->
@@ -125,6 +180,7 @@
     <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-storage-compat.js"></script>
     <script>
       // Firebaseコンソール「プロジェクトの設定 > マイアプリ」からコピーした設定
       const firebaseConfig = {
@@ -208,6 +264,9 @@
     <div id="home-screen" class="screen active">
         <!-- 店長認証 / 店長ロックボタン（右上に常時表示） -->
         <button id="manager-lock-btn" class="manager-lock-btn" onclick="handleManagerBtnClick()">店長認証</button>
+
+        <!-- 現在ログイン中の担当者表示（simple-auth-system.js が中身を描画する） -->
+        <div id="auth-status-display" style="position: absolute; top: 8px; left: 8px; z-index: 5;"></div>
 
         <div class="home-header">
             <!-- 文字を消してロゴ画像を表示するように変更 -->
@@ -353,6 +412,19 @@
     </div>
 
     <!-- 店長認証モーダル -->
+    <!-- 担当者ログイン（起動時に必ず通す。店員バーコードでログインするまで他の操作は一切できない） -->
+    <div id="staff-login-modal" class="modal-overlay" style="z-index: 2000;">
+        <div class="modal-box slide-up-modal medium">
+            <h3 class="modal-title navy">担当者ログイン</h3>
+            <p class="modal-desc">担当者管理に登録されているご自身のバーコードをスキャンするか、入力してください。</p>
+            <input type="text" id="staff-login-barcode-input" placeholder="担当者バーコード" class="modal-input auth" autocomplete="off">
+            <div id="staff-login-error" class="error-msg">バーコードが一致しません</div>
+            <div class="modal-btn-group">
+                <button onclick="attemptStaffLogin()" class="modal-btn primary">ログイン</button>
+            </div>
+        </div>
+    </div>
+
     <div id="manager-auth-modal" class="modal-overlay">
         <div class="modal-box slide-up-modal medium">
             <h3 class="modal-title purple">店長認証</h3>
@@ -559,7 +631,7 @@
             </div>
 
             <div style="border-top:1px dashed #ccc; padding-top:10px; text-align:left;">
-                <label style="font-weight:bold;"><input type="checkbox" id="new-disc-one-time"> ④ 使い切りバーコードにする（会計成立と同時に自動削除・任意）</label>
+                <label style="font-weight:bold;"><input type="checkbox" id="new-disc-one-time"> ④ 使い切りバーコードにする（会計成立後は「使用済み」としてアーカイブされ、一覧から自動的には消えません・任意）</label>
             </div>
 
             <button onclick="addDiscountBarcode()" style="align-self:flex-start; padding:10px 30px;">この内容でバーコードを登録</button>
@@ -577,6 +649,25 @@
             </thead>
             <tbody id="discount-tbody"></tbody>
         </table>
+
+        <!-- 使い切りバーコードが使用された後の「使用済み（アーカイブ）」一覧。
+             返金・取引取消が発生した際に内容確認・復元ができるよう、削除はせずここに残す。 -->
+        <div id="discount-archive-section" style="display:none; margin-top:24px;">
+            <h3 style="margin-bottom:6px; color:#666;">📦 使用済み（アーカイブ）バーコード</h3>
+            <p class="modal-desc" style="margin:0 0 10px 2px;">使い切りバーコードが会計で使用されると、削除されずここに移動します。返金・取引取消の際は内容を確認のうえ「復元」すると再度使えるようになります。</p>
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>バーコード</th>
+                        <th>割引名</th>
+                        <th>内容</th>
+                        <th>使用日時</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody id="discount-archive-tbody"></tbody>
+            </table>
+        </div>
     </div>
 
     <!-- 割引バーコード 編集モーダル -->
@@ -782,6 +873,9 @@
             <h2 class="top-bar-title">データ管理・ロゴ設定</h2>
         </div>
 
+        <!-- 店舗ID・合言葉の設定（shop-id-system.js が中身を描画する） -->
+        <div id="shop-id-settings-container"></div>
+
         <!-- 追加：ロゴ画像のアップロード設定ブロック -->
         <div class="migration-block" style="background:#e3f2fd; border:2px solid #90caf9; padding:15px; border-radius:6px; margin-bottom:15px;">
             <h3 class="migration-title" style="color:#1565c0;">📸 ホーム画面・レシート用ロゴの登録</h3>
@@ -795,12 +889,16 @@
         <div class="migration-block" style="background:#e8f5e9; border:2px solid #81c784; padding:15px; border-radius:6px; margin-bottom:15px;">
             <h3 class="migration-title" style="color:#2e7d32;">💾 データのバックアップ（キャッシュ・Cookie削除対策）</h3>
             <p class="migration-desc">
-                ブラウザのデータ一括削除や、iOS/Safari等の自動クリーンアップ機能（長期間未操作の場合）によって、IndexedDBのデータが消去される場合があります。万が一に備え、こまめなバックアップを推奨します
+                クラウドから復旧することも可能ですが、万が一に備えてGoogle Apiに保存することをお勧めします。
             </p>
             <button class="btn-migration" style="background:#2e7d32; color:white; padding:8px 12px; border:none; border-radius:4px; font-weight:bold; cursor:pointer; margin-right:8px;" onclick="downloadDataBackupFile()">📥 バックアップファイルを保存する</button>
             <button class="btn-migration" style="background:#1565c0; color:white; padding:8px 12px; border:none; border-radius:4px; font-weight:bold; cursor:pointer; margin-right:8px;" onclick="document.getElementById('backup-restore-file-input').click()">📂 バックアップファイルから復元する</button>
             <button class="btn-migration" style="background:#00838f; color:white; padding:8px 12px; border:none; border-radius:4px; font-weight:bold; cursor:pointer; margin-right:8px;" onclick="restoreFromCloudBackupManual()">☁️ クラウドから復元する</button>
             <button class="btn-migration" style="background:#6d4c41; color:white; padding:8px 12px; border:none; border-radius:4px; font-weight:bold; cursor:pointer;" onclick="testCloudBackupConnection()">🔎 クラウド接続テスト</button>
+            <br><br>
+            <button class="btn-migration" style="background:#0f9d58; color:white; padding:8px 12px; border:none; border-radius:4px; font-weight:bold; cursor:pointer; margin-right:8px;" onclick="connectGoogleDrive()">📗 Google Driveと連携</button>
+            <button class="btn-migration" style="background:#0f9d58; color:white; padding:8px 12px; border:none; border-radius:4px; font-weight:bold; cursor:pointer; margin-right:8px;" onclick="backupToGoogleDriveNow()">📤 今すぐDriveにバックアップ</button>
+            <button class="btn-migration" style="background:#0f9d58; color:white; padding:8px 12px; border:none; border-radius:4px; font-weight:bold; cursor:pointer;" onclick="restoreFromGoogleDrive()">📥 Driveから復元</button>
             <input type="file" id="backup-restore-file-input" accept="application/json,.json" style="display:none;">
             <p class="migration-desc" style="margin-top:10px; font-size:12px; color:#555;">
                 📁「レシート保存フォルダ」を設定済みの場合は、そのフォルダにも自動でバックアップ（haru-pos-backup.json）が更新され続けます。クラウドにも数分おきに自動でバックアップされており（画像は対象外）、「☁️ クラウドから復元する」ボタンでいつでも直近のクラウドバックアップから復元できます。
@@ -1183,16 +1281,17 @@
 
             <div style="flex: 1; min-width: 300px; background: #fff3e0; padding: 20px; border-radius: 8px; border: 1px solid #ffcc80;">
                 <h3 style="margin-top:0; color:#e65100;">レジ内の現金を数えて入力</h3>
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
-                    <div><label>1万円札:</label> <input type="number" id="end-10000" class="end-cash-input modal-input" oninput="calculateEndCash()" placeholder="枚"></div>
-                    <div><label>5千円札:</label> <input type="number" id="end-5000" class="end-cash-input modal-input" oninput="calculateEndCash()" placeholder="枚"></div>
-                    <div><label>千円札:</label> <input type="number" id="end-1000" class="end-cash-input modal-input" oninput="calculateEndCash()" placeholder="枚"></div>
-                    <div><label>500円玉:</label> <input type="number" id="end-500" class="end-cash-input modal-input" oninput="calculateEndCash()" placeholder="枚"></div>
-                    <div><label>100円玉:</label> <input type="number" id="end-100" class="end-cash-input modal-input" oninput="calculateEndCash()" placeholder="枚"></div>
-                    <div><label>50円玉:</label> <input type="number" id="end-50" class="end-cash-input modal-input" oninput="calculateEndCash()" placeholder="枚"></div>
-                    <div><label>10円玉:</label> <input type="number" id="end-10" class="end-cash-input modal-input" oninput="calculateEndCash()" placeholder="枚"></div>
-                    <div><label>5円玉:</label> <input type="number" id="end-5" class="end-cash-input modal-input" oninput="calculateEndCash()" placeholder="枚"></div>
-                    <div><label>1円玉:</label> <input type="number" id="end-1" class="end-cash-input modal-input" oninput="calculateEndCash()" placeholder="枚"></div>
+                <p style="font-size: 12px; color: #888; margin: -8px 0 12px 0;">※金額ではなく「枚数」を入力してください。金額は自動計算されます。</p>
+                <div class="cash-count-grid">
+                    <div class="cash-count-row"><label>1万円札:</label> <input type="number" min="0" id="end-10000" class="end-cash-input modal-input" oninput="calculateEndCash()" placeholder="枚数"> <span class="cash-row-subtotal" id="end-10000-sub">¥0</span></div>
+                    <div class="cash-count-row"><label>5千円札:</label> <input type="number" min="0" id="end-5000" class="end-cash-input modal-input" oninput="calculateEndCash()" placeholder="枚数"> <span class="cash-row-subtotal" id="end-5000-sub">¥0</span></div>
+                    <div class="cash-count-row"><label>千円札:</label> <input type="number" min="0" id="end-1000" class="end-cash-input modal-input" oninput="calculateEndCash()" placeholder="枚数"> <span class="cash-row-subtotal" id="end-1000-sub">¥0</span></div>
+                    <div class="cash-count-row"><label>500円玉:</label> <input type="number" min="0" id="end-500" class="end-cash-input modal-input" oninput="calculateEndCash()" placeholder="枚数"> <span class="cash-row-subtotal" id="end-500-sub">¥0</span></div>
+                    <div class="cash-count-row"><label>100円玉:</label> <input type="number" min="0" id="end-100" class="end-cash-input modal-input" oninput="calculateEndCash()" placeholder="枚数"> <span class="cash-row-subtotal" id="end-100-sub">¥0</span></div>
+                    <div class="cash-count-row"><label>50円玉:</label> <input type="number" min="0" id="end-50" class="end-cash-input modal-input" oninput="calculateEndCash()" placeholder="枚数"> <span class="cash-row-subtotal" id="end-50-sub">¥0</span></div>
+                    <div class="cash-count-row"><label>10円玉:</label> <input type="number" min="0" id="end-10" class="end-cash-input modal-input" oninput="calculateEndCash()" placeholder="枚数"> <span class="cash-row-subtotal" id="end-10-sub">¥0</span></div>
+                    <div class="cash-count-row"><label>5円玉:</label> <input type="number" min="0" id="end-5" class="end-cash-input modal-input" oninput="calculateEndCash()" placeholder="枚数"> <span class="cash-row-subtotal" id="end-5-sub">¥0</span></div>
+                    <div class="cash-count-row"><label>1円玉:</label> <input type="number" min="0" id="end-1" class="end-cash-input modal-input" oninput="calculateEndCash()" placeholder="枚数"> <span class="cash-row-subtotal" id="end-1-sub">¥0</span></div>
                 </div>
                 
                 <h4 style="margin: 20px 0 5px 0;">入力合計額: <span id="end-total-display" style="font-size: 24px; color:#d84315;">¥0</span></h4>
@@ -1201,7 +1300,7 @@
                 </div>
 
                 <button id="btn-close-business" onclick="closeBusiness()" disabled style="margin-top: 20px; width: 100%; padding: 15px; font-size: 18px; font-weight: bold; background: #d32f2f; color: white; border: none; border-radius: 6px; cursor: pointer;">本日の業務を終了（ログアウト）</button>
-                <p style="font-size: 12px; color: #d32f2f; text-align: center; margin-top: 5px;">※過不足が0円になるとボタンが押せます</p>
+                <p style="font-size: 12px; color: #888; text-align: center; margin-top: 5px;">※過不足が0円ならそのまま終了できます。過不足がある場合は店長認証（店長バーコード）で終了できます。</p>
             </div>
         </div>
     </div>
@@ -1209,17 +1308,17 @@
     <div id="business-start-modal" class="modal-overlay">
         <div class="modal-box large" style="max-width: 500px;">
             <h3 class="modal-title" style="color: #c2185b;">🔄 業務再開 (準備金の入力)</h3>
-            <p class="modal-desc">レジ内に最初に入れておくお金（釣銭準備金）の枚数を入力してください。</p>
-            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; text-align: left;">
-                <div><label style="font-size:12px;">1万円</label><input type="number" id="start-10000" class="start-cash-input modal-input small" oninput="calculateStartCash()"></div>
-                <div><label style="font-size:12px;">5千円</label><input type="number" id="start-5000" class="start-cash-input modal-input small" oninput="calculateStartCash()"></div>
-                <div><label style="font-size:12px;">千円</label><input type="number" id="start-1000" class="start-cash-input modal-input small" oninput="calculateStartCash()"></div>
-                <div><label style="font-size:12px;">500円</label><input type="number" id="start-500" class="start-cash-input modal-input small" oninput="calculateStartCash()"></div>
-                <div><label style="font-size:12px;">100円</label><input type="number" id="start-100" class="start-cash-input modal-input small" oninput="calculateStartCash()"></div>
-                <div><label style="font-size:12px;">50円</label><input type="number" id="start-50" class="start-cash-input modal-input small" oninput="calculateStartCash()"></div>
-                <div><label style="font-size:12px;">10円</label><input type="number" id="start-10" class="start-cash-input modal-input small" oninput="calculateStartCash()"></div>
-                <div><label style="font-size:12px;">5円</label><input type="number" id="start-5" class="start-cash-input modal-input small" oninput="calculateStartCash()"></div>
-                <div><label style="font-size:12px;">1円</label><input type="number" id="start-1" class="start-cash-input modal-input small" oninput="calculateStartCash()"></div>
+            <p class="modal-desc">レジ内に最初に入れておくお金（釣銭準備金）の「枚数」を入力してください。金額は自動で計算されます。</p>
+            <div class="cash-count-grid cash-count-grid-3col">
+                <div class="cash-count-row small"><label>1万円</label><input type="number" min="0" id="start-10000" class="start-cash-input modal-input small" oninput="calculateStartCash()" placeholder="枚数"><span class="cash-row-subtotal small" id="start-10000-sub">¥0</span></div>
+                <div class="cash-count-row small"><label>5千円</label><input type="number" min="0" id="start-5000" class="start-cash-input modal-input small" oninput="calculateStartCash()" placeholder="枚数"><span class="cash-row-subtotal small" id="start-5000-sub">¥0</span></div>
+                <div class="cash-count-row small"><label>千円</label><input type="number" min="0" id="start-1000" class="start-cash-input modal-input small" oninput="calculateStartCash()" placeholder="枚数"><span class="cash-row-subtotal small" id="start-1000-sub">¥0</span></div>
+                <div class="cash-count-row small"><label>500円</label><input type="number" min="0" id="start-500" class="start-cash-input modal-input small" oninput="calculateStartCash()" placeholder="枚数"><span class="cash-row-subtotal small" id="start-500-sub">¥0</span></div>
+                <div class="cash-count-row small"><label>100円</label><input type="number" min="0" id="start-100" class="start-cash-input modal-input small" oninput="calculateStartCash()" placeholder="枚数"><span class="cash-row-subtotal small" id="start-100-sub">¥0</span></div>
+                <div class="cash-count-row small"><label>50円</label><input type="number" min="0" id="start-50" class="start-cash-input modal-input small" oninput="calculateStartCash()" placeholder="枚数"><span class="cash-row-subtotal small" id="start-50-sub">¥0</span></div>
+                <div class="cash-count-row small"><label>10円</label><input type="number" min="0" id="start-10" class="start-cash-input modal-input small" oninput="calculateStartCash()" placeholder="枚数"><span class="cash-row-subtotal small" id="start-10-sub">¥0</span></div>
+                <div class="cash-count-row small"><label>5円</label><input type="number" min="0" id="start-5" class="start-cash-input modal-input small" oninput="calculateStartCash()" placeholder="枚数"><span class="cash-row-subtotal small" id="start-5-sub">¥0</span></div>
+                <div class="cash-count-row small"><label>1円</label><input type="number" min="0" id="start-1" class="start-cash-input modal-input small" oninput="calculateStartCash()" placeholder="枚数"><span class="cash-row-subtotal small" id="start-1-sub">¥0</span></div>
             </div>
             <div style="margin: 15px 0; font-size: 20px; font-weight: bold; text-align: right;">
                 準備金合計: <span id="start-total-display" style="color:#c2185b;">¥0</span>
@@ -1370,24 +1469,29 @@
     <script src="state.js"></script>
     <script src="member-rank.js"></script>
     <script src="utils.js"></script>
+    <script src="shop-id-system.js"></script>
+    <script src="simple-auth-system.js"></script>
     <script src="auth-system.js"></script>
     <script src="firebase-manager-auth.js"></script>
+    <script src="firebase-image-storage.js"></script>
 <script src="master-mgmt.js"></script>
     <script src="register.js"></script>
     <script src="ui.js"></script>
+    <script src="staff-login-gate.js"></script>
     <script src="checkout-image.js"></script>
     <script src="keyboarddown.js"></script>
     <script src="refund.js"></script>
     <script src="local-backup.js"></script>
     <script src="firebase-cloud-backup.js"></script>
+    <script src="google-drive-backup.js"></script>
     <script src="sales-mgmt.js"></script>
     <script src="discount-system.js"></script>
     <script src="analytics-system.js"></script>
     <script src="language-system.js"></script>
     <script src="sync-system.js"></script>
     <script src="register-info-system.js"></script>
+    <script src="pagination-system.js"></script>
     <script src="notifications-system.js"></script>
-    <script src="shop-id-system.js"></script>
-    <script src="simple-auth-system.js"></script>
+    <script src="copy-deterrence.js"></script>
 </body>
 </html>

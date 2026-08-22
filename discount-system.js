@@ -44,29 +44,75 @@ function renderDiscounts() {
     renderStagedProductRows('edit');
 
     const tbody = document.getElementById('discount-tbody');
+    if (tbody) {
+        tbody.innerHTML = '';
+
+        // 通常一覧にはアーカイブ済み（使用済み）のものは表示しない。
+        // index は discountBarcodes 配列全体でのインデックスをそのまま使う
+        // （他の関数がこのindexを使って配列を操作するため）。
+        const activeList = discountBarcodes
+            .map((disc, index) => ({ disc, index }))
+            .filter(({ disc }) => !disc.archived);
+
+        if (activeList.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; color:#999;">まだ自動化バーコード作成が登録されていません</td></tr>';
+        } else {
+            activeList.forEach(({ disc, index }) => {
+                const contentText = getDiscountContentText(disc);
+                const enabled = disc.enabled !== false;
+                const statusBtnStyle = enabled ? 'background:#2e7d32;' : 'background:#9e9e9e;';
+                const statusLabel = enabled ? '✅ 有効' : '⛔ 無効';
+
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td style="font-family:monospace; font-weight:bold; color:#0066cc;">${disc.barcode}</td>
+                    <td><b>🏷️ ${disc.name}</b></td>
+                    <td style="line-height:1.6;">${contentText}</td>
+                    <td><button class="select-btn" style="${statusBtnStyle}" onclick="toggleDiscountEnabled(${index})">${statusLabel}</button></td>
+                    <td>
+                        <button class="select-btn" onclick="editDiscountBarcode(${index})" style="background:#ff9800; margin-right:6px;">変更</button>
+                        <button class="del-btn" onclick="deleteDiscountBarcode(${index})">削除</button>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+    }
+
+    renderArchivedDiscounts();
+}
+
+// 「使い切り」で使用済みになったバーコードの一覧を表示する（削除はせずアーカイブとして残す）。
+// 返金・取引取消が発生した際に内容を確認したり、「復元」して再度使えるようにできる。
+function renderArchivedDiscounts() {
+    const tbody = document.getElementById('discount-archive-tbody');
+    const section = document.getElementById('discount-archive-section');
     if (!tbody) return;
     tbody.innerHTML = '';
 
-    if (discountBarcodes.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; color:#999;">まだ自動化バーコード作成が登録されていません</td></tr>';
-        return;
-    }
+    const archivedList = discountBarcodes
+        .map((disc, index) => ({ disc, index }))
+        .filter(({ disc }) => disc.archived);
 
-    discountBarcodes.forEach((disc, index) => {
+    if (section) section.style.display = archivedList.length > 0 ? 'block' : 'none';
+    if (archivedList.length === 0) return;
+
+    // 新しく使用済みになったものが上に来るように表示する
+    archivedList.sort((a, b) => (b.disc.archivedAt || 0) - (a.disc.archivedAt || 0));
+
+    archivedList.forEach(({ disc, index }) => {
         const contentText = getDiscountContentText(disc);
-        const enabled = disc.enabled !== false;
-        const statusBtnStyle = enabled ? 'background:#2e7d32;' : 'background:#9e9e9e;';
-        const statusLabel = enabled ? '✅ 有効' : '⛔ 無効';
+        const archivedAtLabel = disc.archivedAt ? new Date(disc.archivedAt).toLocaleString('ja-JP') : '不明';
 
         const tr = document.createElement('tr');
         tr.innerHTML = `
-            <td style="font-family:monospace; font-weight:bold; color:#0066cc;">${disc.barcode}</td>
+            <td style="font-family:monospace; font-weight:bold; color:#888;">${disc.barcode}</td>
             <td><b>🏷️ ${disc.name}</b></td>
             <td style="line-height:1.6;">${contentText}</td>
-            <td><button class="select-btn" style="${statusBtnStyle}" onclick="toggleDiscountEnabled(${index})">${statusLabel}</button></td>
+            <td style="font-size:12px; color:#888; white-space:nowrap;">${archivedAtLabel}</td>
             <td>
-                <button class="select-btn" onclick="editDiscountBarcode(${index})" style="background:#ff9800; margin-right:6px;">変更</button>
-                <button class="del-btn" onclick="deleteDiscountBarcode(${index})">削除</button>
+                <button class="select-btn" onclick="restoreDiscountBarcode(${index})" style="background:#1565c0; margin-right:6px;">↩️ 復元</button>
+                <button class="del-btn" onclick="permanentlyDeleteDiscountBarcode(${index})">完全に削除</button>
             </td>
         `;
         tbody.appendChild(tr);
@@ -98,7 +144,7 @@ function getDiscountContentText(disc) {
     }
 
     if (disc.oneTime) {
-        parts.push(`♻️ 使い切り（会計成立と同時に自動削除）`);
+        parts.push(`♻️ 使い切り（会計成立後は使用済みとしてアーカイブされます）`);
     }
 
     if (parts.length === 0) return '-';
@@ -565,14 +611,78 @@ function applyDiscountBarcode(disc) {
 }
 
 // お会計が成立したタイミングで register.js から呼び出す。
-// 「使い切りバーコード」として今回使用されたものを一覧から自動的に削除する。
+// 「使い切りバーコード」として今回使用されたものを一覧から完全に削除するのではなく、
+// 「使用済み（アーカイブ）」として残す。
+// ------------------------------------------
+// 【以前の問題】
+// 会計成立と同時に discountBarcodes 配列から完全に削除していたため、直後に
+// レジのトラブルやお客様都合で返金・取引取消が発生した場合、すでに登録内容
+// （バーコード番号・自動追加される商品・割引内容）が失われており、
+// 返金処理や同条件での再会計が非常に困難だった。
+// 【対応】
+// 削除する代わりに disc.archived=true / disc.archivedAt を付与し、あわせて
+// disc.enabled=false にして誤って再スキャンで使われないようにする。
+// 一覧画面では通常のバーコードとは別の「使用済み（アーカイブ）」欄に表示し、
+// 管理者はそこから内容を確認したり、「復元」して再度使えるようにしたり、
+// 不要になれば「完全に削除」することもできる。
 function cleanupOneTimeDiscountBarcodes() {
     if (usedOneTimeDiscBarcodesInTransaction.size === 0) return;
-    const toDelete = new Set(usedOneTimeDiscBarcodesInTransaction);
-    discountBarcodes = discountBarcodes.filter(d => !toDelete.has(d.barcode));
+    const toArchive = new Set(usedOneTimeDiscBarcodesInTransaction);
+    const now = Date.now();
+    discountBarcodes.forEach(d => {
+        if (toArchive.has(d.barcode)) {
+            d.archived = true;
+            d.archivedAt = now;
+            d.enabled = false; // 誤って再利用されないよう無効化
+        }
+    });
     saveDiscounts();
     if (document.getElementById('discount-tbody')) renderDiscounts();
     usedOneTimeDiscBarcodesInTransaction.clear();
+}
+
+// アーカイブ済み（使用済み）バーコードを、再び使えるように戻す
+function restoreDiscountBarcode(index) {
+    const disc = discountBarcodes[index];
+    if (!disc) return;
+    if (typeof showCustomConfirm === 'function') {
+        showCustomConfirm(
+            `使用済みバーコード「${disc.name}」を復元し、再び使えるようにしますか？`,
+            "この バーコード を ふっけん し ます か？",
+            (res) => {
+                if (!res) return;
+                disc.archived = false;
+                delete disc.archivedAt;
+                disc.enabled = true;
+                saveDiscounts();
+                if (typeof playSound === 'function') playSound('click');
+                renderDiscounts();
+                if (typeof speak === 'function') speak("ふっけん し まし た");
+            },
+            true
+        );
+    }
+}
+
+// アーカイブ済み（使用済み）バーコードを、完全に削除する（通常の削除とは別に用意）
+function permanentlyDeleteDiscountBarcode(index) {
+    const disc = discountBarcodes[index];
+    if (!disc) return;
+    if (typeof showCustomConfirm === 'function') {
+        showCustomConfirm(
+            `使用済みバーコード「${disc.name}」を完全に削除します。この操作は取り消せません。よろしいですか？`,
+            "この バーコード を かんぜん に さくじょ し ます か？",
+            (res) => {
+                if (!res) return;
+                discountBarcodes.splice(index, 1);
+                saveDiscounts();
+                if (typeof playSound === 'function') playSound('click');
+                renderDiscounts();
+                if (typeof speak === 'function') speak("さくじょ し まし た");
+            },
+            true
+        );
+    }
 }
 
 // 登録された商品を1件ずつ順番にカートへ追加していく
@@ -646,7 +756,7 @@ function applyDiscountValue(disc) {
     if (typeof fetchAndAddItem === 'function') {
         const originalFetchAndAddItem = fetchAndAddItem;
         window.fetchAndAddItem = async function(code) {
-            const disc = discountBarcodes.find(d => d.barcode === code && d.enabled !== false);
+            const disc = discountBarcodes.find(d => d.barcode === code && d.enabled !== false && !d.archived);
             if (disc) {
                 applyDiscountBarcode(disc);
                 return;

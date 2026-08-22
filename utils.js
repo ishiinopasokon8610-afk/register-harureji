@@ -191,19 +191,27 @@ function initAbly() {
             channel.subscribe('age-check-event', (message) => {
                 const data = message.data || {};
                 // 「自分自身が発生させたイベント」は必ず反応する（自分の会計フローを完了させるため）。
-                // それ以外の端末は、「客用ディスプレイ」に設定されている場合のみ反応する
-                // （そうしないと、店舗内の他のレジ端末にまで年齢確認画面が出てしまうため）。
                 const isOwnDevice = data.senderId && typeof POS_DEVICE_ID !== 'undefined' && data.senderId === POS_DEVICE_ID;
                 const isCustDisplay = typeof isCustomerDisplayDevice === 'function' && isCustomerDisplayDevice();
-                if (!isOwnDevice && !isCustDisplay) return;
 
                 if (data.action === 'start') {
+                    // 'start' は、発生元の端末自身か、「客用ディスプレイ」に設定されている端末だけが反応する
+                    // （そうしないと、店舗内の他のレジ端末にまで年齢確認画面が出てしまうため）。
+                    if (!isOwnDevice && !isCustDisplay) return;
                     pendingAgeCheckItem = data.item;
                     showAgeCheckModals();
-                } else if (data.action === 'cancel') {
-                    onAgeCheckCancel();
-                } else if (data.action === 'success') {
-                    onAgeCheckSuccess();
+                } else if (data.action === 'cancel' || data.action === 'success') {
+                    // 'success' / 'cancel' は客用端末（客が同意ボタンを押した端末）が発行するイベントのため、
+                    // 発行元は「start」を出した端末（主にレジ本体＝店員側）とは別の端末になる。
+                    // この結果を待っているのは「startを受け取って年齢確認待ち中
+                    // （pendingAgeCheckItemがセット済み）」の端末なので、そちらにも必ず届ける必要がある。
+                    // （客用ディスプレイ自身は自分の送信イベントとしてisOwnDeviceで既に反応する）
+                    if (!isOwnDevice && !pendingAgeCheckItem) return;
+                    if (data.action === 'cancel') {
+                        onAgeCheckCancel();
+                    } else {
+                        onAgeCheckSuccess();
+                    }
                 }
             });
         }

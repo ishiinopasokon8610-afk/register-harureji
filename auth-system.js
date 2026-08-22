@@ -175,6 +175,10 @@ function openManagerAuthTarget(target) {
             // 返金時のお会計履歴削除：店長認証成功後にそのまま削除を実行する
             // （画面遷移は行わない。返金モーダルはそのまま維持する）
             if (typeof finalizeRefundDeletion === 'function') finalizeRefundDeletion();
+        } else if (target === 'close-business-with-diff') {
+            // 過不足がある状態での業務終了：店長認証成功後にそのまま終了処理を継続する
+            // （画面遷移は行わない。sales-mgmt.js側の確認モーダルにそのまま続く）
+            if (typeof finalizeCloseBusinessWithDiscrepancy === 'function') finalizeCloseBusinessWithDiscrepancy();
         } else {
             showScreen('home-screen');
         }

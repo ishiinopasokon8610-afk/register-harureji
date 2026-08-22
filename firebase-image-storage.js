@@ -134,12 +134,14 @@ async function uploadShopLogo(event) {
         if (typeof speak === 'function') speak('ろご を ほぞん しました');
 
         // Cloud Storage へのアップロードを同時進行（バックグラウンド）
-        const apiKey = localStorage.getItem('pos_api_key');
-        if (apiKey) {
-            await uploadShopLogoToCloud(file, (progress) => {
-                console.log(`クラウドアップロード: ${progress.toFixed(2)}%`);
-            });
-        }
+        // 【修正】以前はここで pos_api_key（Ably=リアルタイム同期用のキーで、
+        // Firebase Cloud Storageとは無関係）が設定されている時だけアップロードしていたため、
+        // Ablyキーを使っていない店舗ではロゴがクラウドに保存されず、他端末に反映されなかった。
+        // アップロード可否はFirebase側（合言葉の設定状況・firebase.storageの有無）で
+        // uploadShopLogoToCloud() が自分で判断するので、ここでは無条件に呼び出す。
+        await uploadShopLogoToCloud(file, (progress) => {
+            console.log(`クラウドアップロード: ${progress.toFixed(2)}%`);
+        });
     };
     reader.readAsDataURL(file);
 
@@ -302,12 +304,13 @@ async function uploadCheckoutCompleteImage(event) {
         if (typeof speak === 'function') speak('かんりょう がぞう を ほぞん しました');
 
         // Cloud Storage へのアップロード
-        const apiKey = localStorage.getItem('pos_api_key');
-        if (apiKey) {
-            await uploadCheckoutCompleteImageToCloud(file, (progress) => {
-                console.log(`クラウドアップロード: ${progress.toFixed(2)}%`);
-            });
-        }
+        // 【修正】ロゴと同様、pos_api_key（Ablyキー）の有無で判断していたのを廃止。
+        // これが原因で、Ablyキーを設定していない客用ディスプレイ端末などでは
+        // クラウドURL（getShopCheckoutImageUrl()）が一度も登録されず、
+        // 客画面にお会計完了画像が表示されない不具合が起きていた。
+        await uploadCheckoutCompleteImageToCloud(file, (progress) => {
+            console.log(`クラウドアップロード: ${progress.toFixed(2)}%`);
+        });
     };
     reader.readAsDataURL(file);
 
@@ -461,9 +464,14 @@ async function initImageStorage() {
     }
 
     // 2. クラウドから最新版を非同期でフェッチ（バックグラウンド）
+    // 【修正】以前は pos_api_key（Ablyキー）が設定されている端末でしか
+    // このフェッチ自体を行っていなかった。客用ディスプレイ専用端末など、
+    // Ablyキーを設定していない端末では、他の端末がクラウドに保存した
+    // お会計完了画像・ロゴが永遠に読み込まれず、客画面に写真が
+    // 表示されない不具合の主な原因になっていた。
+    // Firebase Storageが使えるかどうかだけを条件にする。
     setTimeout(async () => {
-        const apiKey = localStorage.getItem('pos_api_key');
-        if (apiKey && firebase && firebase.storage) {
+        if (firebase && firebase.storage) {
             const cloudLogo = await loadShopLogoFromCloud();
             const cloudCheckout = await loadCheckoutImageFromCloud();
         }
