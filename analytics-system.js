@@ -144,6 +144,65 @@ function calcGenderBreakdown(historyList) {
     return { counts: countMap, labels: ANALYTICS_GENDER_LABELS, total, best };
 }
 
+// 商品別の販売数の内訳（上位10商品。値引き行は集計対象外）
+// age/gender の内訳と同じ { counts, labels, total, best } の形にそろえて、
+// 同じ棒グラフ描画（showAnalyticsBreakdown）をそのまま使えるようにする
+function calcProductBreakdown(historyList) {
+    const qtyMap = {};
+    historyList.forEach(item => {
+        if (!Array.isArray(item.cartSnapshot)) return;
+        item.cartSnapshot.forEach(line => {
+            if (!line || !line.name) return;
+            if (line.price < 0 || line.genre === '値引き/その他') return;
+            qtyMap[line.name] = (qtyMap[line.name] || 0) + (line.qty || 1);
+        });
+    });
+
+    const entries = Object.entries(qtyMap).sort((a, b) => b[1] - a[1]);
+    const top = entries.slice(0, 10);
+    const labels = top.map(([name]) => name);
+    const counts = {};
+    top.forEach(([name, qty]) => { counts[name] = qty; });
+    const total = entries.reduce((sum, [, qty]) => sum + qty, 0);
+
+    let best = null;
+    top.forEach(([name, qty]) => { if (!best || qty > best.count) best = { label: name, count: qty }; });
+
+    return { counts, labels, total, best };
+}
+
+// 日別の売上（合計金額）の内訳。期間内の日付を古い順に並べる
+function calcDailyBreakdown(historyList) {
+    const dayMap = {};
+    historyList.forEach(item => {
+        const t = item.dateISO ? new Date(item.dateISO) : (item.date ? new Date(item.date) : null);
+        if (!t || isNaN(t.getTime())) return;
+        const key = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`;
+        if (!dayMap[key]) dayMap[key] = { total: 0, count: 0, dateObj: t };
+        dayMap[key].total += (item.total || 0);
+        dayMap[key].count += 1;
+    });
+
+    const keys = Object.keys(dayMap).sort(); // YYYY-MM-DD文字列なので昇順ソートでそのまま日付順になる
+    const labels = [];
+    const counts = {};
+    const txCounts = {};
+    keys.forEach(key => {
+        const d = dayMap[key].dateObj;
+        const youbi = ['日', '月', '火', '水', '木', '金', '土'][d.getDay()];
+        const label = `${d.getMonth() + 1}/${d.getDate()}(${youbi})`;
+        labels.push(label);
+        counts[label] = dayMap[key].total;
+        txCounts[label] = dayMap[key].count;
+    });
+
+    const total = keys.reduce((sum, key) => sum + dayMap[key].total, 0);
+    let best = null;
+    labels.forEach(label => { if (!best || counts[label] > best.count) best = { label, count: counts[label] }; });
+
+    return { counts, labels, total, best, txCounts };
+}
+
 // ③ 一番売れた日（合計金額が一番高い日）
 function calcBestSellingDay(historyList) {
     const dayMap = {};
@@ -172,6 +231,8 @@ function calcBestSellingDay(historyList) {
 // 直近に描画した内訳データを、棒グラフモーダルを開く時に参照できるよう覚えておく
 let lastAgeBracketBreakdown = null;
 let lastGenderBreakdown = null;
+let lastProductBreakdown = null;
+let lastDailyBreakdown = null;
 
 function renderAnalytics() {
     // タブの見た目を切り替え
@@ -189,6 +250,8 @@ function renderAnalytics() {
         container.innerHTML = '<div style="text-align:center; color:#999; padding:40px;">この期間の会計データがありません</div>';
         lastAgeBracketBreakdown = null;
         lastGenderBreakdown = null;
+        lastProductBreakdown = null;
+        lastDailyBreakdown = null;
         return;
     }
 
@@ -196,9 +259,13 @@ function renderAnalytics() {
     const ageBreakdown = calcAgeBracketBreakdown(filtered);
     const genderBreakdown = calcGenderBreakdown(filtered);
     const bestDay = calcBestSellingDay(filtered);
+    const productBreakdown = calcProductBreakdown(filtered);
+    const dailyBreakdown = calcDailyBreakdown(filtered);
 
     lastAgeBracketBreakdown = ageBreakdown;
     lastGenderBreakdown = genderBreakdown;
+    lastProductBreakdown = productBreakdown;
+    lastDailyBreakdown = dailyBreakdown;
 
     const safeName = (s) => (typeof escapeHtml === 'function') ? escapeHtml(s) : s;
 
@@ -206,13 +273,13 @@ function renderAnalytics() {
     const bestGender = genderBreakdown.best;
 
     container.innerHTML = `
-        <div class="analytics-card">
-            <div class="analytics-card-title">🏆 一番売れた商品</div>
+        <div class="analytics-card" onclick="showAnalyticsBreakdown('product')" style="cursor:pointer;">
+            <div class="analytics-card-title">🏆 一番売れた商品 <span style="font-size:11px; color:#999; font-weight:normal;">（タップで内訳）</span></div>
             <div class="analytics-card-main">${bestProduct ? safeName(bestProduct.name) : 'データがありません'}</div>
             ${bestProduct ? `<div class="analytics-card-sub">${bestProduct.qty.toLocaleString()}個 販売</div>` : '<div class="analytics-card-sub">まだ商品明細のあるデータがありません</div>'}
         </div>
 
-        <div class="analytics-card" onclick="showDemographicBarChart('age')" style="cursor:pointer;">
+        <div class="analytics-card" onclick="showAnalyticsBreakdown('age')" style="cursor:pointer;">
             <div class="analytics-card-title">👥 一番多い年齢層 <span style="font-size:11px; color:#999; font-weight:normal;">（タップで内訳）</span></div>
             <div class="analytics-card-main">${bestAgeBracket ? bestAgeBracket.label : 'データがありません'}</div>
             ${bestAgeBracket
@@ -220,7 +287,7 @@ function renderAnalytics() {
                 : '<div class="analytics-card-sub">年齢層が分かるお会計データがありません</div>'}
         </div>
 
-        <div class="analytics-card" onclick="showDemographicBarChart('gender')" style="cursor:pointer;">
+        <div class="analytics-card" onclick="showAnalyticsBreakdown('gender')" style="cursor:pointer;">
             <div class="analytics-card-title">🚻 一番多い性別 <span style="font-size:11px; color:#999; font-weight:normal;">（タップで内訳）</span></div>
             <div class="analytics-card-main">${bestGender ? bestGender.label : 'データがありません'}</div>
             ${bestGender
@@ -228,8 +295,8 @@ function renderAnalytics() {
                 : '<div class="analytics-card-sub">性別が分かるお会計データがありません</div>'}
         </div>
 
-        <div class="analytics-card">
-            <div class="analytics-card-title">📅 一番売れた日</div>
+        <div class="analytics-card" onclick="showAnalyticsBreakdown('day')" style="cursor:pointer;">
+            <div class="analytics-card-title">📅 一番売れた日 <span style="font-size:11px; color:#999; font-weight:normal;">（タップで内訳）</span></div>
             <div class="analytics-card-main">${bestDay ? bestDay.dateLabel : 'データがありません'}</div>
             ${bestDay ? `<div class="analytics-card-sub">¥${bestDay.total.toLocaleString()}（${bestDay.count.toLocaleString()}件のお会計）</div>` : ''}
         </div>
@@ -257,12 +324,20 @@ function ensureAnalyticsBarChartModal() {
     document.body.appendChild(overlay);
 }
 
-// kind: 'age' または 'gender'
-function showDemographicBarChart(kind) {
+// kind: 'age' | 'gender' | 'product' | 'day'
+// いずれも { counts, labels, total, best } という共通の形をしているため、
+// 同じ棒グラフ描画ロジックを使い回せる（表示の単位・色・タイトルだけ切り替える）
+function showAnalyticsBreakdown(kind) {
     if (typeof playSound === 'function') playSound('click');
 
-    const breakdown = kind === 'gender' ? lastGenderBreakdown : lastAgeBracketBreakdown;
-    if (!breakdown || breakdown.total === 0) {
+    const breakdownMap = {
+        age: lastAgeBracketBreakdown,
+        gender: lastGenderBreakdown,
+        product: lastProductBreakdown,
+        day: lastDailyBreakdown
+    };
+    const breakdown = breakdownMap[kind];
+    if (!breakdown || breakdown.total === 0 || breakdown.labels.length === 0) {
         if (typeof showCustomConfirm === 'function') {
             showCustomConfirm('この期間はまだ内訳を表示できるデータがありません。', 'でーた が あり ませ ん。', () => {}, false);
         }
@@ -271,22 +346,42 @@ function showDemographicBarChart(kind) {
 
     ensureAnalyticsBarChartModal();
 
+    const titleMap = {
+        age: '👥 年齢層の内訳',
+        gender: '🚻 性別の内訳',
+        product: '🏆 商品別 販売数（上位10件）',
+        day: '📅 日別 売上'
+    };
     const titleEl = document.getElementById('analytics-barchart-title');
-    if (titleEl) titleEl.innerText = kind === 'gender' ? '🚻 性別の内訳' : '👥 年齢層の内訳';
+    if (titleEl) titleEl.innerText = titleMap[kind];
+
+    const colorMap = { age: '#3f51b5', gender: '#00897b', product: '#8e24aa', day: '#ef6c00' };
+    const barColor = colorMap[kind];
+    const safeName = (typeof escapeHtml === 'function') ? escapeHtml : (s) => s;
 
     const maxCount = Math.max(...breakdown.labels.map(l => breakdown.counts[l]), 1);
-    const barColor = kind === 'gender' ? '#00897b' : '#3f51b5';
 
     const rowsHtml = breakdown.labels.map(label => {
         const count = breakdown.counts[label];
         const pct = breakdown.total > 0 ? Math.round(count / breakdown.total * 100) : 0;
         const barWidthPct = Math.round(count / maxCount * 100);
         const isBest = breakdown.best && breakdown.best.label === label && count > 0;
+
+        let valueText;
+        if (kind === 'day') {
+            const txCount = (breakdown.txCounts && breakdown.txCounts[label]) || 0;
+            valueText = `¥${count.toLocaleString()}（${txCount.toLocaleString()}件）`;
+        } else if (kind === 'product') {
+            valueText = `${count.toLocaleString()}個（${pct}%）`;
+        } else {
+            valueText = `${count.toLocaleString()}件（${pct}%）`;
+        }
+
         return `
             <div style="margin-bottom:12px;">
                 <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:4px;">
-                    <span style="font-weight:${isBest ? 'bold' : 'normal'}; color:${isBest ? '#1a237e' : '#333'};">${isBest ? '🥇 ' : ''}${label}</span>
-                    <span style="color:#555;">${count.toLocaleString()}件（${pct}%）</span>
+                    <span style="font-weight:${isBest ? 'bold' : 'normal'}; color:${isBest ? '#1a237e' : '#333'};">${isBest ? '🥇 ' : ''}${safeName(label)}</span>
+                    <span style="color:#555;">${valueText}</span>
                 </div>
                 <div style="background:#eee; border-radius:6px; height:16px; overflow:hidden;">
                     <div style="background:${isBest ? '#ff9800' : barColor}; width:${barWidthPct}%; height:100%; border-radius:6px;"></div>
@@ -295,10 +390,17 @@ function showDemographicBarChart(kind) {
         `;
     }).join('');
 
+    const summaryMap = {
+        age: `この期間の合計 ${breakdown.total.toLocaleString()}件が対象`,
+        gender: `この期間の合計 ${breakdown.total.toLocaleString()}件が対象`,
+        product: `この期間の販売数量 合計 ${breakdown.total.toLocaleString()}個が対象（上位10商品を表示）`,
+        day: `この期間の合計 ¥${breakdown.total.toLocaleString()}`
+    };
+
     const bodyEl = document.getElementById('analytics-barchart-body');
     if (bodyEl) {
         bodyEl.innerHTML = `
-            <div style="font-size:12px; color:#777; margin-bottom:14px;">この期間の合計 ${breakdown.total.toLocaleString()}件が対象</div>
+            <div style="font-size:12px; color:#777; margin-bottom:14px;">${summaryMap[kind]}</div>
             ${rowsHtml}
         `;
     }
