@@ -520,6 +520,7 @@ function renderProducts() {
         const tax = prod.taxRate !== undefined ? prod.taxRate : 10;
         const genreName = prod.genre || 'その他商品';
         const ageText = prod.ageCheck ? '<span style="color:red; font-weight:bold;">🔞 対象</span>' : '<span style="color:#888;">なし</span>';
+        const fraudText = prod.fraudCheck ? '<span style="color:#e65100; font-weight:bold;">⚠️ 対象</span>' : '<span style="color:#888;">なし</span>';
         const tr = document.createElement('tr');
         tr.innerHTML = `
             <td style="text-align:center;"><input type="checkbox" class="prod-check" value="${index}" onchange="checkBulkStatus()"></td>
@@ -530,6 +531,7 @@ function renderProducts() {
                 ¥${prod.price.toLocaleString()} (税${tax}%)
             </td>
             <td>${ageText}</td>
+            <td>${fraudText}</td>
             <td><button class="del-btn" onclick="deleteProduct(${index})">削除</button></td>
         `;
         tbody.appendChild(tr);
@@ -648,6 +650,9 @@ function editSingleProduct(index) {
     const ageInp = document.getElementById('edit-prod-age-check');
     if (ageInp) ageInp.checked = !!prod.ageCheck;
 
+    const fraudInp = document.getElementById('edit-prod-fraud-check');
+    if (fraudInp) fraudInp.checked = !!prod.fraudCheck;
+
     const err = document.getElementById('edit-prod-error');
     if (err) err.style.display = 'none';
 
@@ -668,6 +673,7 @@ function addProduct() {
     const priceInput = document.getElementById('new-prod-price');
     const taxInput = document.getElementById('new-prod-tax');
     const ageCheckInput = document.getElementById('new-prod-age-check');
+    const fraudCheckInput = document.getElementById('new-prod-fraud-check');
 
     const jan = (janInput && janInput.value.trim()) ? janInput.value.trim() : Date.now().toString();
     const name = nameInput ? nameInput.value.trim() : '';
@@ -675,6 +681,7 @@ function addProduct() {
     const price = priceInput ? parseInt(priceInput.value) : NaN;
     const taxRate = taxInput ? (parseInt(taxInput.value) || 10) : 10;
     const ageCheck = ageCheckInput ? ageCheckInput.checked : false;
+    const fraudCheck = fraudCheckInput ? fraudCheckInput.checked : false;
 
     if (!name || isNaN(price) || price < 0) {
         if (typeof playSound === 'function') playSound('error');
@@ -687,7 +694,7 @@ function addProduct() {
     }
 
     const existingIndex = products.findIndex(p => p.jan === jan);
-    const prodData = { jan, name, genre, price, taxRate, ageCheck };
+    const prodData = { jan, name, genre, price, taxRate, ageCheck, fraudCheck };
 
     if (existingIndex !== -1) {
         products[existingIndex] = prodData;
@@ -703,6 +710,7 @@ function addProduct() {
     if (nameInput) nameInput.value = '';
     if (priceInput) priceInput.value = '';
     if (ageCheckInput) ageCheckInput.checked = false;
+    if (fraudCheckInput) fraudCheckInput.checked = false;
 
     renderProductTable();
     if (typeof generateCustomButtons === 'function') generateCustomButtons();
@@ -719,6 +727,8 @@ function saveEditProd() {
     const priceInput = parseInt(document.getElementById('edit-prod-price-input').value);
     const taxInput = parseInt(document.getElementById('edit-prod-tax-input').value) || 10;
     const ageCheckInput = document.getElementById('edit-prod-age-check').checked;
+    const fraudCheckEditEl = document.getElementById('edit-prod-fraud-check');
+    const fraudCheckInput = fraudCheckEditEl ? fraudCheckEditEl.checked : false;
 
     if (isNaN(priceInput) || priceInput < 0) {
         const err = document.getElementById('edit-prod-error');
@@ -731,6 +741,7 @@ function saveEditProd() {
     products[index].price = priceInput;
     products[index].taxRate = taxInput;
     products[index].ageCheck = ageCheckInput;
+    products[index].fraudCheck = fraudCheckInput;
 
     localStorage.setItem('pos_products', JSON.stringify(products)); if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
 
@@ -772,6 +783,8 @@ function openUnknownProdModal(jan) {
     document.getElementById('unknown-prod-price-input').value = "";
     document.getElementById('unknown-prod-tax-input').value = "10";
     document.getElementById('unknown-prod-age-check').checked = false;
+    const fraudCheckEl0 = document.getElementById('unknown-prod-fraud-check');
+    if (fraudCheckEl0) fraudCheckEl0.checked = false;
     document.getElementById('unknown-prod-error').style.display = 'none';
     document.getElementById('unknown-prod-modal').style.display = 'flex';
     if (typeof speak === 'function') speak("かかく と ぜいりつ、 なまえ を にゅうりょく し て ください");
@@ -792,6 +805,8 @@ function saveUnknownProd() {
     let priceInput = document.getElementById('unknown-prod-price-input').value.trim();
     const tax = parseInt(document.getElementById('unknown-prod-tax-input').value) || 10;
     const ageCheck = document.getElementById('unknown-prod-age-check').checked;
+    const fraudCheckEl1 = document.getElementById('unknown-prod-fraud-check');
+    const fraudCheck = fraudCheckEl1 ? fraudCheckEl1.checked : false;
 
     if (priceInput === "" || isNaN(parseInt(priceInput))) {
         if (typeof playSound === 'function') playSound('error');
@@ -809,7 +824,7 @@ function saveUnknownProd() {
 
     if (typeof playSound === 'function') playSound('success');
     const targetJan = typeof pendingUnknownJan !== 'undefined' ? pendingUnknownJan : Date.now().toString();
-    const newProd = { id: Date.now(), jan: targetJan, name: name, genre: 'その他商品', price: price, taxRate: tax, ageCheck: ageCheck };
+    const newProd = { id: Date.now(), jan: targetJan, name: name, genre: 'その他商品', price: price, taxRate: tax, ageCheck: ageCheck, fraudCheck: fraudCheck };
     
     if (typeof products !== 'undefined') {
         products.push(newProd);

@@ -24,6 +24,11 @@ let pendingAgeCheckItem = null;
 let ageVerifiedCurrentTransaction = false;
 let taxExemptTransaction = false; // 免税ボタンが押された会計は、完了するまでずっと免税扱いになる
 
+// 詐欺注意（振り込め詐欺・特殊詐欺などへの注意喚起）関連
+// 年齢確認と同じ仕組みだが、客用画面にのみ表示する（店員側の画面には出さない）
+let pendingFraudCheckItem = null;
+let fraudWarningAcknowledgedCurrentTransaction = false;
+
 let cartHistory = [];
 let redoStack = [];
 

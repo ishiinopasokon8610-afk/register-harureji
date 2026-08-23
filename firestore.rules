@@ -29,23 +29,6 @@ service cloud.firestore {
       allow delete: if false;
     }
 
-    // ==========================================================
-    // クラウドバックアップ本体（商品・顧客・売上履歴など）
-    // ------------------------------------------------------------
-    // 書き込み時は必ず、対応する店舗の合言葉ハッシュ(pwHash)を
-    // 一緒に送らせ、config/auth に保存されているハッシュと一致した
-    // 場合のみ許可する。合言葉を知らない第三者は、shopIdが漏れても
-    // 書き込み（改ざん・破壊）はできない。
-    // ==========================================================
-    match /shops/{shopId}/backups/{docId} {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null
-                   && exists(/databases/$(database)/documents/shops/$(shopId)/config/auth)
-                   && request.resource.data.pwHash is string
-                   && request.resource.data.pwHash ==
-                      get(/databases/$(database)/documents/shops/$(shopId)/config/auth).data.passphraseHash;
-    }
-
     // 上記以外は明示的にブロック（デフォルト拒否）
     match /{document=**} {
       allow read, write: if false;

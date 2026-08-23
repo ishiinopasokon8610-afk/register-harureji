@@ -248,6 +248,19 @@
         </div>
     </div>
 
+    <!-- 詐欺注意モーダル（客用画面にのみ表示。年齢確認モーダルと同じ仕組みだが、
+         こちらは店員側の画面には一切表示しない） -->
+    <div id="customer-fraud-modal">
+        <div class="customer-fraud-box">
+            <div class="fraud-icon">⚠️</div>
+            <h2 class="fraud-title">詐欺にご注意ください</h2>
+            <p class="fraud-desc">還付金や当選金の受け取り、身に覚えのない請求などを理由に、ATMでの操作やコンビニでの支払いを指示されるのは詐欺の可能性があります。<br>少しでも不安な場合は、お店の者または警察にご相談ください。</p>
+            <div class="fraud-btn-group">
+                <button onclick="handleFraudWarningAgree()" class="fraud-btn fraud-btn-accept">同意する</button>
+            </div>
+        </div>
+    </div>
+
     <!-- アニメーション通知用コンテナ -->
     <div id="toast-container"></div>
 
@@ -391,7 +404,7 @@
         </div>
 
         <div class="history-btn-container" style="margin-top:15px; display:flex; justify-content:space-between; align-items:center;">
-            <h4>勤務記録一覧（※1年経過した記録は自動的に削除されます）</h4>
+            <h4>勤務記録一覧（※5年経過した記録は自動的に削除されます）</h4>
         </div>
 
         <table class="data-table">
@@ -564,6 +577,9 @@
             <label class="checkbox-label">
                 <input type="checkbox" id="new-prod-age-check"> 年齢確認が必要
             </label>
+            <label class="checkbox-label">
+                <input type="checkbox" id="new-prod-fraud-check"> ⚠️ 詐欺注意を表示
+            </label>
             <button onclick="addProduct()">商品追加</button>
         </div>
         <table class="data-table">
@@ -575,6 +591,7 @@
                     <th>ジャンル</th> <!-- 追加 -->
                     <th>価格・税率</th>
                     <th>年齢確認</th>
+                    <th>詐欺注意</th>
                     <th>操作</th>
                 </tr>
             </thead>
@@ -889,19 +906,17 @@
         <div class="migration-block" style="background:#e8f5e9; border:2px solid #81c784; padding:15px; border-radius:6px; margin-bottom:15px;">
             <h3 class="migration-title" style="color:#2e7d32;">💾 データのバックアップ（キャッシュ・Cookie削除対策）</h3>
             <p class="migration-desc">
-                クラウドから復旧することも可能ですが、万が一に備えてGoogle Apiに保存することをお勧めします。
+                万が一に備えて、バックアップファイルの保存やGoogle Driveへの保存をお勧めします。
             </p>
             <button class="btn-migration" style="background:#2e7d32; color:white; padding:8px 12px; border:none; border-radius:4px; font-weight:bold; cursor:pointer; margin-right:8px;" onclick="downloadDataBackupFile()">📥 バックアップファイルを保存する</button>
             <button class="btn-migration" style="background:#1565c0; color:white; padding:8px 12px; border:none; border-radius:4px; font-weight:bold; cursor:pointer; margin-right:8px;" onclick="document.getElementById('backup-restore-file-input').click()">📂 バックアップファイルから復元する</button>
-            <button class="btn-migration" style="background:#00838f; color:white; padding:8px 12px; border:none; border-radius:4px; font-weight:bold; cursor:pointer; margin-right:8px;" onclick="restoreFromCloudBackupManual()">☁️ クラウドから復元する</button>
-            <button class="btn-migration" style="background:#6d4c41; color:white; padding:8px 12px; border:none; border-radius:4px; font-weight:bold; cursor:pointer;" onclick="testCloudBackupConnection()">🔎 クラウド接続テスト</button>
             <br><br>
             <button class="btn-migration" style="background:#0f9d58; color:white; padding:8px 12px; border:none; border-radius:4px; font-weight:bold; cursor:pointer; margin-right:8px;" onclick="connectGoogleDrive()">📗 Google Driveと連携</button>
             <button class="btn-migration" style="background:#0f9d58; color:white; padding:8px 12px; border:none; border-radius:4px; font-weight:bold; cursor:pointer; margin-right:8px;" onclick="backupToGoogleDriveNow()">📤 今すぐDriveにバックアップ</button>
             <button class="btn-migration" style="background:#0f9d58; color:white; padding:8px 12px; border:none; border-radius:4px; font-weight:bold; cursor:pointer;" onclick="restoreFromGoogleDrive()">📥 Driveから復元</button>
             <input type="file" id="backup-restore-file-input" accept="application/json,.json" style="display:none;">
             <p class="migration-desc" style="margin-top:10px; font-size:12px; color:#555;">
-                📁「レシート保存フォルダ」を設定済みの場合は、そのフォルダにも自動でバックアップ（haru-pos-backup.json）が更新され続けます。クラウドにも数分おきに自動でバックアップされており（画像は対象外）、「☁️ クラウドから復元する」ボタンでいつでも直近のクラウドバックアップから復元できます。
+                📁「レシート保存フォルダ」を設定済みの場合は、そのフォルダにも自動でバックアップ（haru-pos-backup.json）が更新され続けます。Google Driveと連携しておくと、そちらにも自動でバックアップされます。
             </p>
         </div>
 
@@ -941,8 +956,10 @@
             <h3 class="migration-title" style="color:#ad1457;">🔑 店長認証バーコードの変更</h3>
             <p class="migration-desc">
                 店長認証で使うバーコード（暗証番号）を変更できます。数字のみで入力してください。<br>
-                この画面を開けている＝すでに店長認証済みなので、そのまま変更できます。
+                離席中に他の人が勝手に変更できてしまわないよう、確認のため現在のバーコードの再入力が必要です。
             </p>
+            <input type="text" id="manager-current-barcode-input" placeholder="現在の店長バーコード（確認用）" inputmode="numeric" pattern="[0-9]*" style="padding:8px; border-radius:4px; border:1px solid #ccc; margin-bottom:10px; width:220px;">
+            <br>
             <input type="text" id="manager-new-barcode-input" placeholder="新しいバーコード（数字）" inputmode="numeric" pattern="[0-9]*" style="padding:8px; border-radius:4px; border:1px solid #ccc; margin-bottom:10px; width:220px;">
             <br>
             <button class="btn-migration" style="background:#ad1457; color:white; padding:8px 12px; border:none; border-radius:4px; font-weight:bold; cursor:pointer;" onclick="changeManagerPassword()">この番号に変更する</button>
@@ -1093,6 +1110,11 @@
                     <input type="checkbox" id="unknown-prod-age-check"> 年齢確認が必要
                 </label>
             </div>
+            <div class="modal-form-group large">
+                <label class="checkbox-label">
+                    <input type="checkbox" id="unknown-prod-fraud-check"> ⚠️ 詐欺注意を表示
+                </label>
+            </div>
             <div id="unknown-prod-error" class="error-msg">価格を正しく入力してください</div>
             <div class="modal-btn-group">
                 <button onclick="closeUnknownProdModal()" class="modal-btn cancel">キャンセル</button>
@@ -1134,6 +1156,11 @@
             <div class="modal-form-group large">
                 <label class="checkbox-label">
                     <input type="checkbox" id="edit-prod-age-check"> 年齢確認が必要
+                </label>
+            </div>
+            <div class="modal-form-group large">
+                <label class="checkbox-label">
+                    <input type="checkbox" id="edit-prod-fraud-check"> ⚠️ 詐欺注意を表示
                 </label>
             </div>
             <div id="edit-prod-error" class="error-msg">数値を正しく入力してください</div>
@@ -1482,13 +1509,18 @@
     <script src="keyboarddown.js"></script>
     <script src="refund.js"></script>
     <script src="local-backup.js"></script>
-    <script src="firebase-cloud-backup.js"></script>
     <script src="google-drive-backup.js"></script>
     <script src="sales-mgmt.js"></script>
     <script src="discount-system.js"></script>
+    <script src="checkout-demographics.js"></script>
     <script src="analytics-system.js"></script>
+    <script src="receipt-footer-system.js"></script>
+    <script src="receipt-coupon-system.js"></script>
+    <script src="register-2person-mode.js"></script>
     <script src="language-system.js"></script>
     <script src="sync-system.js"></script>
+    <script src="customer-sync-system.js"></script>
+    <script src="member-number-system.js"></script>
     <script src="register-info-system.js"></script>
     <script src="pagination-system.js"></script>
     <script src="notifications-system.js"></script>

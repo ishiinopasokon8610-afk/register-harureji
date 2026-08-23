@@ -214,6 +214,23 @@ function initAbly() {
                     }
                 }
             });
+
+            // 詐欺注意モーダル関連（年齢確認と同じ仕組みだが、客用画面にのみ表示する）
+            channel.subscribe('fraud-warning-event', (message) => {
+                const data = message.data || {};
+                const isOwnDevice = data.senderId && typeof POS_DEVICE_ID !== 'undefined' && data.senderId === POS_DEVICE_ID;
+                const isCustDisplay = typeof isCustomerDisplayDevice === 'function' && isCustomerDisplayDevice();
+
+                if (data.action === 'start') {
+                    // 発生元の端末自身か、「客用ディスプレイ」に設定されている端末だけが反応する
+                    if (!isOwnDevice && !isCustDisplay) return;
+                    pendingFraudCheckItem = data.item;
+                    showFraudWarningModal();
+                } else if (data.action === 'success') {
+                    if (!isOwnDevice && !pendingFraudCheckItem) return;
+                    onFraudWarningAgreed();
+                }
+            });
         }
     } catch (e) { console.error(e); }
 }

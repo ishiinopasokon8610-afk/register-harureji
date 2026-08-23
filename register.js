@@ -514,7 +514,7 @@ async function fetchAndAddItem(code) {
                     const priceNode = data[0].onix.ProductSupply.SupplyDetail.Price[0];
                     if (priceNode && priceNode.PriceAmount) itemPrice = parseInt(priceNode.PriceAmount);
                 } catch(e) {}
-                checkAndAddToCart({ name: itemName, price: itemPrice, ageCheck: false, taxRate: 10, genre: '書籍' });
+                checkAndAddToCart({ name: itemName, price: itemPrice, ageCheck: false, fraudCheck: false, taxRate: 10, genre: '書籍' });
                 return;
             }
         } catch (error) { console.log(error); }
@@ -536,6 +536,8 @@ function openUnknownProdModal(code) {
     document.getElementById('unknown-prod-tax-input').value = "10";
     document.getElementById('unknown-prod-genre-input').value = "その他商品";
     document.getElementById('unknown-prod-age-check').checked = false;
+    const fraudCheckEl = document.getElementById('unknown-prod-fraud-check');
+    if (fraudCheckEl) fraudCheckEl.checked = false;
     
     if (modal) {
         modal.dataset.code = code;
@@ -557,6 +559,8 @@ function saveUnknownProd() {
     const priceInput = parseInt(document.getElementById('unknown-prod-price-input').value);
     const taxInput = parseInt(document.getElementById('unknown-prod-tax-input').value) || 10;
     const ageCheckInput = document.getElementById('unknown-prod-age-check').checked;
+    const fraudCheckEl = document.getElementById('unknown-prod-fraud-check');
+    const fraudCheckInput = fraudCheckEl ? fraudCheckEl.checked : false;
 
     if (isNaN(priceInput) || priceInput < 0) {
         document.getElementById('unknown-prod-error').style.display = 'block';
@@ -571,7 +575,8 @@ function saveUnknownProd() {
         genre: genreInput,
         price: priceInput,
         taxRate: taxInput,
-        ageCheck: ageCheckInput
+        ageCheck: ageCheckInput,
+        fraudCheck: fraudCheckInput
     };
 
     products.push(newProd);
@@ -634,9 +639,48 @@ function checkAndAddToCart(prod) {
         pendingAgeCheckItem = prod;
         showAgeCheckModals();
         if (channel) channel.publish('age-check-event', { action: 'start', item: prod, senderId: POS_DEVICE_ID });
+    } else if (prod.fraudCheck && !fraudWarningAcknowledgedCurrentTransaction) {
+        pendingFraudCheckItem = prod;
+        showFraudWarningModal();
+        if (channel) channel.publish('fraud-warning-event', { action: 'start', item: prod, senderId: POS_DEVICE_ID });
     } else {
         addToCart(prod.name, prod.price, prod.taxRate, prod.genre);
     }
+}
+
+// 詐欺注意モーダル関連
+// ------------------------------------------
+// 年齢確認（showAgeCheckModals/handleAgeCheckResult）と同じ仕組みだが、
+// こちらは「客用画面が表示されている端末」にのみ表示する（店員側の画面には何も出さない）。
+function showFraudWarningModal() {
+    const custScreen = document.getElementById('customer-screen');
+    const isCustomer = custScreen && custScreen.classList.contains('active');
+    const custModal = document.getElementById('customer-fraud-modal');
+
+    if (isCustomer && custModal) {
+        custModal.style.display = 'flex';
+        if (typeof speak === 'function') speak("詐欺にご注意ください。内容をご確認のうえ、同意するボタンを押してください。");
+    }
+    // 客用画面がアクティブでない端末（店員側のレジ画面など）には表示しない
+}
+
+// 客用画面で「同意する」ボタンが押された時に呼ばれる
+function handleFraudWarningAgree() {
+    if (channel) channel.publish('fraud-warning-event', { action: 'success', senderId: POS_DEVICE_ID });
+    else onFraudWarningAgreed();
+}
+
+function onFraudWarningAgreed() {
+    const custModal = document.getElementById('customer-fraud-modal');
+    if (custModal) custModal.style.display = 'none';
+    fraudWarningAcknowledgedCurrentTransaction = true;
+
+    if (pendingFraudCheckItem) {
+        addToCart(pendingFraudCheckItem.name, pendingFraudCheckItem.price, pendingFraudCheckItem.taxRate, pendingFraudCheckItem.genre);
+        pendingFraudCheckItem = null;
+    }
+    if (typeof showToastAnimation === 'function') showToastAnimation("確認しました");
+    focusJanInput();
 }
 
 function handleAgeCheckResult(agreed) {
@@ -1498,6 +1542,7 @@ function closeReceiptPrintModal() {
     selectedPayment = '現金';
     
     ageVerifiedCurrentTransaction = false;
+    fraudWarningAcknowledgedCurrentTransaction = false;
     taxExemptTransaction = false;
 
     clearCustomer(false);

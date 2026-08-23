@@ -262,6 +262,7 @@ function verifyHistoryAuth() {
 function openTimecardScreen() {
     if (typeof playSound === 'function') playSound('click');
     if (typeof showScreen === 'function') showScreen('timecard-screen');
+    pruneExpiredTimecards();
     renderTimecardTable();
     const input = document.getElementById('tc-barcode-input');
     if (input) {
@@ -277,6 +278,35 @@ function getTimecardData() {
 
 function saveTimecardData(data) {
     localStorage.setItem('pos_timecard', JSON.stringify(data));
+}
+
+// タイムカード記録の保存期間（労働基準法上の記録保存義務に合わせて5年）。
+// この期間より古い記録は、読み込み・打刻のたびに自動的に間引かれる。
+const TIMECARD_RETENTION_MS = 5 * 365 * 24 * 60 * 60 * 1000;
+
+// 「date」（例: "2026/8/23"）を安全にDateへ変換する（変換できなければnull）
+function parseTimecardRecordDate(rec) {
+    if (!rec || !rec.date) return null;
+    const d = new Date(rec.date);
+    return isNaN(d.getTime()) ? null : d;
+}
+
+// 保存期間を過ぎた記録を取り除く。間引きが発生した場合のみ保存し直す。
+function pruneExpiredTimecards() {
+    const records = getTimecardData();
+    const cutoff = Date.now() - TIMECARD_RETENTION_MS;
+
+    const kept = records.filter(rec => {
+        const d = parseTimecardRecordDate(rec);
+        // 日付が読み取れない古い形式の記録は、念のため残す（誤って消さないため）
+        if (!d) return true;
+        return d.getTime() >= cutoff;
+    });
+
+    if (kept.length !== records.length) {
+        saveTimecardData(kept);
+    }
+    return kept;
 }
 
 function handleTimecardStamp(type = null) {
@@ -309,7 +339,7 @@ function handleTimecardStamp(type = null) {
     const todayStr = now.toLocaleDateString('ja-JP');
     const timeStr = now.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
 
-    let records = getTimecardData();
+    let records = pruneExpiredTimecards();
     let record = records.find(r => r.date === todayStr && r.clerkName === matchedClerk.name);
 
     if (!record) {
@@ -398,7 +428,7 @@ function renderTimecardTable() {
     if (!tbody) return;
     tbody.innerHTML = '';
 
-    const records = getTimecardData();
+    const records = pruneExpiredTimecards();
     const isManager = isManagerAuthorized();
 
     const clearBtn = document.getElementById('timecard-clear-btn');
@@ -565,6 +595,11 @@ function buildAllDataObject() {
         // 追加：本日の釣銭準備金・営業終了状態も機種変更/復元時に一緒に戻せるようにする
         startCash: localStorage.getItem('pos_start_cash') || '',
         businessClosed: localStorage.getItem('pos_business_closed') || '',
+        // 追加：レシート（ロゴ下）のメッセージ・画像も機種変更時に一緒に移行できるようにする
+        receiptFooterText: localStorage.getItem('pos_receipt_footer_text') || '',
+        receiptFooterImage: localStorage.getItem('pos_receipt_footer_image') || '',
+        // 追加：会員番号の採番カウンター（machineをまたいで番号が重複しないように）
+        memberNoCounter: localStorage.getItem('pos_member_no_counter') || '',
         savedAt: new Date().toISOString()
     };
 }
@@ -614,6 +649,15 @@ function applyImportedDataObject(dataObj, options) {
         } else {
             localStorage.removeItem('pos_business_closed');
         }
+    }
+    if (dataObj.receiptFooterText !== undefined) {
+        localStorage.setItem('pos_receipt_footer_text', dataObj.receiptFooterText);
+    }
+    if (dataObj.receiptFooterImage !== undefined) {
+        localStorage.setItem('pos_receipt_footer_image', dataObj.receiptFooterImage);
+    }
+    if (dataObj.memberNoCounter !== undefined && dataObj.memberNoCounter !== '') {
+        localStorage.setItem('pos_member_no_counter', dataObj.memberNoCounter);
     }
 
     if (typeof clerks !== 'undefined') localStorage.setItem('pos_clerks', JSON.stringify(clerks));

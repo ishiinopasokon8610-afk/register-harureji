@@ -266,13 +266,31 @@ setInterval(() => {
    店長認証バーコード（＝Firebase Authのパスワード）の変更
    ------------------------------------------
    データ管理画面（店長認証済みでないと開けない画面）から呼び出される。
-   すでにログイン済みのセッションに対して updatePassword() を呼ぶだけなので、
-   古いバーコードの値をどこにも保存・比較する必要がない。
+   ------------------------------------------
+   【セキュリティ強化】
+   以前は「この画面を開けている＝店長認証済み」というセッションの状態だけを
+   根拠に、そのままupdatePassword()を呼んでいた。
+   しかし店長がこの画面を開いたまま離席すると、他の人がそのまま
+   バーコードを書き換えられてしまう（セッション乗っ取りに近い状態）ため、
+   変更の直前に「現在のバーコード」の再入力を必須にする。
+   reauthenticateWithCredential() で現在のバーコードが正しいことを
+   Firebaseサーバー側で確認してから、updatePassword()を呼び出す。
+   （現在のバーコードが間違っていれば、離席中の他人による変更は失敗する）
    ========================================================= */
 async function changeManagerPassword() {
+    const currentInputEl = document.getElementById('manager-current-barcode-input');
     const inputEl = document.getElementById('manager-new-barcode-input');
-    if (!inputEl) return;
+    if (!inputEl || !currentInputEl) return;
+    const currentVal = currentInputEl.value.trim();
     const val = inputEl.value.trim();
+
+    if (!/^[0-9]{4,}$/.test(currentVal)) {
+        if (typeof playSound === 'function') playSound('error');
+        if (typeof showCustomConfirm === 'function') {
+            showCustomConfirm("確認のため、現在の店長バーコードを数字で入力してください。", "げんざい の ばーこーど を にゅうりょく し て ください。", () => {}, false);
+        }
+        return;
+    }
 
     if (!/^[0-9]{4,}$/.test(val)) {
         if (typeof playSound === 'function') playSound('error');
@@ -291,7 +309,12 @@ async function changeManagerPassword() {
     }
 
     try {
+        // まず現在のバーコードでの再認証を行う（間違っていればここで失敗する）
+        const credential = firebase.auth.EmailAuthProvider.credential(MANAGER_AUTH_EMAIL, MANAGER_AUTH_PREFIX + currentVal);
+        await firebase.auth().currentUser.reauthenticateWithCredential(credential);
+
         await firebase.auth().currentUser.updatePassword(MANAGER_AUTH_PREFIX + val);
+        currentInputEl.value = '';
         inputEl.value = '';
         if (typeof playSound === 'function') playSound('success');
         if (typeof showCustomConfirm === 'function') {
@@ -299,9 +322,13 @@ async function changeManagerPassword() {
         }
     } catch (err) {
         if (typeof playSound === 'function') playSound('error');
-        // Firebaseはパスワード変更などの機密操作に「直近のログイン」を要求することがある。
-        // その場合はいったんロックし、店長認証をやり直してもらう必要がある。
-        if (err && err.code === 'auth/requires-recent-login') {
+        if (err && (err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential' || err.code === 'auth/invalid-login-credentials')) {
+            if (typeof showCustomConfirm === 'function') {
+                showCustomConfirm("現在の店長バーコードが正しくありません。", "げんざい の ばーこーど が ちがい ます。", () => {}, false);
+            }
+        } else if (err && err.code === 'auth/requires-recent-login') {
+            // Firebaseはパスワード変更などの機密操作に「直近のログイン」を要求することがある。
+            // その場合はいったんロックし、店長認証をやり直してもらう必要がある。
             if (typeof showCustomConfirm === 'function') {
                 showCustomConfirm(
                     "セキュリティのため、変更前にもう一度店長認証が必要です。「店長ロック」→もう一度「店長認証」をしてから、再度お試しください。",
