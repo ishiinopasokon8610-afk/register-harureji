@@ -3,6 +3,57 @@
 // ==========================================
 
 // ------------------------------------------
+// 軽減税率のデフォルト値設定
+// ------------------------------------------
+// 「食品」「お惣菜/お弁当」「スイーツ/菓子」ジャンルの商品を登録する際に
+// 自動で入力される税率を、設定画面（データ管理・ロゴ設定）から変更できるようにする。
+// こうしておくことで、将来の税制改正（例：軽減税率が8%→1%に変わる等）があっても
+// ソースコードを書き換えることなく、店舗側の設定変更だけで対応できる。
+// ※「飲料/お酒」ジャンルはお酒（軽減税率対象外）を含みうるため、標準税率のままにしている。
+//   非アルコール飲料のみを扱う場合は、登録時に手動で税率を軽減税率へ変更してください。
+const REDUCED_TAX_RATE_KEY = 'pos_reduced_tax_rate';
+const REDUCED_TAX_RATE_DEFAULT = 8;
+const REDUCED_TAX_GENRES = ['食品', 'お惣菜/お弁当', 'スイーツ/菓子'];
+
+function getReducedTaxRate() {
+    const saved = parseInt(localStorage.getItem(REDUCED_TAX_RATE_KEY), 10);
+    return isNaN(saved) ? REDUCED_TAX_RATE_DEFAULT : saved;
+}
+
+function saveReducedTaxRateSetting() {
+    if (typeof playSound === 'function') playSound('click');
+    const input = document.getElementById('reduced-tax-rate-input');
+    if (!input) return;
+    const value = parseInt(input.value, 10);
+    if (isNaN(value) || value < 0 || value > 100) {
+        if (typeof playSound === 'function') playSound('error');
+        if (typeof showCustomConfirm === 'function') {
+            showCustomConfirm("0〜100の数値で入力してください。", "すうじ で にゅうりょく し て ください。", () => {}, false);
+        }
+        return;
+    }
+    localStorage.setItem(REDUCED_TAX_RATE_KEY, String(value));
+    if (typeof playSound === 'function') playSound('success');
+    if (typeof showCustomConfirm === 'function') {
+        showCustomConfirm(`軽減税率のデフォルト値を ${value}% に保存しました。次回以降の商品登録から適用されます。`, `けいげん ぜいりつ を ${value} ぱーせんと に ほぞん し まし た。`, () => {}, false);
+    }
+}
+
+// ジャンルを選んだ時に、そのジャンルにふさわしい税率を税率欄へ自動入力する
+// （食品系ジャンルなら設定済みの軽減税率、それ以外は標準税率10%）。
+// あくまで「初期値の自動入力」であり、登録前に手動で個別修正することは引き続き可能。
+function applyDefaultTaxRateForGenre(genre, taxInputId) {
+    const taxInput = document.getElementById(taxInputId);
+    if (!taxInput) return;
+    taxInput.value = REDUCED_TAX_GENRES.includes(genre) ? getReducedTaxRate() : 10;
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    const reducedTaxInput = document.getElementById('reduced-tax-rate-input');
+    if (reducedTaxInput) reducedTaxInput.value = getReducedTaxRate();
+});
+
+// ------------------------------------------
 // 商品の種類（カテゴリ）をユーザーが自由に追加・削除する機能
 // ------------------------------------------
 function addCustomGenre() {
@@ -156,7 +207,7 @@ function renderCustomers(preserveReveal) {
         const tr = document.createElement('tr');
         tr.innerHTML = `
             <td style="font-family:monospace; font-weight:bold; color:#0066cc;">${escapeHtml(cust.barcode)}</td>
-            <td><b>${displayName}</b> (${currentAge}歳)${displayKana}${bdayText}</td>
+            <td><b>${displayName}</b> (${currentAge}歳${cust.gender ? '・' + escapeHtml(cust.gender) : ''})${displayKana}${bdayText}</td>
             <td style="text-align:center;">${rankCellHtml}</td>
             <td style="color:#d81b60; font-weight:bold;">${cust.points} pt ${expText}</td>
             <td style="font-size:12px;">📞 ${phoneDisplay}<br>🏠 ${addressDisplay}</td>
@@ -177,6 +228,7 @@ function addCustomer() {
     const lastKana = document.getElementById('new-cust-last-kana').value.trim();
     const firstKana = document.getElementById('new-cust-first-kana').value.trim();
     const birthday = document.getElementById('new-cust-birthday').value;
+    const gender = document.getElementById('new-cust-gender').value;
     const points = parseInt(document.getElementById('new-cust-points').value) || 0;
     const phone = document.getElementById('new-cust-phone').value.trim();
     const address = document.getElementById('new-cust-address').value.trim();
@@ -197,7 +249,7 @@ function addCustomer() {
     if (typeof customers !== 'undefined') {
         // 同じバーコードがあるか確認し、あれば上書き保存
         const existingIndex = customers.findIndex(c => c.barcode === barcode);
-        const custData = { barcode, lastName, firstName, lastKana, firstKana, name, kana, birthday, age, points, phone, address, pointsUpdatedAt };
+        const custData = { barcode, lastName, firstName, lastKana, firstKana, name, kana, birthday, age, gender, points, phone, address, pointsUpdatedAt };
         if (existingIndex !== -1) {
             // 既存会員の場合、ランク進捗（年間購入額・現在ランク等）は上書きせず引き継ぐ
             const old = customers[existingIndex];
@@ -225,6 +277,7 @@ function addCustomer() {
     document.getElementById('new-cust-last-kana').value = '';
     document.getElementById('new-cust-first-kana').value = '';
     document.getElementById('new-cust-birthday').value = '';
+    document.getElementById('new-cust-gender').value = '';
     document.getElementById('new-cust-points').value = '';
     document.getElementById('new-cust-phone').value = '';
     document.getElementById('new-cust-address').value = '';
@@ -243,10 +296,15 @@ function editCustomer(index) {
     document.getElementById('edit-cust-last-kana-input').value = cust.lastKana || '';
     document.getElementById('edit-cust-first-kana-input').value = cust.firstKana || '';
     document.getElementById('edit-cust-birthday-input').value = cust.birthday || '';
+    document.getElementById('edit-cust-gender-input').value = cust.gender || '';
     document.getElementById('edit-cust-points-input').value = cust.points !== undefined ? cust.points : 0;
     document.getElementById('edit-cust-phone-input').value = cust.phone || '';
     document.getElementById('edit-cust-address-input').value = cust.address || '';
     document.getElementById('edit-cust-error').style.display = 'none';
+    ['edit-cust-last-name-input', 'edit-cust-first-name-input', 'edit-cust-last-kana-input', 'edit-cust-first-kana-input'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.classList.remove('input-error-highlight');
+    });
     document.getElementById('edit-cust-modal').style.display = 'flex';
     if (typeof speak === 'function') speak("かいいん じょうほう の へんこう");
 }
@@ -264,11 +322,31 @@ function saveEditCust() {
     const lastKana = document.getElementById('edit-cust-last-kana-input').value.trim();
     const firstKana = document.getElementById('edit-cust-first-kana-input').value.trim();
     const birthday = document.getElementById('edit-cust-birthday-input').value;
+    const gender = document.getElementById('edit-cust-gender-input').value;
     const points = parseInt(document.getElementById('edit-cust-points-input').value) || 0;
     const phone = document.getElementById('edit-cust-phone-input').value.trim();
     const address = document.getElementById('edit-cust-address-input').value.trim();
 
-    if (!lastName || !firstName || !lastKana || !firstKana) {
+    // どこが未入力かひと目でわかるよう、空欄の入力欄を赤枠にする
+    const nameFieldChecks = [
+        { id: 'edit-cust-last-name-input', value: lastName },
+        { id: 'edit-cust-first-name-input', value: firstName },
+        { id: 'edit-cust-last-kana-input', value: lastKana },
+        { id: 'edit-cust-first-kana-input', value: firstKana }
+    ];
+    let hasEmptyNameField = false;
+    nameFieldChecks.forEach(({ id, value }) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        if (!value) {
+            hasEmptyNameField = true;
+            el.classList.add('input-error-highlight');
+        } else {
+            el.classList.remove('input-error-highlight');
+        }
+    });
+
+    if (hasEmptyNameField) {
         if (typeof playSound === 'function') playSound('error');
         document.getElementById('edit-cust-error').style.display = 'block';
         return;
@@ -284,7 +362,7 @@ function saveEditCust() {
 
     customers[editingCustIndex] = {
         ...oldCust,
-        lastName, firstName, lastKana, firstKana, name, kana, birthday, age, points, phone, address, pointsUpdatedAt
+        lastName, firstName, lastKana, firstKana, name, kana, birthday, age, gender, points, phone, address, pointsUpdatedAt
     };
 
     if (typeof activeCustomer !== 'undefined' && activeCustomer && activeCustomer.barcode === customers[editingCustIndex].barcode) {

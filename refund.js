@@ -127,6 +127,12 @@ function finalizeRefundDeletion() {
     if (selectedRefundIndex !== null) {
         let historyData = JSON.parse(localStorage.getItem('pos_history') || '[]');
         if (selectedRefundIndex >= 0 && selectedRefundIndex < historyData.length) {
+            const targetItem = historyData[selectedRefundIndex];
+
+            // その会計でポイントの利用・付与があった場合、会員のポイントを巻き戻す
+            // （高額商品を買ってポイントだけ得てすぐ返金する、というポイント不正取得を防ぐため）
+            reverseRefundPoints(targetItem);
+
             historyData.splice(selectedRefundIndex, 1);
             localStorage.setItem('pos_history', JSON.stringify(historyData));
             if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
@@ -135,8 +141,22 @@ function finalizeRefundDeletion() {
     }
 
     // 管理画面などの履歴一覧が開いている場合は表示を更新
-    if (typeof renderHistoryTable === 'function') {
-        renderHistoryTable();
+    // （以前は存在しない renderHistoryTable() を呼んでいたため、履歴削除後も
+    // 　画面が更新されない不具合があった。正しくは renderHistory()）
+    if (typeof renderHistory === 'function') {
+        renderHistory();
+    }
+
+    // 「本日の売上」は pos_history から都度集計しているため、返金による削除は
+    // 次回の集計で自動的に反映される。ただし、売上管理・分析画面がすでに
+    // 開いたまま返金した場合に表示が古いままにならないよう、その場で再集計する。
+    const salesMgmtScreen = document.getElementById('sales-mgmt-screen');
+    if (salesMgmtScreen && salesMgmtScreen.classList.contains('active') && typeof calculateSystemTotals === 'function') {
+        calculateSystemTotals();
+    }
+    const analyticsScreen = document.getElementById('analytics-screen');
+    if (analyticsScreen && analyticsScreen.classList.contains('active') && typeof renderAnalytics === 'function') {
+        renderAnalytics();
     }
 
     if (typeof playSound === 'function') playSound('success');
@@ -149,4 +169,41 @@ function finalizeRefundDeletion() {
     document.body.classList.remove('refund-mode');
     const registerScreen = document.getElementById('register-screen');
     if (registerScreen) registerScreen.classList.remove('refund-mode');
+}
+
+// 返金対象の取引にひもづく会員のポイントを、会計前の状態に巻き戻す。
+// ・その会計で「使ったポイント（pointsUsed）」→ 会員に戻す（プラス）
+// ・その会計で「付与したポイント（pointsEarned）」→ 取り消す（マイナス）
+// 古いデータ（このフィールドを追加する前に会計されたもの）には
+// pointsUsed / pointsEarned が存在しないため、その場合は何もしない。
+function reverseRefundPoints(targetItem) {
+    if (!targetItem || !targetItem.customerBarcode) return;
+    if (typeof customers === 'undefined' || !Array.isArray(customers)) return;
+
+    const pointsUsed = targetItem.pointsUsed || 0;
+    const pointsEarned = targetItem.pointsEarned || 0;
+    if (pointsUsed === 0 && pointsEarned === 0) return;
+
+    const idx = customers.findIndex(c => c.barcode === targetItem.customerBarcode);
+    if (idx === -1) return;
+
+    const cust = customers[idx];
+    cust.points = (cust.points || 0) + pointsUsed - pointsEarned;
+    if (cust.points < 0) cust.points = 0; // マイナス残高にはしない
+    cust.pointsUpdatedAt = new Date().toISOString();
+
+    // ランク判定に使う年間購入額からも、この会計分（返金額＝total）を差し引く
+    if (typeof cust.annualPurchase === 'number') {
+        cust.annualPurchase = Math.max(0, cust.annualPurchase - (targetItem.total || 0));
+    }
+
+    customers[idx] = cust;
+    localStorage.setItem('pos_customers', JSON.stringify(customers));
+
+    // 今まさにその会員を会計画面に呼び出している最中であれば、表示中の情報も更新する
+    if (typeof activeCustomer !== 'undefined' && activeCustomer && activeCustomer.barcode === cust.barcode) {
+        activeCustomer = cust;
+        const acPoints = document.getElementById('ac-points');
+        if (acPoints) acPoints.innerText = cust.points;
+    }
 }

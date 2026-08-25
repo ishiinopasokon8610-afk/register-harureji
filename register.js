@@ -271,9 +271,23 @@ function updateCustomerDisplay() {
 }
 
 function typeNum(n) {
-    playSound('click');
     const input = getJanInput();
-    if (input) { input.value += n; focusJanInput(); }
+    if (!input) return;
+
+    // 単価更新モード中（新しい価格を手入力している最中）は、
+    // 「00」の連打などで桁が一気に跳ね上がる誤操作を防ぐため、
+    // 金額の桁数に上限（99,999円まで＝6桁未満）を設ける。
+    if (typeof priceUpdateMode !== 'undefined' && priceUpdateMode) {
+        const projected = (input.value + n).replace(/^0+(?=\d)/, '');
+        if (projected.length > 5) {
+            playSound('error');
+            return;
+        }
+    }
+
+    playSound('click');
+    input.value += n;
+    focusJanInput();
 }
 
 // 追加：「万」ボタン。入力中の数字を1万円単位に一括変換する（例: 3 → 30000）
@@ -1333,7 +1347,14 @@ async function completeTransaction() {
             cartSnapshot: JSON.parse(JSON.stringify(cart)),
             // 分析機能向け：会員（ポイントカード）の年齢層集計に使う
             customerBarcode: activeCustomer ? activeCustomer.barcode : null,
-            customerAge: (activeCustomer && typeof calculateAge === 'function') ? calculateAge(activeCustomer) : null
+            customerAge: (activeCustomer && typeof calculateAge === 'function') ? calculateAge(activeCustomer) : null,
+            // 分析機能向け：会員（ポイントカード）に登録された性別（レジでの都度選択が
+            // 無かった場合の推定フォールバックとして analytics-system.js 側で使用する）
+            customerGender: (activeCustomer && activeCustomer.gender) ? activeCustomer.gender : null,
+            // 返金時にポイントを正しく巻き戻せるよう、この会計で
+            // 実際に使ったポイント／付与したポイントを数値として記録しておく
+            pointsUsed: usedPoints || 0,
+            pointsEarned: earnedPointsThisTime || 0
         };
         let historyList = JSON.parse(localStorage.getItem('pos_history')) || [];
         historyList.unshift(record); 

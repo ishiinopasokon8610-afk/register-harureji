@@ -204,6 +204,27 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // 追加：レジ画面で「R」キーを押すと、レジ休止のON/OFFを切り替える
+    // （JANバーコード入力欄にフォーカスがあっても機能するよう、「r」の文字が
+    // 　そのままバーコード欄に入力されないよう preventDefault() する。
+    // 　商品名など、他の自由入力欄にフォーカスがある場合は通常通り「r」を入力できるようにする）
+    document.addEventListener('keydown', function(e) {
+        if (e.key !== 'r' && e.key !== 'R') return;
+        if (e.ctrlKey || e.altKey || e.metaKey) return;
+
+        const registerScreen = document.getElementById('register-screen');
+        if (!registerScreen || !registerScreen.classList.contains('active')) return;
+
+        const active = document.activeElement;
+        const isJanInput = active && active.id === 'jan-input';
+        const isOtherTextInput = active && !isJanInput &&
+            (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable);
+        if (isOtherTextInput) return;
+
+        e.preventDefault();
+        if (typeof togglePauseRegister === 'function') togglePauseRegister();
+    });
+
     ['jan-input', 'manager-auth-input', 'new-cust-barcode', 'edit-cust-barcode-input', 'new-clerk-barcode', 'edit-clerk-barcode-input', 'new-prod-jan', 'pause-jan-input'].forEach(id => {
         applyAutoHalfWidth(id);
     });

@@ -497,6 +497,15 @@
                 <label class="input-label-small">生年月日</label>
                 <input type="date" id="new-cust-birthday" class="input-cust-birth">
             </div>
+            <div class="input-cust-birth-container">
+                <label class="input-label-small">性別</label>
+                <select id="new-cust-gender" class="input-cust-birth">
+                    <option value="">未回答</option>
+                    <option value="男性">男性</option>
+                    <option value="女性">女性</option>
+                    <option value="その他/回答しない">その他/回答しない</option>
+                </select>
+            </div>
             <input type="number" id="new-cust-points" placeholder="初期/入会特典pt" class="input-cust-points">
             <input type="text" id="new-cust-phone" placeholder="電話番号" class="input-cust-phone">
             <input type="text" id="new-cust-address" placeholder="住所" class="input-cust-address">
@@ -574,7 +583,7 @@
             <input type="text" id="new-prod-name" placeholder="商品名 (例: ハンディファン)">
             
             <!-- 追加: ジャンル選択プルダウン -->
-            <select id="new-prod-genre" class="modal-input genre-select-dynamic" style="padding: 8px; font-size: 16px; border: 1px solid #ccc; border-radius: 4px; min-width: 120px;">
+            <select id="new-prod-genre" class="modal-input genre-select-dynamic" style="padding: 8px; font-size: 16px; border: 1px solid #ccc; border-radius: 4px; min-width: 120px;" onchange="applyDefaultTaxRateForGenre(this.value, 'new-prod-tax')">
                 <option value="食品">食品</option>
                 <option value="飲料/お酒">飲料/お酒</option>
                 <option value="お惣菜/お弁当">お惣菜/お弁当</option>
@@ -740,7 +749,7 @@
             </div>
 
             <div style="text-align:left; border-top:1px dashed #ccc; padding-top:10px; margin-bottom:10px;">
-                <label style="font-weight:bold;"><input type="checkbox" id="edit-disc-one-time"> ④ 使い切りバーコードにする（会計成立と同時に自動削除・任意）</label>
+                <label style="font-weight:bold;"><input type="checkbox" id="edit-disc-one-time"> ④ 使い切りバーコードにする（会計成立後は「使用済み」としてアーカイブされ、一覧から自動的には消えません・任意）</label>
             </div>
 
             <div class="error-msg" id="edit-disc-error">割引名を入力し、商品追加または割引のどちらか一方以上を設定してください</div>
@@ -933,6 +942,19 @@
             <p class="migration-desc" style="margin-top:10px; font-size:12px; color:#555;">
                 📁「レシート保存フォルダ」を設定済みの場合は、そのフォルダにも自動でバックアップ（haru-pos-backup.json）が更新され続けます。Google Driveと連携しておくと、そちらにも自動でバックアップされます。
             </p>
+        </div>
+
+        <!-- 追加：軽減税率のデフォルト値設定（税制改正時にコード変更なしで対応できるようにする） -->
+        <div class="migration-block" style="background:#fff8e1; border:2px solid #ffca28; padding:15px; border-radius:6px; margin-bottom:15px;">
+            <h3 class="migration-title" style="color:#f57f17;">🪙 軽減税率のデフォルト値設定</h3>
+            <p class="migration-desc">
+                商品登録時に「食品」「お惣菜/お弁当」「スイーツ/菓子」ジャンルを選ぶと、ここで設定した税率が自動で入力されます（登録前に手動で個別修正も可能）。<br>
+                税制改正（例：2027年4月以降の軽減税率引き下げ）の際も、ソースコードを書き換えることなくこの数値を変更するだけで対応できます。
+            </p>
+            <label class="modal-label small">軽減税率（%）</label>
+            <input type="number" id="reduced-tax-rate-input" style="padding:8px; border-radius:4px; border:1px solid #ccc; width:120px; margin-right:8px;" min="0" max="100" step="1">
+            <button class="btn-migration" style="background:#f57f17; color:white; padding:8px 12px; border:none; border-radius:4px; font-weight:bold; cursor:pointer;" onclick="saveReducedTaxRateSetting()">この税率を保存する</button>
+            <p class="migration-desc" style="margin-top:8px; font-size:12px; color:#888;">既存の登録済み商品の税率は自動では変わりません。反映するには各商品を編集し直してください。</p>
         </div>
 
         <div class="migration-block danger">
@@ -1146,7 +1168,7 @@
             <!-- 追加: ジャンル選択 -->
             <div class="modal-form-group">
                 <label class="modal-label">ジャンル</label>
-                <select id="edit-prod-genre-input" class="modal-input genre-select-dynamic">
+                <select id="edit-prod-genre-input" class="modal-input genre-select-dynamic" onchange="applyDefaultTaxRateForGenre(this.value, 'edit-prod-tax-input')">
                     <option value="食品">食品</option>
                     <option value="飲料/お酒">飲料/お酒</option>
                     <option value="お惣菜/お弁当">お惣菜/お弁当</option>
@@ -1252,6 +1274,15 @@
                 <input type="date" id="edit-cust-birthday-input" class="modal-input small">
             </div>
             <div class="modal-form-group small">
+                <label class="modal-label small">性別</label>
+                <select id="edit-cust-gender-input" class="modal-input small">
+                    <option value="">未回答</option>
+                    <option value="男性">男性</option>
+                    <option value="女性">女性</option>
+                    <option value="その他/回答しない">その他/回答しない</option>
+                </select>
+            </div>
+            <div class="modal-form-group small">
                 <label class="modal-label small">保有ポイント</label>
                 <input type="number" id="edit-cust-points-input" class="modal-input small">
             </div>
@@ -1263,7 +1294,7 @@
                 <label class="modal-label small">住所</label>
                 <input type="text" id="edit-cust-address-input" class="modal-input small">
             </div>
-            <div id="edit-cust-error" class="error-msg">お名前とフリガナを入力してください</div>
+            <div id="edit-cust-error" class="error-msg">姓・名、およびフリガナをすべて入力してください（未入力の欄は赤枠で表示されます）</div>
             <div class="modal-btn-group">
                 <button onclick="closeEditCustModal()" class="modal-btn cancel">キャンセル</button>
                 <button onclick="saveEditCust()" class="modal-btn purple">保存する</button>

@@ -757,6 +757,8 @@ body { font-family: 'Meiryo', sans-serif; margin: 0; padding: 0; background-colo
 .modal-btn.purple { background: #9c27b0; color: white; }
 .modal-btn.blue { background: #2196f3; color: white; }
 .error-msg { color: red; font-size: 12px; display: none; margin-bottom: 10px; font-weight: bold; }
+/* 未入力のまま保存しようとした入力欄を赤枠にする（会員情報の姓・名・フリガナなど） */
+.input-error-highlight { border: 2px solid #e53935 !important; background: #fff5f5; }
 
 /* 顧客・担当者・商品・履歴管理画面用 */
 .top-bar-title { margin: 0; font-size: 18px; }

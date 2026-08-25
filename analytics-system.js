@@ -3,7 +3,7 @@
 // お会計履歴（pos_history）を集計し、
 //   ① 一番売れた商品
 //   ② 一番多い年齢層・性別（checkout-demographics.jsで会計時に選んだ内容。
-//      それが無い古いデータ／会員データは、ポイントカード会員の年齢から推定）
+//      それが無ければ、ポイントカード会員の年齢・登録性別から推定）
 //   ③ 一番売れた日
 // を「本日 / 週間（直近7日）/ 月間（今月）」の3つの期間で確認できる。
 //
@@ -121,16 +121,28 @@ function calcAgeBracketBreakdown(historyList) {
     return { counts: countMap, labels: ANALYTICS_AGE_BRACKET_LABELS, total, best };
 }
 
-// 性別の内訳（checkout-demographics.js が記録した checkoutGender のみが対象。
-// 会員データからの推定はできないので、選択されたデータが無ければ「データなし」になる）
+// 性別の内訳
+// 優先順位: ①会計時に選んだ checkoutGender → ②ポイントカード会員に登録された性別(customerGender)から推定
+// （年齢層の getAgeBracketLabelForItem と同じ考え方）
+function getGenderLabelForItem(item) {
+    if (item.checkoutGender && ANALYTICS_GENDER_LABELS.includes(item.checkoutGender)) {
+        return item.checkoutGender;
+    }
+    if (item.customerGender && ANALYTICS_GENDER_LABELS.includes(item.customerGender)) {
+        return item.customerGender;
+    }
+    return null;
+}
+
 function calcGenderBreakdown(historyList) {
     const countMap = {};
     ANALYTICS_GENDER_LABELS.forEach(label => { countMap[label] = 0; });
 
     let total = 0;
     historyList.forEach(item => {
-        if (!item.checkoutGender || !ANALYTICS_GENDER_LABELS.includes(item.checkoutGender)) return;
-        countMap[item.checkoutGender] = (countMap[item.checkoutGender] || 0) + 1;
+        const label = getGenderLabelForItem(item);
+        if (!label) return;
+        countMap[label] = (countMap[label] || 0) + 1;
         total += 1;
     });
 
