@@ -58,7 +58,14 @@
     })();
     </script>
 
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
+    <!-- 追加：スマホでの全画面表示を安定させるためのPWA関連メタタグ。
+         特にiPhone（Safari）はJavaScriptのFullscreen APIにほぼ対応していないため、
+         「ホーム画面に追加」してこのタグ経由のstandalone起動をすることが
+         実質唯一の確実な全画面手段になる（Android Chromeも同様に安定する）。 -->
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>haruレジ</title>
     <!-- ウェブアイコン（Favicon）の設定 -->
     <link rel="icon" href="https://illust8.com/wp-content/uploads/2022/04/cash-register_16279.png" type="image/png">
@@ -343,8 +350,13 @@
 
     <!-- 客用画面 -->
     <div id="customer-screen" class="screen">
-        <div class="customer-back-container">
-            <button class="back-btn-small" onclick="goHome()">ホームに戻る</button>
+        <!-- 修正：客側からの誤タップでレジ画面に戻れてしまわないよう、
+             常時表示の「ホームに戻る」ボタンは廃止。
+             代わりに画面を5秒間長押し／Androidの「戻る」ボタンで
+             店員側（ホーム）に戻れるようにしている（customer-return.js 参照）。
+             長押し中はここに進捗バーが表示される。 -->
+        <div id="customer-longpress-indicator" class="customer-longpress-indicator">
+            <div id="customer-longpress-bar" class="customer-longpress-bar"></div>
         </div>
 
         <!-- 追加：客画面の右側にまとめて表示するパネル（お支払方法・会員情報） -->
@@ -1571,5 +1583,6 @@
     <script src="pagination-system.js"></script>
     <script src="notifications-system.js"></script>
     <script src="copy-deterrence.js"></script>
+    <script src="customer-return.js"></script>
 </body>
 </html>

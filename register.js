@@ -29,8 +29,10 @@ document.addEventListener('click', (e) => {
 });
 
 function openRegister() {
-    initAbly();
+    // 修正：全画面リクエストは「タップ操作の直後」でないとブラウザに拒否されることがあるため、
+    // このハンドラの一番最初に呼ぶ（他の処理を先に挟まない）。
     requestFullscreen();
+    initAbly();
     window.location.hash = '#register';
     showScreen('register-screen');
     const clerkDisplay = document.getElementById('active-clerk-display');
@@ -143,8 +145,10 @@ function buildMemberSummary(cust, displayName, rankInfo) {
 }
 
 function openCustomerScreen() {
-    initAbly();
+    // 修正：全画面リクエストは「タップ操作の直後」でないとブラウザに拒否されることがあるため、
+    // このハンドラの一番最初に呼ぶ（他の処理を先に挟まない）。
     requestFullscreen();
+    initAbly();
     window.location.hash = '#customer';
     showScreen('customer-screen');
     updateCustomerDisplay();

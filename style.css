@@ -681,6 +681,33 @@ body { font-family: 'Meiryo', sans-serif; margin: 0; padding: 0; background-colo
 
 /* 客用画面追加 */
 .customer-back-container { position: absolute; top: 10px; left: 10px; }
+
+/* 追加：客用画面の「5秒長押しでホームに戻る」進捗表示。
+   ボタンは置かず、指を離せばすぐ消える薄いバーのみで、
+   お客様が誤って触れても違和感が少ないようにしている。 */
+.customer-longpress-indicator {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 5px;
+    background: rgba(255,255,255,0.12);
+    z-index: 9998;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+    pointer-events: none;
+}
+.customer-longpress-indicator.active { opacity: 1; }
+.customer-longpress-bar {
+    height: 100%;
+    width: 0%;
+    background: #ffca28;
+    box-shadow: 0 0 6px rgba(255,202,40,0.8);
+}
+.customer-longpress-bar.animating {
+    width: 100%;
+    transition: width 5s linear;
+}
 #customer-last-barcode { position: absolute; bottom: 15px; left: 15px; font-size: 14px; color: #a7ffeb; font-family: monospace; background: rgba(0,0,0,0.4); padding: 6px 12px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.2); z-index: 10; }
 /* 「真ん中より少し上」に来るよう、見出しの上に少し余白を持たせる。
    見出し自体は customer-card の中で height:auto のまま、下の cart-list が

@@ -24,18 +24,30 @@ function goHome() {
     showScreen('home-screen');
 }
 
+// 修正：すでに全画面中／リクエスト処理中に再度呼び出すとブラウザによっては
+// エラーになることがあるため、その場合は何もしない（customer-return.js が
+// タップのたびに再リクエストを試みるため、ここで弾いても取りこぼしはない）。
 function requestFullscreen() {
     const elem = document.documentElement;
+    const alreadyFullscreen = !!(document.fullscreenElement || document.webkitFullscreenElement || document.mozFullScreenElement || document.msFullscreenElement);
+    if (alreadyFullscreen) return;
+
     if (elem.requestFullscreen) { elem.requestFullscreen().catch(err => { console.log(err); }); }
     else if (elem.webkitRequestFullscreen) { elem.webkitRequestFullscreen(); }
+    else if (elem.mozRequestFullScreen) { elem.mozRequestFullScreen(); }
     else if (elem.msRequestFullscreen) { elem.msRequestFullscreen(); }
 }
 
 function exitFullscreen() {
     if (document.exitFullscreen) {
         if (document.fullscreenElement) { document.exitFullscreen().catch(err => { console.log(err); }); }
-    } else if (document.webkitExitFullscreen) { document.webkitExitFullscreen(); }
-    else if (document.msExitFullscreen) { document.msExitFullscreen(); }
+    } else if (document.webkitExitFullscreen) {
+        if (document.webkitFullscreenElement) { document.webkitExitFullscreen(); }
+    } else if (document.mozCancelFullScreen) {
+        if (document.mozFullScreenElement) { document.mozCancelFullScreen(); }
+    } else if (document.msExitFullscreen) {
+        if (document.msFullscreenElement) { document.msExitFullscreen(); }
+    }
 }
 
 // レジ休止状態
