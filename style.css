@@ -18,7 +18,7 @@ body { font-family: 'Meiryo', sans-serif; margin: 0; padding: 0; background-colo
 .mini-voice-btn:active { background: #ffe0b2; }
 
 /* ホーム画面 */
-#home-screen { justify-content: center; align-items: center; text-align: center; position: relative; }
+#home-screen { justify-content: center; align-items: center; text-align: center; position: relative; overflow-y: auto; }
 .home-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; max-width: 600px; width: 90%; margin: 0 auto; }
 .home-btn { background: linear-gradient(to bottom, #f5a045, #d66a15); color: white; border: 1px solid #b3550e; border-radius: 8px; padding: 20px; font-size: 20px; font-weight: bold; cursor: pointer; text-align: center; box-shadow: 0 4px 6px rgba(0,0,0,0.1); white-space: nowrap; }
 .home-btn:active { transform: translateY(2px); box-shadow: 0 2px 3px rgba(0,0,0,0.2); }
@@ -1018,4 +1018,66 @@ body.refund-mode,
     margin-top: 6px;
     font-size: 14px;
     color: #888;
+}
+
+/* ==========================================
+   スマホの横画面（landscape・画面の高さが低い）向けの調整
+   ------------------------------------------
+   これまでの調整はすべて「幅」だけを基準にしていた（例：幅700px以下）。
+   しかしスマホを横向きにすると、幅は700pxを超えることが多く
+   （例：iPhoneの横向きは800px前後）、「幅だけ見ればPC」と判定されてしまい、
+   PC向けの大きな余白・文字サイズのままになって、高さが足りず使いにくかった。
+   （これが「PC版モードにしないと使いにくい」と感じていた主な原因）
+   ここでは「横向き」かつ「高さが低い（500px以下）」を基準に、
+   幅に関係なく全体をコンパクトにする。
+   ========================================== */
+@media screen and (orientation: landscape) and (max-height: 500px) {
+    /* ホーム画面：ボタン・ロゴを詰め気味にして、スクロールを減らす */
+    .home-grid { gap: 8px; }
+    .home-btn { padding: 8px; font-size: 14px; }
+    .home-btn.large { font-size: 16px; }
+    .home-shop-logo-img { max-height: 55px; margin-bottom: 4px; }
+    .home-title { font-size: 20px; }
+    .api-settings-container { padding: 6px 10px; margin-bottom: 8px; }
+
+    /* レジ画面：横向きなら「レシート欄｜テンキー欄」を横並び（行方向）にした方が
+       高さを有効に使えるため、幅700px以下向けの「縦積み」指定を打ち消す */
+    #register-screen { padding: 6px; }
+    .reg-layout {
+        flex-direction: row !important;
+        height: calc(100vh - 44px) !important;
+        gap: 6px;
+    }
+    .left-pane {
+        max-width: 34%;
+        max-height: none !important;
+    }
+    .right-pane {
+        flex: 1;
+        gap: 4px;
+    }
+    .reg-header {
+        margin-bottom: 4px;
+    }
+    .fixed-actions-container .action-btn {
+        height: 34px;
+        font-size: 10px;
+        padding: 2px;
+    }
+    .num-btn {
+        font-size: 14px;
+        min-height: 26px;
+    }
+    .action-grid {
+        min-height: 100px;
+        gap: 4px;
+    }
+
+    /* 各種モーダル：画面の高さいっぱいまで使い、はみ出す分は中でスクロールさせる */
+    .modal-box, .checkout-box, .custom-alert-box,
+    .customer-age-box, .customer-fraud-box, .receipt-preview-box {
+        max-height: 90vh;
+        overflow-y: auto;
+        padding: 15px;
+    }
 }

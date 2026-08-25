@@ -1,116 +1,146 @@
 // ==========================================
-// ハイテク音声レジスター - Firebase Cloud Storage 画像管理システム
+// ハイテク音声レジスター - 画像管理システム（Google Drive方式）
 // ==========================================
-// ロゴ・お会計完了画像を Cloud Storage にアップロード・管理
-// 店舗ごとのデータ分離、ローカルストレージとのハイブリッド保存
+// ロゴ・お会計完了画像を Google Drive にアップロード・管理する。
+//
+// 【2026-08 変更】
+// 以前は Firebase Cloud Storage を使っており、アップロードには
+// 「店舗パスフレーズ」の設定が必須だった。しかしそのパスフレーズを
+// 設定する画面（店舗ID・設定）が別の変更で削除されてしまい、
+// 「パスフレーズの設定が必要です」というメッセージだけが出て
+// 設定する場所がどこにも無い、という詰んだ状態になっていた。
+//
+// そこで、すでに google-drive-backup.js で実装済みの
+// Google Drive連携（店長のGoogleアカウントに一度だけ許可してもらう方式）を
+// そのまま流用する方式に変更した。これにより：
+//   ・パスフレーズや店舗IDの概念が丸ごと不要になった
+//     （Google Driveのアカウントごとに自動的にデータが分離されるため）
+//   ・データバックアップと同じ1つの連携（📗 Google Driveと連携）で完結する
+//
+// 画像ファイルは、連携したGoogleアカウントのマイドライブ直下に
+// 固定ファイル名（haru-pos-logo.png / haru-pos-checkout-image.png）で
+// 保存され、アップロードのたびに上書きされる。他端末（レジ・客用ディスプレイ・
+// スマホ）で表示するため、「リンクを知っている全員が閲覧可」に設定して
+// 画像への直接リンクURLを他の端末でもそのまま<img>表示できるようにしている。
+//
+// google-drive-backup.js は直接編集せず、そちらが用意している
+// ensureGoogleDriveToken() / gDriveApiFetch() をそのまま呼び出す。
 // ==========================================
 
-const FIREBASE_STORAGE_BUCKET = 'register-harureji.firebasestorage.app';
+const GDRIVE_LOGO_FILENAME = 'haru-pos-logo.png';
+const GDRIVE_CHECKOUT_IMAGE_FILENAME = 'haru-pos-checkout-image.png';
+
+// 指定した名前のファイルをGoogle Drive上（このアプリが作成したファイルの中）から検索する
+async function findGoogleDriveFileIdByName(filename) {
+    const q = encodeURIComponent(`name = '${filename}' and trashed = false`);
+    const res = await gDriveApiFetch(`https://www.googleapis.com/drive/v3/files?q=${q}&spaces=drive&fields=files(id,name)`);
+    if (!res.ok) throw new Error(`Drive検索エラー: ${res.status}`);
+    const data = await res.json();
+    if (data.files && data.files.length > 0) return data.files[0].id;
+    return null;
+}
+
+// ファイルを「リンクを知っている全員が閲覧可」に設定する
+// （他端末の<img>タグで、ログインなしに直接表示できるようにするため）
+async function makeGoogleDriveFilePublic(fileId) {
+    try {
+        await gDriveApiFetch(`https://www.googleapis.com/drive/v3/files/${fileId}/permissions`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ role: 'reader', type: 'anyone' })
+        });
+    } catch (err) {
+        console.warn('Google Drive公開設定エラー:', err);
+    }
+}
+
+function getGoogleDriveImageViewUrl(fileId) {
+    return `https://drive.google.com/uc?export=view&id=${fileId}`;
+}
+
+// ファイルをArrayBuffer→Base64文字列に変換する（Drive APIのmultipartアップロード用）
+async function fileToBase64(file) {
+    const arrayBuffer = await file.arrayBuffer();
+    const bytes = new Uint8Array(arrayBuffer);
+    let binary = '';
+    const chunkSize = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+    }
+    return btoa(binary);
+}
 
 /**
- * ロゴをCloud Storageにアップロード
+ * 画像ファイルをGoogle Driveへアップロード（新規作成 or 上書き）し、公開URLを返す
  * @param {File} file - アップロードするファイル
- * @param {Function} onProgress - 進捗コールバック (0-100)
+ * @param {string} filename - Drive上で使う固定ファイル名
+ * @returns {Promise<{fileId: string, url: string}|null>}
  */
-async function uploadShopLogoToCloud(file, onProgress = null) {
+async function uploadImageToGoogleDrive(file, filename) {
+    // 写真を選んだ＝明示的な操作なので、必要ならアカウント選択・同意画面を出してよい
+    const ok = await ensureGoogleDriveToken(true);
+    if (!ok) {
+        if (typeof showCustomConfirm === 'function') {
+            showCustomConfirm(
+                'Google Driveとの連携が必要です。「データ管理」の「📗 Google Driveと連携」を先に行ってください。',
+                'Google Drive と の れんけい が ひつよう です。',
+                () => {}, true
+            );
+        }
+        return null;
+    }
+
     try {
-        if (!firebase || !firebase.storage) {
-            console.error('Firebase Storage is not initialized');
-            if (typeof showCustomConfirm === 'function') {
-                showCustomConfirm('Firebaseの初期化に失敗しました。', 'しゅつりょく に しっぱい しました', () => {}, true);
-            }
-            return false;
-        }
+        const fileId = await findGoogleDriveFileIdByName(filename);
+        const mimeType = file.type || 'image/png';
+        const metadata = { name: filename, mimeType: mimeType };
+        const base64Data = await fileToBase64(file);
 
-        const shopId = getOrCreateShopId();
-        const passphrase = getShopPassphrase();
+        const boundary = 'haru_pos_img_boundary_' + Date.now();
+        const multipartBody =
+            `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n` +
+            `--${boundary}\r\nContent-Type: ${mimeType}\r\nContent-Transfer-Encoding: base64\r\n\r\n${base64Data}\r\n` +
+            `--${boundary}--`;
 
-        if (!passphrase) {
-            if (typeof showCustomConfirm === 'function') {
-                showCustomConfirm(
-                    'クラウド保存にはパスフレーズの設定が必須です。先に「データ管理」で設定してください。',
-                    'ぱすふれーず せってい が ひっす です',
-                    () => {},
-                    true
-                );
-            }
-            return false;
-        }
+        const uploadUrl = fileId
+            ? `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=multipart`
+            : `https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart`;
 
-        const timestamp = new Date().getTime();
-        const filename = `logo_${timestamp}.${file.name.split('.').pop()}`;
-        const storagePath = getShopLogoStoragePath(filename);
+        const res = await gDriveApiFetch(uploadUrl, {
+            method: fileId ? 'PATCH' : 'POST',
+            headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
+            body: multipartBody
+        });
 
-        const storage = firebase.storage();
-        const ref = storage.ref(storagePath);
+        if (!res.ok) throw new Error(`Driveアップロードエラー: ${res.status}`);
+        const created = await res.json();
+        const newFileId = created.id || fileId;
 
-        // メタデータに店舗情報を埋め込む（ルール側で検証可能に）
-        const metadata = {
-            customMetadata: {
-                shopId: shopId,
-                uploadedAt: new Date().toISOString(),
-                uploadedBy: 'web-app',
-                deviceId: POS_DEVICE_ID
-            }
-        };
+        await makeGoogleDriveFilePublic(newFileId);
 
-        const uploadTask = ref.put(file, metadata);
-
-        // 進捗を監視
-        uploadTask.on('state_changed',
-            (snapshot) => {
-                const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
-                if (typeof onProgress === 'function') {
-                    onProgress(progress);
-                }
-                console.log(`ロゴアップロード進捗: ${progress.toFixed(2)}%`);
-            },
-            (error) => {
-                console.error('ロゴアップロードエラー:', error);
-                if (typeof playSound === 'function') playSound('error');
-                if (typeof showCustomConfirm === 'function') {
-                    showCustomConfirm(
-                        `クラウドアップロード失敗: ${error.message}`,
-                        'あっぷろーど に しっぱい しました',
-                        () => {},
-                        true
-                    );
-                }
-            },
-            async () => {
-                // アップロード完了
-                try {
-                    const downloadUrl = await ref.getDownloadURL();
-                    setShopLogoUrl(downloadUrl);
-                    localStorage.setItem('pos_shop_logo_url_cloud', downloadUrl);
-                    
-                    // UIに反映
-                    const logoImg = document.getElementById('home-shop-logo');
-                    const receiptLogo = document.getElementById('receipt-preview-logo');
-                    if (logoImg) logoImg.src = downloadUrl;
-                    if (receiptLogo) receiptLogo.src = downloadUrl;
-
-                    if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
-                    if (typeof playSound === 'function') playSound('success');
-                    if (typeof speak === 'function') speak('ろご を あっぷろーど しました');
-
-                    console.log('✅ ロゴクラウド保存完了:', downloadUrl);
-                } catch (err) {
-                    console.error('ダウンロードURL取得エラー:', err);
-                }
-            }
-        );
-
-        return true;
+        return { fileId: newFileId, url: getGoogleDriveImageViewUrl(newFileId) };
     } catch (error) {
-        console.error('ロゴアップロード準備エラー:', error);
-        if (typeof playSound === 'function') playSound('error');
-        return false;
+        console.error('Google Driveへの画像アップロードに失敗しました:', error);
+        return null;
+    }
+}
+
+// 指定した名前のファイルをGoogle Driveから削除する
+async function deleteGoogleDriveFileByName(filename, interactive) {
+    try {
+        const ok = await ensureGoogleDriveToken(!!interactive);
+        if (!ok) return;
+        const fileId = await findGoogleDriveFileIdByName(filename);
+        if (!fileId) return;
+        await gDriveApiFetch(`https://www.googleapis.com/drive/v3/files/${fileId}`, { method: 'DELETE' });
+        console.log(`✅ Google Driveから削除完了: ${filename}`);
+    } catch (err) {
+        console.warn('Google Drive画像削除エラー:', err);
     }
 }
 
 /**
- * ロゴをローカル/クラウド両方に保存（既存UI用）
+ * ロゴをローカル/Google Drive両方に保存（既存UI用。イベントハンドラ名は変更なし）
  * @param {Event} event - input[type="file"]の change イベント
  */
 async function uploadShopLogo(event) {
@@ -119,7 +149,7 @@ async function uploadShopLogo(event) {
 
     if (typeof playSound === 'function') playSound('click');
 
-    // 既存の localStorage への保存（ローカルフォールバック用）
+    // まずローカル保存（即座にプレビュー表示できるようにする。ネット環境に関わらず動く）
     const reader = new FileReader();
     reader.onload = async (e) => {
         const dataUrl = e.target.result;
@@ -133,15 +163,14 @@ async function uploadShopLogo(event) {
         if (typeof playSound === 'function') playSound('success');
         if (typeof speak === 'function') speak('ろご を ほぞん しました');
 
-        // Cloud Storage へのアップロードを同時進行（バックグラウンド）
-        // 【修正】以前はここで pos_api_key（Ably=リアルタイム同期用のキーで、
-        // Firebase Cloud Storageとは無関係）が設定されている時だけアップロードしていたため、
-        // Ablyキーを使っていない店舗ではロゴがクラウドに保存されず、他端末に反映されなかった。
-        // アップロード可否はFirebase側（合言葉の設定状況・firebase.storageの有無）で
-        // uploadShopLogoToCloud() が自分で判断するので、ここでは無条件に呼び出す。
-        await uploadShopLogoToCloud(file, (progress) => {
-            console.log(`クラウドアップロード: ${progress.toFixed(2)}%`);
-        });
+        // Google Driveへのアップロード（連携済みなら他端末にも反映される）
+        const result = await uploadImageToGoogleDrive(file, GDRIVE_LOGO_FILENAME);
+        if (result) {
+            setShopLogoUrl(result.url);
+            localStorage.setItem('pos_shop_logo_url_cloud', result.url);
+            if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
+            console.log('✅ ロゴをGoogle Driveに保存完了:', result.url);
+        }
     };
     reader.readAsDataURL(file);
 
@@ -150,7 +179,7 @@ async function uploadShopLogo(event) {
 }
 
 /**
- * ロゴをクリア（ローカルとクラウド両方）
+ * ロゴをクリア（ローカルとGoogle Drive両方）
  */
 async function clearShopLogo() {
     if (typeof showCustomConfirm === 'function') {
@@ -169,17 +198,8 @@ async function clearShopLogo() {
                 if (logoImg) logoImg.src = 'https://illust8.com/wp-content/uploads/2022/04/cash-register_16279.png';
                 if (receiptLogo) receiptLogo.src = 'https://illust8.com/wp-content/uploads/2022/04/cash-register_16279.png';
 
-                // Cloud Storage から削除
-                try {
-                    const shopId = getOrCreateShopId();
-                    const storage = firebase.storage();
-                    const logoDir = storage.ref(`shop-assets/${shopId}/logo`);
-                    const result = await logoDir.listAll();
-                    result.items.forEach(item => item.delete());
-                    console.log('✅ クラウドロゴ削除完了');
-                } catch (err) {
-                    console.warn('クラウドロゴ削除エラー（ローカルは削除済み）:', err);
-                }
+                // Google Driveからも削除（連携している場合のみ。明示的な操作なので画面表示OK）
+                await deleteGoogleDriveFileByName(GDRIVE_LOGO_FILENAME, true);
 
                 if (typeof playSound === 'function') playSound('success');
                 if (typeof speak === 'function') speak('ろご を さくじょ しました');
@@ -191,95 +211,7 @@ async function clearShopLogo() {
 }
 
 /**
- * お会計完了画像を Cloud Storage にアップロード
- * @param {File} file - アップロードするファイル
- * @param {Function} onProgress - 進捗コールバック (0-100)
- */
-async function uploadCheckoutCompleteImageToCloud(file, onProgress = null) {
-    try {
-        if (!firebase || !firebase.storage) {
-            console.error('Firebase Storage is not initialized');
-            return false;
-        }
-
-        const shopId = getOrCreateShopId();
-        const passphrase = getShopPassphrase();
-
-        if (!passphrase) {
-            if (typeof showCustomConfirm === 'function') {
-                showCustomConfirm(
-                    'クラウド保存にはパスフレーズの設定が必須です。',
-                    'ぱすふれーず せってい が ひっす です',
-                    () => {},
-                    true
-                );
-            }
-            return false;
-        }
-
-        const timestamp = new Date().getTime();
-        const filename = `checkout-complete_${timestamp}.${file.name.split('.').pop()}`;
-        const storagePath = getShopCheckoutImageStoragePath(filename);
-
-        const storage = firebase.storage();
-        const ref = storage.ref(storagePath);
-
-        const metadata = {
-            customMetadata: {
-                shopId: shopId,
-                uploadedAt: new Date().toISOString(),
-                uploadedBy: 'web-app',
-                deviceId: POS_DEVICE_ID,
-                imageType: 'checkout-complete'
-            }
-        };
-
-        const uploadTask = ref.put(file, metadata);
-
-        uploadTask.on('state_changed',
-            (snapshot) => {
-                const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
-                if (typeof onProgress === 'function') {
-                    onProgress(progress);
-                }
-                console.log(`お会計画像アップロード進捗: ${progress.toFixed(2)}%`);
-            },
-            (error) => {
-                console.error('お会計画像アップロードエラー:', error);
-                if (typeof playSound === 'function') playSound('error');
-            },
-            async () => {
-                try {
-                    const downloadUrl = await ref.getDownloadURL();
-                    setShopCheckoutImageUrl(downloadUrl);
-                    localStorage.setItem('pos_shop_checkout_image_url_cloud', downloadUrl);
-
-                    const previewImg = document.getElementById('checkout-image-preview');
-                    if (previewImg) {
-                        previewImg.src = downloadUrl;
-                        previewImg.style.display = 'block';
-                    }
-
-                    if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
-                    if (typeof playSound === 'function') playSound('success');
-                    if (typeof speak === 'function') speak('お会計かんりょう がぞう を あっぷろーど しました');
-
-                    console.log('✅ お会計画像クラウド保存完了:', downloadUrl);
-                } catch (err) {
-                    console.error('ダウンロードURL取得エラー:', err);
-                }
-            }
-        );
-
-        return true;
-    } catch (error) {
-        console.error('お会計画像アップロード準備エラー:', error);
-        return false;
-    }
-}
-
-/**
- * お会計完了画像をローカル/クラウド両方に保存
+ * お会計完了画像をローカル/Google Drive両方に保存
  * @param {Event} event - input[type="file"]の change イベント
  */
 async function uploadCheckoutCompleteImage(event) {
@@ -303,14 +235,14 @@ async function uploadCheckoutCompleteImage(event) {
         if (typeof playSound === 'function') playSound('success');
         if (typeof speak === 'function') speak('かんりょう がぞう を ほぞん しました');
 
-        // Cloud Storage へのアップロード
-        // 【修正】ロゴと同様、pos_api_key（Ablyキー）の有無で判断していたのを廃止。
-        // これが原因で、Ablyキーを設定していない客用ディスプレイ端末などでは
-        // クラウドURL（getShopCheckoutImageUrl()）が一度も登録されず、
-        // 客画面にお会計完了画像が表示されない不具合が起きていた。
-        await uploadCheckoutCompleteImageToCloud(file, (progress) => {
-            console.log(`クラウドアップロード: ${progress.toFixed(2)}%`);
-        });
+        // Google Driveへのアップロード
+        const result = await uploadImageToGoogleDrive(file, GDRIVE_CHECKOUT_IMAGE_FILENAME);
+        if (result) {
+            setShopCheckoutImageUrl(result.url);
+            localStorage.setItem('pos_shop_checkout_image_url_cloud', result.url);
+            if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
+            console.log('✅ お会計完了画像をGoogle Driveに保存完了:', result.url);
+        }
     };
     reader.readAsDataURL(file);
 
@@ -335,17 +267,7 @@ async function clearCheckoutCompleteImage() {
                 const previewImg = document.getElementById('checkout-image-preview');
                 if (previewImg) previewImg.style.display = 'none';
 
-                // Cloud Storage から削除
-                try {
-                    const shopId = getOrCreateShopId();
-                    const storage = firebase.storage();
-                    const imgDir = storage.ref(`shop-assets/${shopId}/checkout-images`);
-                    const result = await imgDir.listAll();
-                    result.items.forEach(item => item.delete());
-                    console.log('✅ クラウド画像削除完了');
-                } catch (err) {
-                    console.warn('クラウド画像削除エラー（ローカルは削除済み）:', err);
-                }
+                await deleteGoogleDriveFileByName(GDRIVE_CHECKOUT_IMAGE_FILENAME, true);
 
                 if (typeof playSound === 'function') playSound('success');
                 if (typeof speak === 'function') speak('かんりょう がぞう を さくじょ しました');
@@ -357,67 +279,67 @@ async function clearCheckoutCompleteImage() {
 }
 
 /**
- * Cloud Storageからロゴを取得して表示
+ * Google Driveからロゴを取得して表示する（自動実行。画面は一切出さない）
  */
 async function loadShopLogoFromCloud() {
     try {
-        const shopId = getOrCreateShopId();
-        const storage = firebase.storage();
-        const logoDir = storage.ref(`shop-assets/${shopId}/logo`);
-        const result = await logoDir.listAll();
+        // 自動実行（ページ読み込み時）なので、画面（アカウント選択等）は絶対に出さない。
+        // 連携済みで、かつトークンがすぐに使える場合だけ実行する。
+        const ok = await ensureGoogleDriveToken(false);
+        if (!ok) return null;
 
-        if (result.items.length > 0) {
-            // 最新のロゴファイルを取得
-            const latestItem = result.items[result.items.length - 1];
-            const downloadUrl = await latestItem.getDownloadURL();
-            setShopLogoUrl(downloadUrl);
+        const fileId = await findGoogleDriveFileIdByName(GDRIVE_LOGO_FILENAME);
+        if (!fileId) return null;
 
-            const logoImg = document.getElementById('home-shop-logo');
-            if (logoImg) logoImg.src = downloadUrl;
+        const url = getGoogleDriveImageViewUrl(fileId);
+        setShopLogoUrl(url);
+        localStorage.setItem('pos_shop_logo_url_cloud', url);
 
-            console.log('✅ ロゴをクラウドから読み込み:', downloadUrl);
-            return downloadUrl;
-        }
+        const logoImg = document.getElementById('home-shop-logo');
+        const receiptLogo = document.getElementById('receipt-preview-logo');
+        if (logoImg) logoImg.src = url;
+        if (receiptLogo) receiptLogo.src = url;
+
+        console.log('✅ ロゴをGoogle Driveから読み込み:', url);
+        return url;
     } catch (error) {
-        console.warn('クラウドロゴ読み込みエラー:', error);
+        console.warn('Google Driveロゴ読み込みエラー:', error);
     }
     return null;
 }
 
 /**
- * Cloud Storageからお会計完了画像を取得して表示
+ * Google Driveからお会計完了画像を取得して表示する（自動実行。画面は一切出さない）
  */
 async function loadCheckoutImageFromCloud() {
     try {
-        const shopId = getOrCreateShopId();
-        const storage = firebase.storage();
-        const imgDir = storage.ref(`shop-assets/${shopId}/checkout-images`);
-        const result = await imgDir.listAll();
+        const ok = await ensureGoogleDriveToken(false);
+        if (!ok) return null;
 
-        if (result.items.length > 0) {
-            // 最新の画像ファイルを取得
-            const latestItem = result.items[result.items.length - 1];
-            const downloadUrl = await latestItem.getDownloadURL();
-            setShopCheckoutImageUrl(downloadUrl);
+        const fileId = await findGoogleDriveFileIdByName(GDRIVE_CHECKOUT_IMAGE_FILENAME);
+        if (!fileId) return null;
 
-            const previewImg = document.getElementById('checkout-image-preview');
-            if (previewImg) {
-                previewImg.src = downloadUrl;
-                previewImg.style.display = 'block';
-            }
+        const url = getGoogleDriveImageViewUrl(fileId);
+        setShopCheckoutImageUrl(url);
+        localStorage.setItem('pos_shop_checkout_image_url_cloud', url);
 
-            console.log('✅ お会計画像をクラウドから読み込み:', downloadUrl);
-            return downloadUrl;
+        const previewImg = document.getElementById('checkout-image-preview');
+        if (previewImg) {
+            previewImg.src = url;
+            previewImg.style.display = 'block';
         }
+
+        console.log('✅ お会計完了画像をGoogle Driveから読み込み:', url);
+        return url;
     } catch (error) {
-        console.warn('クラウド画像読み込みエラー:', error);
+        console.warn('Google Drive画像読み込みエラー:', error);
     }
     return null;
 }
 
 /**
- * ローカルから Cloud Storage へ一括アップロード
- * （バックアップからの復元時に使用）
+ * ローカルからGoogle Driveへ一括アップロード
+ * （バックアップからの復元時などに使用）
  */
 async function syncImagesToCloud() {
     try {
@@ -426,17 +348,17 @@ async function syncImagesToCloud() {
 
         if (logoLocal) {
             const blob = await (await fetch(logoLocal)).blob();
-            const file = new File([blob], 'logo.png', { type: 'image/png' });
-            await uploadShopLogoToCloud(file);
+            const file = new File([blob], GDRIVE_LOGO_FILENAME, { type: blob.type || 'image/png' });
+            await uploadImageToGoogleDrive(file, GDRIVE_LOGO_FILENAME);
         }
 
         if (checkoutLocal) {
             const blob = await (await fetch(checkoutLocal)).blob();
-            const file = new File([blob], 'checkout-complete.png', { type: 'image/png' });
-            await uploadCheckoutCompleteImageToCloud(file);
+            const file = new File([blob], GDRIVE_CHECKOUT_IMAGE_FILENAME, { type: blob.type || 'image/png' });
+            await uploadImageToGoogleDrive(file, GDRIVE_CHECKOUT_IMAGE_FILENAME);
         }
 
-        console.log('✅ ローカル画像をクラウドに同期完了');
+        console.log('✅ ローカル画像をGoogle Driveに同期完了');
     } catch (error) {
         console.warn('画像同期エラー:', error);
     }
@@ -446,7 +368,7 @@ async function syncImagesToCloud() {
  * 初期化: アプリ起動時に画像を読み込む
  */
 async function initImageStorage() {
-    // 1. ローカルから先に読み込む（高速）
+    // 1. ローカルから先に読み込む（高速・オフラインでも動く）
     const logoLocal = localStorage.getItem('pos_shop_logo_local');
     const checkoutLocal = localStorage.getItem('pos_shop_checkout_image_local');
 
@@ -463,17 +385,11 @@ async function initImageStorage() {
         }
     }
 
-    // 2. クラウドから最新版を非同期でフェッチ（バックグラウンド）
-    // 【修正】以前は pos_api_key（Ablyキー）が設定されている端末でしか
-    // このフェッチ自体を行っていなかった。客用ディスプレイ専用端末など、
-    // Ablyキーを設定していない端末では、他の端末がクラウドに保存した
-    // お会計完了画像・ロゴが永遠に読み込まれず、客画面に写真が
-    // 表示されない不具合の主な原因になっていた。
-    // Firebase Storageが使えるかどうかだけを条件にする。
+    // 2. Google Driveと連携済みの場合のみ、最新版を非同期でフェッチ（バックグラウンド・無音）
     setTimeout(async () => {
-        if (firebase && firebase.storage) {
-            const cloudLogo = await loadShopLogoFromCloud();
-            const cloudCheckout = await loadCheckoutImageFromCloud();
+        if (localStorage.getItem('pos_gdrive_connected') === 'true') {
+            await loadShopLogoFromCloud();
+            await loadCheckoutImageFromCloud();
         }
     }, 2000);
 }

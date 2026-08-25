@@ -74,12 +74,16 @@ function hasValidGoogleDriveToken() {
 
 /**
  * 店長がボタンを押した時に呼ぶ：Googleアカウントでの許可（同意画面）を出す
+ * @param {boolean} interactive - true: ボタン押下など、人の操作による明示的な呼び出し
+ *                                （必要ならアカウント選択・同意画面を表示してよい）
+ *                                false: 5分おきの自動バックアップなど、裏側からの自動呼び出し
+ *                                （画面は絶対に出さず、できなければ静かに諦める）
  */
-async function connectGoogleDrive() {
-    if (typeof playSound === 'function') playSound('click');
+async function connectGoogleDrive(interactive = true) {
+    if (interactive && typeof playSound === 'function') playSound('click');
 
     if (!isGoogleDriveConfigured()) {
-        if (typeof showCustomConfirm === 'function') {
+        if (interactive && typeof showCustomConfirm === 'function') {
             showCustomConfirm(
                 "Google Drive連携がまだ設定されていません。google-drive-backup.js内のGOOGLE_DRIVE_CLIENT_IDを設定してください。",
                 "せってい が まだ です。",
@@ -93,7 +97,7 @@ async function connectGoogleDrive() {
         await loadGoogleIdentityServicesScript();
     } catch (e) {
         console.warn(e);
-        if (typeof showCustomConfirm === 'function') {
+        if (interactive && typeof showCustomConfirm === 'function') {
             showCustomConfirm("Google Driveへの接続準備に失敗しました。通信環境をご確認ください。", "せつぞく に しっぱい し まし た。", () => {}, false);
         }
         return;
@@ -113,26 +117,43 @@ async function connectGoogleDrive() {
                 gDriveAccessToken = resp.access_token;
                 gDriveAccessTokenExpiresAt = Date.now() + (parseInt(resp.expires_in, 10) || 3600) * 1000;
                 localStorage.setItem('pos_gdrive_connected', 'true');
-                if (typeof playSound === 'function') playSound('success');
-                if (typeof showCustomConfirm === 'function') {
-                    showCustomConfirm("Google Driveとの連携が完了しました。以後、自動でバックアップされます。", "Google Drive と の れんけい が かんりょう し まし た。", () => {}, false);
+                if (interactive) {
+                    if (typeof playSound === 'function') playSound('success');
+                    if (typeof showCustomConfirm === 'function') {
+                        showCustomConfirm("Google Driveとの連携が完了しました。以後、自動でバックアップされます。", "Google Drive と の れんけい が かんりょう し まし た。", () => {}, false);
+                    }
                 }
             } else {
-                if (typeof playSound === 'function') playSound('error');
+                if (interactive && typeof playSound === 'function') playSound('error');
             }
             resolve(resp);
         };
-        // すでに許可済みなら無音（consent省略）で更新、未許可なら同意画面を表示
-        gDriveTokenClient.requestAccessToken({ prompt: localStorage.getItem('pos_gdrive_connected') === 'true' ? '' : 'consent' });
+
+        // 自動実行（interactive=false）でトークン取得に失敗した場合、ここに来ても
+        // 画面には一切何も表示しない。次の自動実行、または店長が明示的に操作した時に
+        // 改めて試みればよいだけなので、静かに諦める。
+        gDriveTokenClient.error_callback = (err) => {
+            if (interactive) {
+                console.warn('Google Driveへの接続に失敗しました:', err);
+            }
+            resolve(null);
+        };
+
+        const alreadyConnected = localStorage.getItem('pos_gdrive_connected') === 'true';
+        // 自動実行時は 'none'（画面を一切出さない。できなければ黙って失敗）を指定する。
+        // 人の操作による場合のみ、必要に応じてアカウント選択・同意画面を出してよい。
+        const promptValue = !interactive ? 'none' : (alreadyConnected ? '' : 'consent');
+        gDriveTokenClient.requestAccessToken({ prompt: promptValue });
     });
 }
 
-// アクセストークンが切れていたら、店長の操作を挟まずに（可能な範囲で）更新する
-async function ensureGoogleDriveToken() {
+// アクセストークンが切れていたら、可能な範囲で更新する
+// @param {boolean} interactive - true: 人の操作による呼び出し（画面表示OK） / false: 自動実行（画面は出さない）
+async function ensureGoogleDriveToken(interactive = false) {
     if (hasValidGoogleDriveToken()) return true;
     if (localStorage.getItem('pos_gdrive_connected') !== 'true') return false; // 未連携なら諦める
     try {
-        await connectGoogleDrive();
+        await connectGoogleDrive(interactive);
         return hasValidGoogleDriveToken();
     } catch (e) {
         return false;
@@ -168,14 +189,15 @@ async function backupToGoogleDriveNow(silent = false) {
     if (!silent && typeof playSound === 'function') playSound('click');
 
     if (!isGoogleDriveConfigured()) {
-        if (!silent) return connectGoogleDrive(); // 未設定なら案内を出す
+        if (!silent) return connectGoogleDrive(true); // 未設定なら案内を出す（手動操作時のみ）
         return;
     }
 
-    const ok = await ensureGoogleDriveToken();
+    // silent=true（自動実行）の場合は interactive=false を渡し、画面を出さずに諦められるようにする
+    const ok = await ensureGoogleDriveToken(!silent);
     if (!ok) {
-        if (!silent) return connectGoogleDrive();
-        return;
+        if (!silent) return connectGoogleDrive(true);
+        return; // 自動実行時はここで静かに諦める（次回、トークンが有効な時か、店長が明示的に操作した時にまた送信される）
     }
 
     if (typeof buildAllDataObject !== 'function') {
@@ -238,8 +260,9 @@ async function backupToGoogleDriveNow(silent = false) {
 async function restoreFromGoogleDrive() {
     if (typeof playSound === 'function') playSound('click');
 
-    const ok = await ensureGoogleDriveToken();
-    if (!ok) { await connectGoogleDrive(); if (!hasValidGoogleDriveToken()) return; }
+    // ボタンを押した明示的な操作なので、必要ならアカウント選択・同意画面を出してよい
+    const ok = await ensureGoogleDriveToken(true);
+    if (!ok) { await connectGoogleDrive(true); if (!hasValidGoogleDriveToken()) return; }
 
     try {
         const fileId = await findGoogleDriveBackupFileId();

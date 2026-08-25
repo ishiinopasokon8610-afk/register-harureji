@@ -122,6 +122,14 @@ function closeCustomConfirm(isYes) {
     }
 }
 
+// Safari（および他の非対応ブラウザ）かどうかを判定する。
+// Safariはフォルダへの自動書き込み機能（showDirectoryPicker）に非対応なため、
+// 代わりに「ダウンロード時に毎回保存先を確認する」設定を案内する。
+function isSafariBrowser() {
+    const ua = navigator.userAgent;
+    return /^((?!chrome|chromium|crios|edg|opr|android).)*safari/i.test(ua);
+}
+
 // レシート保存フォルダ設定
 async function setupReceiptFolder() {
     playSound('click');
@@ -138,6 +146,15 @@ async function setupReceiptFolder() {
         } catch (err) {
             console.log(err);
         }
+    } else if (isSafariBrowser()) {
+        // Safariはブラウザの仕組み上、フォルダへの自動保存に対応できない
+        // （OSがこの機能自体をサポートしていない）。
+        // 代わりに、ダウンロードのたびに保存先フォルダを選べるSafariの設定を案内する。
+        showCustomConfirm(
+            "Safariは仕組み上、フォルダへの自動保存に対応していません。代わりに、Safariの「環境設定」→「一般」→「ファイルのダウンロード先」を「毎回確認」にしておくと、レシートやバックアップをダウンロードするたびに保存先フォルダを選べます（同じフォルダを選び続ければ、手動ですが1か所にまとめて保存できます）。Chrome・Edgeであれば自動保存に対応しています。",
+            "Safari は ふぉるだ の じどう ほぞん に たいおう し て い ませ ん。",
+            () => {}, false
+        );
     } else {
         showCustomConfirm("このブラウザはフォルダの指定に対応していません。通常のダウンロードになります。", "この ぶらうざ は ふぉるだ の してい に たいおう し て い ませ ん。", () => {}, false);
     }

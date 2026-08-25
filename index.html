@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -290,11 +291,25 @@
         <!-- API設定コンテナ -->
         <div id="api-settings-container" class="api-settings-container" style="display: none;">
             <div id="api-guide-msg" class="api-guide-msg">初めて入った人は設定をしてください！</div>
-            <label class="api-label">APIキー設定 (Ably):</label>
+            <label class="api-label">APIキー設定 (Ably) ※権限を絞ったキーを使用してください:</label>
             <div class="api-input-wrapper">
                 <input type="text" id="api-key-input" placeholder="APIキーを入力してください" value="">
                 <button class="api-save-btn" onclick="saveApiKey()">保存</button>
             </div>
+            <details style="margin-top:8px; font-size:12px; color:#555; width:100%; max-width:480px; text-align:left; box-sizing:border-box;">
+                <summary style="cursor:pointer; color:#1565c0; font-weight:bold; text-align:left;">🔑 権限を絞ったキーの発行方法はこちら</summary>
+                <div style="margin-top:8px; line-height:1.7; padding:10px; background:#f5f5f5; border-radius:6px; text-align:left; word-break:break-word; overflow-wrap:break-word; box-sizing:border-box; max-height:180px; overflow-y:auto;">
+                    1. Ablyのダッシュボード（<a href="https://ably.com" target="_blank" rel="noopener">ably.com</a>）にログイン<br>
+                    2. 対象のApp（アプリ／プロジェクト）を選択<br>
+                    3. 左メニューの「API Keys（APIキー）」を開く<br>
+                    4. 「Create API key（新しいAPIキーを作成）」から新しいキーを作成<br>
+                    5. Capabilities（権限）は「Subscribe（受信・購読）」「Publish（送信・発行）」「Presence（在室・在席情報）」の3つだけにチェックし、それ以外（Admin系の権限など）はチェックしない<br>
+                    6. 可能であれば、Channels（対象チャンネル）を「hightech-pos-channel」（このアプリが使うチャンネル名）に限定する<br>
+                    7. 作成されたキーをコピーし、上の入力欄に貼り付けて「保存」を押す<br><br>
+                    ⚠️ 権限がすべてONになっている「ルート（管理者）キー」は、ここでは絶対に使わないでください。<br>
+                    ※ Ablyのダッシュボードを日本語表示にしていると、上記の英語表記（Capabilities・Subscribe・Publish・Presence・Channelsなど）が別の日本語に翻訳されて表示される場合があります。その場合は、この案内の（　）内の日本語訳を目印に探してください。
+                </div>
+            </details>
         </div>
 
         <div class="home-grid">
@@ -896,7 +911,7 @@
         <!-- 追加：ロゴ画像のアップロード設定ブロック -->
         <div class="migration-block" style="background:#e3f2fd; border:2px solid #90caf9; padding:15px; border-radius:6px; margin-bottom:15px;">
             <h3 class="migration-title" style="color:#1565c0;">📸 ホーム画面・レシート用ロゴの登録</h3>
-            <p class="migration-desc">お店のロゴ（ヤオコーなど）の画像を登録できます。「ファイルを選択」ボタンからアップロードしてください。</p>
+            <p class="migration-desc">お店のロゴ（ヤオコーなど）の画像を登録できます。「ファイルを選択」ボタンからアップロードしてください。<br>他の端末（レジ・客用ディスプレイ・スマホ）にも自動で反映するには、あらかじめ下の「💾 データのバックアップ」欄で「📗 Google Driveと連携」を行っておいてください。</p>
             <input type="file" id="logo-upload-input" accept="image/*" onchange="uploadShopLogo(event)" style="margin-bottom: 10px;">
             <br>
             <button class="btn-migration" style="background:#f44336; color:white; padding:8px 12px; border:none; border-radius:4px; font-weight:bold; cursor:pointer;" onclick="clearShopLogo()">ロゴを初期化する</button>
@@ -929,7 +944,7 @@
         <!-- 追加：お会計完了時に客画面へ表示する画像の設定 -->
         <div class="migration-block" style="background:#fff3e0; border:2px solid #ffb74d; padding:15px; border-radius:6px; margin-top:15px;">
             <h3 class="migration-title" style="color:#e65100;">🖼️ お会計完了時に客画面へ表示する画像の設定</h3>
-            <p class="migration-desc">お会計が完了した瞬間、客用画面いっぱいに表示される画像（広告・キャンペーン告知など）を設定できます。画像は画面の下からアニメーションでせり上がって表示されます。</p>
+            <p class="migration-desc">お会計が完了した瞬間、客用画面いっぱいに表示される画像（広告・キャンペーン告知など）を設定できます。画像は画面の下からアニメーションでせり上がって表示されます。<br>他の端末にも自動で反映するには、あらかじめ「💾 データのバックアップ」欄で「📗 Google Driveと連携」を行っておいてください。</p>
             <input type="file" id="checkout-image-upload-input" accept="image/*" onchange="uploadCheckoutCompleteImage(event)" style="margin-bottom: 10px;">
             <br>
             <img id="checkout-image-preview" src="" alt="" style="max-width:240px; max-height:160px; display:none; border:1px solid #ccc; border-radius:4px; margin-bottom:10px; object-fit:contain;">
