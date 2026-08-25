@@ -152,6 +152,18 @@ async function connectGoogleDrive(interactive = true) {
 async function ensureGoogleDriveToken(interactive = false) {
     if (hasValidGoogleDriveToken()) return true;
     if (localStorage.getItem('pos_gdrive_connected') !== 'true') return false; // 未連携なら諦める
+
+    // 自動実行（裏側からの定期バックアップ等）の場合、トークンがすでに切れているなら
+    // ここで再認証は試みず、静かに諦める。
+    // ------------------------------------------
+    // 以前は自動実行時も connectGoogleDrive(false) → prompt:'none' で「画面を出さずに
+    // 裏側だけで」トークンを更新しようとしていたが、環境（特にモバイルブラウザ）によっては
+    // これが完全に隠れきらず、Googleの画面が一瞬表示されてしまうことがあった
+    // （客用ディスプレイ端末でお客様に見えてしまうと特に問題になる）。
+    // トークンの自動更新は「店長がボタンを押した時」「アプリを開き直してから最初に
+    // 明示的な操作をした時」など、人の操作を伴うタイミングに限定する。
+    if (!interactive) return false;
+
     try {
         await connectGoogleDrive(interactive);
         return hasValidGoogleDriveToken();
@@ -322,7 +334,10 @@ function disconnectGoogleDrive() {
         const originalBackupNow = window.haruPosBackupNow;
         window.haruPosBackupNow = function (...args) {
             const result = originalBackupNow.apply(this, args);
-            if (localStorage.getItem('pos_gdrive_connected') === 'true') {
+            // 客用ディスプレイに指定されている端末は、そもそもバックアップの責任を持たせない
+            // （お客様が見る画面なので、裏側の通信で何かが一瞬表示される余地自体を無くす）
+            const isCustDisplay = typeof isCustomerDisplayDevice === 'function' && isCustomerDisplayDevice();
+            if (!isCustDisplay && localStorage.getItem('pos_gdrive_connected') === 'true') {
                 backupToGoogleDriveNow(true);
             }
             return result;
@@ -333,7 +348,8 @@ function disconnectGoogleDrive() {
 
 // 5分ごとに、連携済みなら自動でバックアップする（変化がない場合は書き込まない）
 setInterval(() => {
-    if (localStorage.getItem('pos_gdrive_connected') === 'true') {
+    const isCustDisplay = typeof isCustomerDisplayDevice === 'function' && isCustomerDisplayDevice();
+    if (!isCustDisplay && localStorage.getItem('pos_gdrive_connected') === 'true') {
         backupToGoogleDriveNow(true);
     }
 }, 5 * 60 * 1000);
