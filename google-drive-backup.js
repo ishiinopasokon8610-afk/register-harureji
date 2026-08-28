@@ -30,7 +30,7 @@
 // ==========================================
 
 // ↓↓↓ ここに、Google Cloud Consoleで発行した「OAuthクライアントID」を貼り付けてください ↓↓↓
-const GOOGLE_DRIVE_CLIENT_ID = '698126390011-b1ucm6jm3iblrp8m0pueavnmrldj57q3.apps.googleusercontent.com';
+const GOOGLE_DRIVE_CLIENT_ID = '895442380992-l42r4gm8mguau7rmfp14uv9g3nh9h9ei.apps.googleusercontent.com';
 // アプリが作成したファイルのみアクセスできる、最も限定的なスコープ
 const GOOGLE_DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
 const GOOGLE_DRIVE_BACKUP_FILENAME = 'haru-pos-backup.json';
