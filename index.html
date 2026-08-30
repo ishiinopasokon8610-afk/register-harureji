@@ -58,14 +58,7 @@
     })();
     </script>
 
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
-    <!-- 追加：スマホでの全画面表示を安定させるためのPWA関連メタタグ。
-         特にiPhone（Safari）はJavaScriptのFullscreen APIにほぼ対応していないため、
-         「ホーム画面に追加」してこのタグ経由のstandalone起動をすることが
-         実質唯一の確実な全画面手段になる（Android Chromeも同様に安定する）。 -->
-    <meta name="mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>haruレジ</title>
     <!-- ウェブアイコン（Favicon）の設定 -->
     <link rel="icon" href="https://illust8.com/wp-content/uploads/2022/04/cash-register_16279.png" type="image/png">
@@ -209,9 +202,80 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     
     <link rel="stylesheet" href="style.css">
+
+    <!-- ==========================================
+         処理中ローディングオーバーレイ用スタイル
+         画面の読み込み中／レジの開局・閉局の処理中に
+         くるくる回るスピナーを画面全体に表示するためのCSS。
+         ========================================== -->
+    <style>
+        #app-loading-overlay {
+            position: fixed;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(20, 20, 20, 0.82);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 999999;
+            color: #ffffff;
+            opacity: 1;
+            transition: opacity 0.35s ease;
+        }
+        #app-loading-overlay.app-loading-hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+        .app-loading-spinner {
+            width: 64px;
+            height: 64px;
+            border: 6px solid rgba(255, 255, 255, 0.25);
+            border-top-color: #e91e63;
+            border-radius: 50%;
+            animation: app-loading-spin 0.85s linear infinite;
+        }
+        @keyframes app-loading-spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        #app-loading-text {
+            margin-top: 18px;
+            font-size: 18px;
+            font-weight: bold;
+            letter-spacing: 0.05em;
+            text-shadow: 0 1px 3px rgba(0,0,0,0.6);
+        }
+
+        /* 担当者ログインモーダル：セッションタイムアウトなどの通知メッセージ */
+        .staff-login-notice {
+            background: #fff3e0;
+            border: 1px solid #ffb74d;
+            color: #e65100;
+            font-weight: bold;
+            font-size: 14px;
+            padding: 10px 12px;
+            border-radius: 6px;
+            margin: 4px 0 12px 0;
+            text-align: center;
+            line-height: 1.5;
+        }
+    </style>
 </head>
 <body>
-    
+
+    <!-- ==========================================
+         処理中ローディングオーバーレイ
+         ページの読み込み中、およびレジの開局・閉局処理中に
+         くるくる回るスピナーとメッセージを表示する。
+         script.js側（本ファイル末尾）で表示・非表示を制御する。
+         ========================================== -->
+    <div id="app-loading-overlay">
+        <div class="app-loading-spinner"></div>
+        <div id="app-loading-text">画面を読み込んでいます...</div>
+    </div>
+
     <!-- 縦画面時の強制警告オーバーレイ -->
     <div id="orientation-overlay">
         <div class="orientation-box">
@@ -350,14 +414,8 @@
 
     <!-- 客用画面 -->
     <div id="customer-screen" class="screen">
-        <!-- 修正：客側からの誤タップでレジ画面に戻れてしまわないよう、
-             常時表示の「ホームに戻る」ボタンは廃止。
-             代わりに画面を5秒間長押し／Androidの「戻る」ボタンで
-             店員側（ホーム）に戻れるようにしている（customer-return.js 参照）。
-             長押し中はここに進捗バーが表示される。 -->
-        <div id="customer-longpress-indicator" class="customer-longpress-indicator">
-            <div id="customer-longpress-bar" class="customer-longpress-bar"></div>
-        </div>
+        <!-- ボタンは非表示。画面の何もない部分を5秒間長押しするとホームに戻る（customer-home-longpress.js） -->
+        <div id="customer-home-back-progress" style="position:fixed; left:0; top:0; height:6px; width:0%; background:#43a047; z-index:9999; pointer-events:none;"></div>
 
         <!-- 追加：客画面の右側にまとめて表示するパネル（お支払方法・会員情報） -->
         <div id="customer-side-panel" class="customer-side-panel">
@@ -457,6 +515,9 @@
         <div class="modal-box slide-up-modal medium">
             <h3 class="modal-title navy">担当者ログイン</h3>
             <p class="modal-desc">担当者管理に登録されているご自身のバーコードをスキャンするか、入力してください。</p>
+            <!-- セッションタイムアウトなどの通知メッセージ表示欄（普段は非表示。
+                 staff-login-gate.js の setStaffLoginNotice() が表示・非表示を制御する） -->
+            <div id="staff-login-notice" class="staff-login-notice" style="display:none;"></div>
             <input type="text" id="staff-login-barcode-input" placeholder="担当者バーコード" class="modal-input auth" autocomplete="off">
             <div id="staff-login-error" class="error-msg">バーコードが一致しません</div>
             <div class="modal-btn-group">
@@ -508,15 +569,6 @@
             <div class="input-cust-birth-container">
                 <label class="input-label-small">生年月日</label>
                 <input type="date" id="new-cust-birthday" class="input-cust-birth">
-            </div>
-            <div class="input-cust-birth-container">
-                <label class="input-label-small">性別</label>
-                <select id="new-cust-gender" class="input-cust-birth">
-                    <option value="">未回答</option>
-                    <option value="男性">男性</option>
-                    <option value="女性">女性</option>
-                    <option value="その他/回答しない">その他/回答しない</option>
-                </select>
             </div>
             <input type="number" id="new-cust-points" placeholder="初期/入会特典pt" class="input-cust-points">
             <input type="text" id="new-cust-phone" placeholder="電話番号" class="input-cust-phone">
@@ -595,7 +647,7 @@
             <input type="text" id="new-prod-name" placeholder="商品名 (例: ハンディファン)">
             
             <!-- 追加: ジャンル選択プルダウン -->
-            <select id="new-prod-genre" class="modal-input genre-select-dynamic" style="padding: 8px; font-size: 16px; border: 1px solid #ccc; border-radius: 4px; min-width: 120px;" onchange="applyDefaultTaxRateForGenre(this.value, 'new-prod-tax')">
+            <select id="new-prod-genre" class="modal-input genre-select-dynamic" style="padding: 8px; font-size: 16px; border: 1px solid #ccc; border-radius: 4px; min-width: 120px;">
                 <option value="食品">食品</option>
                 <option value="飲料/お酒">飲料/お酒</option>
                 <option value="お惣菜/お弁当">お惣菜/お弁当</option>
@@ -641,53 +693,79 @@
             <button class="back-btn" onclick="goHome()">← ホーム</button>
             <h2 class="top-bar-title">🏷️ 自動化バーコード作成</h2>
         </div>
-        <p class="modal-desc" style="margin: 0 0 10px 2px;">1つのバーコードに「商品の自動追加」と「割引（％/円）」を組み合わせて登録できます。レジでこのバーコードをスキャンすると、設定した内容がまとめて自動的にカートに反映されます。</p>
+        <p class="modal-desc discount-intro">1つのバーコードに「商品の自動追加」と「割引（％/円）」を組み合わせて登録できます。レジでこのバーコードをスキャンすると、設定した内容がまとめて自動的にカートに反映されます。</p>
 
-        <div class="input-form" style="flex-direction:column; align-items:stretch; gap:14px;">
-            <div style="display:flex; gap:10px; flex-wrap:wrap;">
-                <div style="display:flex; gap:6px; flex:1; min-width:220px;">
-                    <input type="text" id="new-disc-barcode" placeholder="バーコード (例: 8001...) ※空欄で自動生成" style="flex:1; min-width:150px;">
-                    <button type="button" onclick="openBarcodeCameraScan('new-disc-barcode')" style="flex:none; background:#009688;" title="スマホのカメラでバーコードを読み取って自動入力します">📷 カメラで読取</button>
-                </div>
-                <input type="text" id="new-disc-name" placeholder="割引名 (例: 缶ビール1本＋10%オフ)" style="min-width:220px;">
-            </div>
-
-            <div style="border-top:1px dashed #ccc; padding-top:10px; text-align:left;">
-                <b>① 自動追加する商品（複数登録可・任意）</b>
-                <div id="new-disc-product-list" style="margin:8px 0;"></div>
-                <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-                    <select id="new-disc-product-select" style="flex:1; min-width:220px; padding:8px; font-size:15px; border:1px solid #ccc; border-radius:4px;"></select>
-                    <input type="number" id="new-disc-product-qty" value="1" min="1" style="flex:none; width:70px; padding:8px;">
-                    <button type="button" onclick="addStagedProductRow('new')" style="flex:none; background:#2196f3;">＋ この商品を追加</button>
+        <div class="discount-form-card">
+            <div class="discount-form-section discount-form-basic">
+                <div class="discount-field-row">
+                    <div class="discount-field discount-field-barcode">
+                        <span class="discount-field-label">バーコード</span>
+                        <div class="discount-barcode-input-wrap">
+                            <input type="text" id="new-disc-barcode" placeholder="例: 8001... ※空欄で自動生成">
+                            <button type="button" class="discount-camera-btn" onclick="openBarcodeCameraScan('new-disc-barcode')" title="スマホのカメラでバーコードを読み取って自動入力します">📷 カメラで読取</button>
+                        </div>
+                    </div>
+                    <div class="discount-field discount-field-name">
+                        <span class="discount-field-label">割引名</span>
+                        <input type="text" id="new-disc-name" placeholder="例: 缶ビール1本＋10%オフ">
+                    </div>
                 </div>
             </div>
 
-            <div style="border-top:1px dashed #ccc; padding-top:10px; text-align:left;">
-                <label style="font-weight:bold;"><input type="checkbox" id="new-disc-use-discount" onchange="toggleDiscValueRow('new')"> ② 割引も適用する（任意）</label>
-                <div id="new-disc-value-row" style="display:none; gap:10px; margin-top:8px; align-items:center;">
-                    <select id="new-disc-type" style="flex:none; padding:8px; font-size:15px; border:1px solid #ccc; border-radius:4px; min-width:170px;">
+            <div class="discount-form-section">
+                <div class="discount-step-header">
+                    <span class="discount-step-badge">1</span>
+                    <span>自動追加する商品</span>
+                    <span class="discount-step-optional">複数登録可・任意</span>
+                </div>
+                <div id="new-disc-product-list" class="discount-staged-list"></div>
+                <div class="discount-field-row discount-product-picker">
+                    <select id="new-disc-product-select" class="discount-product-select"></select>
+                    <input type="number" id="new-disc-product-qty" value="1" min="1" class="discount-qty-input">
+                    <button type="button" class="discount-add-btn" onclick="addStagedProductRow('new')">＋ この商品を追加</button>
+                </div>
+            </div>
+
+            <div class="discount-form-section">
+                <label class="discount-step-header discount-step-checkbox-label">
+                    <input type="checkbox" id="new-disc-use-discount" onchange="toggleDiscValueRow('new')">
+                    <span class="discount-step-badge">2</span>
+                    <span>割引も適用する</span>
+                    <span class="discount-step-optional">任意</span>
+                </label>
+                <div id="new-disc-value-row" class="discount-value-row">
+                    <select id="new-disc-type" class="discount-type-select">
                         <option value="percent">パーセント値引き (%)</option>
                         <option value="yen">金額値引き (円)</option>
                     </select>
-                    <input type="number" id="new-disc-value" placeholder="値引き値 (例: 10)" style="flex:none; width:140px; padding:8px;">
+                    <input type="number" id="new-disc-value" placeholder="値引き値 (例: 10)" class="discount-value-input">
                 </div>
             </div>
 
-            <div style="border-top:1px dashed #ccc; padding-top:10px; text-align:left;">
-                <b>③ 適用できる期間を指定する（任意・空欄なら期限なし）</b>
-                <div style="display:flex; gap:10px; margin-top:8px; align-items:center; flex-wrap:wrap;">
+            <div class="discount-form-section">
+                <div class="discount-step-header">
+                    <span class="discount-step-badge">3</span>
+                    <span>適用できる期間を指定する</span>
+                    <span class="discount-step-optional">任意・空欄なら期限なし</span>
+                </div>
+                <div class="discount-field-row discount-date-row">
                     <span>開始日:</span>
-                    <input type="date" id="new-disc-date-from" style="padding:8px; border:1px solid #ccc; border-radius:4px;">
+                    <input type="date" id="new-disc-date-from">
                     <span>終了日:</span>
-                    <input type="date" id="new-disc-date-to" style="padding:8px; border:1px solid #ccc; border-radius:4px;">
+                    <input type="date" id="new-disc-date-to">
                 </div>
             </div>
 
-            <div style="border-top:1px dashed #ccc; padding-top:10px; text-align:left;">
-                <label style="font-weight:bold;"><input type="checkbox" id="new-disc-one-time"> ④ 使い切りバーコードにする（会計成立後は「使用済み」としてアーカイブされ、一覧から自動的には消えません・任意）</label>
+            <div class="discount-form-section">
+                <label class="discount-step-header discount-step-checkbox-label">
+                    <input type="checkbox" id="new-disc-one-time">
+                    <span class="discount-step-badge">4</span>
+                    <span>使い切りバーコードにする</span>
+                </label>
+                <p class="discount-step-note">会計成立後は「使用済み」としてアーカイブされ、一覧から自動的には消えません（任意）</p>
             </div>
 
-            <button onclick="addDiscountBarcode()" style="align-self:flex-start; padding:10px 30px;">この内容でバーコードを登録</button>
+            <button class="discount-submit-btn" onclick="addDiscountBarcode()">この内容でバーコードを登録</button>
         </div>
 
         <table class="data-table">
@@ -727,41 +805,59 @@
     <div id="edit-disc-modal" class="modal-overlay">
         <div class="modal-box large">
             <h3 class="modal-title purple" id="edit-disc-name-display">自動化バーコード作成の編集</h3>
-            <input type="text" id="edit-disc-name-input" class="modal-input" placeholder="割引名" style="margin-bottom:10px;">
+            <input type="text" id="edit-disc-name-input" class="modal-input" placeholder="割引名" style="margin-bottom:14px;">
 
-            <div style="text-align:left; border-top:1px dashed #ccc; padding-top:10px; margin-bottom:10px;">
-                <b>① 自動追加する商品（複数登録可・任意）</b>
-                <div id="edit-disc-product-list" style="margin:8px 0;"></div>
-                <div style="display:flex; gap:8px; align-items:center;">
-                    <select id="edit-disc-product-select" style="flex:1; padding:8px; font-size:14px; border:1px solid #ccc; border-radius:4px;"></select>
-                    <input type="number" id="edit-disc-product-qty" value="1" min="1" style="flex:none; width:60px; padding:8px;">
-                    <button type="button" onclick="addStagedProductRow('edit')" style="flex:none; background:#2196f3; color:white; border:none; border-radius:4px; padding:8px 10px; cursor:pointer; font-weight:bold;">＋追加</button>
+            <div class="discount-form-section" style="margin-bottom:14px;">
+                <div class="discount-step-header">
+                    <span class="discount-step-badge">1</span>
+                    <span>自動追加する商品</span>
+                    <span class="discount-step-optional">複数登録可・任意</span>
+                </div>
+                <div id="edit-disc-product-list" class="discount-staged-list"></div>
+                <div class="discount-field-row discount-product-picker">
+                    <select id="edit-disc-product-select" class="discount-product-select"></select>
+                    <input type="number" id="edit-disc-product-qty" value="1" min="1" class="discount-qty-input">
+                    <button type="button" class="discount-add-btn" onclick="addStagedProductRow('edit')">＋追加</button>
                 </div>
             </div>
 
-            <div style="text-align:left; border-top:1px dashed #ccc; padding-top:10px; margin-bottom:10px;">
-                <label style="font-weight:bold;"><input type="checkbox" id="edit-disc-use-discount" onchange="toggleDiscValueRow('edit')"> ② 割引も適用する（任意）</label>
-                <div id="edit-disc-value-row" style="display:none; gap:10px; margin-top:8px;">
-                    <select id="edit-disc-type" style="flex:1; padding:8px;">
+            <div class="discount-form-section" style="margin-bottom:14px;">
+                <label class="discount-step-header discount-step-checkbox-label">
+                    <input type="checkbox" id="edit-disc-use-discount" onchange="toggleDiscValueRow('edit')">
+                    <span class="discount-step-badge">2</span>
+                    <span>割引も適用する</span>
+                    <span class="discount-step-optional">任意</span>
+                </label>
+                <div id="edit-disc-value-row" class="discount-value-row">
+                    <select id="edit-disc-type" class="discount-type-select">
                         <option value="percent">パーセント値引き (%)</option>
                         <option value="yen">金額値引き (円)</option>
                     </select>
-                    <input type="number" id="edit-disc-value" placeholder="値引き値" style="width:120px; padding:8px;">
+                    <input type="number" id="edit-disc-value" placeholder="値引き値" class="discount-value-input">
                 </div>
             </div>
 
-            <div style="text-align:left; border-top:1px dashed #ccc; padding-top:10px; margin-bottom:10px;">
-                <b>③ 適用できる期間を指定する（任意・空欄なら期限なし）</b>
-                <div style="display:flex; gap:10px; margin-top:8px; align-items:center; flex-wrap:wrap;">
+            <div class="discount-form-section" style="margin-bottom:14px;">
+                <div class="discount-step-header">
+                    <span class="discount-step-badge">3</span>
+                    <span>適用できる期間を指定する</span>
+                    <span class="discount-step-optional">任意・空欄なら期限なし</span>
+                </div>
+                <div class="discount-field-row discount-date-row">
                     <span>開始日:</span>
-                    <input type="date" id="edit-disc-date-from" style="padding:8px; border:1px solid #ccc; border-radius:4px;">
+                    <input type="date" id="edit-disc-date-from">
                     <span>終了日:</span>
-                    <input type="date" id="edit-disc-date-to" style="padding:8px; border:1px solid #ccc; border-radius:4px;">
+                    <input type="date" id="edit-disc-date-to">
                 </div>
             </div>
 
-            <div style="text-align:left; border-top:1px dashed #ccc; padding-top:10px; margin-bottom:10px;">
-                <label style="font-weight:bold;"><input type="checkbox" id="edit-disc-one-time"> ④ 使い切りバーコードにする（会計成立後は「使用済み」としてアーカイブされ、一覧から自動的には消えません・任意）</label>
+            <div class="discount-form-section" style="margin-bottom:14px;">
+                <label class="discount-step-header discount-step-checkbox-label">
+                    <input type="checkbox" id="edit-disc-one-time">
+                    <span class="discount-step-badge">4</span>
+                    <span>使い切りバーコードにする</span>
+                </label>
+                <p class="discount-step-note">会計成立と同時に自動削除（任意）</p>
             </div>
 
             <div class="error-msg" id="edit-disc-error">割引名を入力し、商品追加または割引のどちらか一方以上を設定してください</div>
@@ -825,6 +921,7 @@
     <div class="reg-header">
         <button class="back-btn" onclick="goHome()">← ホーム</button>
         <div class="header-actions">
+    <button id="redo-checkout-btn" class="btn-refund-reg" style="background:#f57c00;" onclick="openRedoCheckoutModal()">会計やり直し</button>
     <button id="refund-btn" class="btn-refund-reg" onclick="openRefundModal()">返金</button>
     <span id="active-clerk-display" class="active-clerk-display">担当: 未設定</span>
     <button onclick="togglePauseRegister()" class="btn-pause-reg">レジ休止</button>
@@ -954,19 +1051,6 @@
             <p class="migration-desc" style="margin-top:10px; font-size:12px; color:#555;">
                 📁「レシート保存フォルダ」を設定済みの場合は、そのフォルダにも自動でバックアップ（haru-pos-backup.json）が更新され続けます。Google Driveと連携しておくと、そちらにも自動でバックアップされます。
             </p>
-        </div>
-
-        <!-- 追加：軽減税率のデフォルト値設定（税制改正時にコード変更なしで対応できるようにする） -->
-        <div class="migration-block" style="background:#fff8e1; border:2px solid #ffca28; padding:15px; border-radius:6px; margin-bottom:15px;">
-            <h3 class="migration-title" style="color:#f57f17;">🪙 軽減税率のデフォルト値設定</h3>
-            <p class="migration-desc">
-                商品登録時に「食品」「お惣菜/お弁当」「スイーツ/菓子」ジャンルを選ぶと、ここで設定した税率が自動で入力されます（登録前に手動で個別修正も可能）。<br>
-                税制改正（例：2027年4月以降の軽減税率引き下げ）の際も、ソースコードを書き換えることなくこの数値を変更するだけで対応できます。
-            </p>
-            <label class="modal-label small">軽減税率（%）</label>
-            <input type="number" id="reduced-tax-rate-input" style="padding:8px; border-radius:4px; border:1px solid #ccc; width:120px; margin-right:8px;" min="0" max="100" step="1">
-            <button class="btn-migration" style="background:#f57f17; color:white; padding:8px 12px; border:none; border-radius:4px; font-weight:bold; cursor:pointer;" onclick="saveReducedTaxRateSetting()">この税率を保存する</button>
-            <p class="migration-desc" style="margin-top:8px; font-size:12px; color:#888;">既存の登録済み商品の税率は自動では変わりません。反映するには各商品を編集し直してください。</p>
         </div>
 
         <div class="migration-block danger">
@@ -1180,7 +1264,7 @@
             <!-- 追加: ジャンル選択 -->
             <div class="modal-form-group">
                 <label class="modal-label">ジャンル</label>
-                <select id="edit-prod-genre-input" class="modal-input genre-select-dynamic" onchange="applyDefaultTaxRateForGenre(this.value, 'edit-prod-tax-input')">
+                <select id="edit-prod-genre-input" class="modal-input genre-select-dynamic">
                     <option value="食品">食品</option>
                     <option value="飲料/お酒">飲料/お酒</option>
                     <option value="お惣菜/お弁当">お惣菜/お弁当</option>
@@ -1286,15 +1370,6 @@
                 <input type="date" id="edit-cust-birthday-input" class="modal-input small">
             </div>
             <div class="modal-form-group small">
-                <label class="modal-label small">性別</label>
-                <select id="edit-cust-gender-input" class="modal-input small">
-                    <option value="">未回答</option>
-                    <option value="男性">男性</option>
-                    <option value="女性">女性</option>
-                    <option value="その他/回答しない">その他/回答しない</option>
-                </select>
-            </div>
-            <div class="modal-form-group small">
                 <label class="modal-label small">保有ポイント</label>
                 <input type="number" id="edit-cust-points-input" class="modal-input small">
             </div>
@@ -1306,13 +1381,26 @@
                 <label class="modal-label small">住所</label>
                 <input type="text" id="edit-cust-address-input" class="modal-input small">
             </div>
-            <div id="edit-cust-error" class="error-msg">姓・名、およびフリガナをすべて入力してください（未入力の欄は赤枠で表示されます）</div>
+            <div id="edit-cust-error" class="error-msg">お名前とフリガナを入力してください</div>
             <div class="modal-btn-group">
                 <button onclick="closeEditCustModal()" class="modal-btn cancel">キャンセル</button>
                 <button onclick="saveEditCust()" class="modal-btn purple">保存する</button>
             </div>
         </div>
     </div>
+
+    <!-- 会計やり直し：取引番号入力モーダル -->
+<div id="redo-checkout-lookup-modal" class="modal-overlay">
+    <div class="modal-box medium">
+        <h3 class="modal-title" style="color: #e65100;">✏️ 会計やり直し</h3>
+        <p class="modal-desc">内容を変更したい会計の取引番号を入力してください（例: R000123）。取引番号はレシート下部・お会計履歴に記載されています。入力すると、その時の内容がレジ画面に読み込まれます。</p>
+        <input type="text" id="redo-checkout-no-input" placeholder="例: R000123" style="width:100%; box-sizing:border-box; font-size:18px; padding:10px; margin-top:6px; text-align:center; letter-spacing:1px;">
+        <div class="modal-btn-group" style="margin-top:14px;">
+            <button onclick="closeRedoCheckoutLookupModal()" class="modal-btn cancel">キャンセル</button>
+            <button onclick="searchRedoCheckoutTarget()" class="modal-btn" style="background:#f57c00; color:white;">読み込む</button>
+        </div>
+    </div>
+</div>
 
     <!-- 返金取引選択モーダル -->
 <div id="refund-modal" class="modal-overlay">
@@ -1386,6 +1474,16 @@
 
                 <button id="btn-close-business" onclick="closeBusiness()" disabled style="margin-top: 20px; width: 100%; padding: 15px; font-size: 18px; font-weight: bold; background: #d32f2f; color: white; border: none; border-radius: 6px; cursor: pointer;">本日の業務を終了（ログアウト）</button>
                 <p style="font-size: 12px; color: #888; text-align: center; margin-top: 5px;">※過不足が0円ならそのまま終了できます。過不足がある場合は店長認証（店長バーコード）で終了できます。</p>
+            </div>
+        </div>
+
+        <div style="margin-top: 20px; background: #f3e5f5; padding: 20px; border-radius: 8px; border: 1px solid #ce93d8;">
+            <h3 style="margin-top:0; color:#6a1b9a;">本日の税区分内訳</h3>
+            <p style="font-size: 12px; color: #888; margin: -8px 0 12px 0;">※消費税申告用の参考値です</p>
+            <div style="display: flex; gap: 20px; flex-wrap: wrap;">
+                <div style="flex: 1; min-width: 150px; display:flex; justify-content:space-between;"><span>10%対象売上</span><span id="tax-report-10-display" style="font-weight:bold;">¥0</span></div>
+                <div style="flex: 1; min-width: 150px; display:flex; justify-content:space-between;"><span>8%対象売上</span><span id="tax-report-8-display" style="font-weight:bold;">¥0</span></div>
+                <div style="flex: 1; min-width: 150px; display:flex; justify-content:space-between; color:#00838f;"><span>免税対象売上</span><span id="tax-report-free-display" style="font-weight:bold;">¥0</span></div>
             </div>
         </div>
     </div>
@@ -1579,10 +1677,110 @@
     <script src="sync-system.js"></script>
     <script src="customer-sync-system.js"></script>
     <script src="member-number-system.js"></script>
+    <script src="history-receipt-number-system.js"></script>
+    <script src="checkout-redo-system.js"></script>
+    <script src="member-rank-discount.js"></script>
+    <script src="tax-report-system.js"></script>
+    <script src="receipt-hide-name-system.js"></script>
+    <script src="analytics-weather-patch.js"></script>
+    <script src="order-system-settings.js"></script>
+    <script src="order-checkout-display.js"></script>
+    <script src="home-automation-blocks.js"></script>
+    <script src="screen-hash-navigation.js"></script>
+    <script src="screen-title-system.js"></script>
+    <script src="screen-loading-bar.js"></script>
+    <script src="timecard-export-system.js"></script>
+    <script src="wage-payroll-system.js"></script>
+    <script src="admin-auth-hash-system.js"></script>
+    <script src="customer-home-longpress.js"></script>
     <script src="register-info-system.js"></script>
     <script src="pagination-system.js"></script>
     <script src="notifications-system.js"></script>
     <script src="copy-deterrence.js"></script>
-    <script src="customer-return.js"></script>
+    <script src="legal-documents-system.js"></script>
+    <script src="first-visit-notice-system.js"></script>
+
+    <!-- ==========================================
+         処理中ローディングオーバーレイの制御スクリプト
+         ・ページ読み込み完了時にオーバーレイを非表示にする
+         ・openRegister（レジ開局）／closeBusiness（レジ閉局）を
+           呼び出す際に、処理中はオーバーレイを表示し、
+           処理が終わったら非表示に戻す。
+         ここより上ですべての機能スクリプトが読み込まれ、
+         openRegister / closeBusiness が定義済みであることを前提にしている。
+         ========================================== -->
+    <script>
+    (function () {
+        const overlay = document.getElementById('app-loading-overlay');
+        const textEl = document.getElementById('app-loading-text');
+        if (!overlay) return;
+
+        function showAppLoading(message) {
+            if (textEl) textEl.textContent = message || '処理中...';
+            overlay.classList.remove('app-loading-hidden');
+        }
+
+        function hideAppLoading() {
+            overlay.classList.add('app-loading-hidden');
+        }
+
+        // 他のスクリプトから手動で呼び出したい場合のために公開しておく
+        window.showAppLoading = showAppLoading;
+        window.hideAppLoading = hideAppLoading;
+
+        // 指定した関数の実行前後にローディング表示を挟み込む
+        function wrapWithLoading(fnName, message, minDisplayMs) {
+            const original = window[fnName];
+            if (typeof original !== 'function') return;
+
+            window[fnName] = function (...args) {
+                showAppLoading(message);
+                const startedAt = Date.now();
+
+                const finishLoading = () => {
+                    const elapsed = Date.now() - startedAt;
+                    const remaining = Math.max(0, (minDisplayMs || 400) - elapsed);
+                    setTimeout(hideAppLoading, remaining);
+                };
+
+                let result;
+                try {
+                    result = original.apply(this, args);
+                } catch (err) {
+                    hideAppLoading();
+                    throw err;
+                }
+
+                // 呼び出した関数が非同期（Promiseを返す）場合は、完了を待ってから非表示にする
+                if (result && typeof result.then === 'function') {
+                    result.then(finishLoading, finishLoading);
+                } else {
+                    finishLoading();
+                }
+
+                return result;
+            };
+        }
+
+        // レジ「開局」処理中はくるくる表示
+        // ※ startBusiness() は準備金入力モーダルを「開くだけ」の関数のためここでは対象にしない。
+        //    店長認証・準備金入力など一連の入力が終わり、「再開を確定」ボタン（confirmStartBusiness）が
+        //    呼ばれた時点＝実際に開局処理が走るタイミングでスピナーを表示する。
+        wrapWithLoading('confirmStartBusiness', 'レジを開局しています...', 500);
+        // レジ「閉局」処理中はくるくる表示
+        // ※ closeBusiness() は過不足チェック→確認ダイアログ／店長認証を「出すだけ」で
+        //    即returnする入り口関数のため、これを包むと確認待ちの間にもローディングが
+        //    出てしまう（確認ダイアログより先にローディングが見えてしまう不具合の原因）。
+        //    実際の閉局処理（レシート保存・ログアウト）は、確認・認証が済んだ後に呼ばれる
+        //    performCloseBusiness() の方なので、そちらを包む。
+        wrapWithLoading('performCloseBusiness', 'レジを閉局しています...', 500);
+
+        // ページ全体（画像・スクリプトなど）の読み込みが終わったら
+        // 最初の「画面を読み込んでいます...」オーバーレイを消す
+        window.addEventListener('load', () => {
+            setTimeout(hideAppLoading, 300);
+        });
+    })();
+    </script>
 </body>
 </html>

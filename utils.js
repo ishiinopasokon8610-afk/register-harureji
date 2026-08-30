@@ -37,6 +37,52 @@ function calculateAge(cust) {
     return (cust && cust.age !== undefined) ? cust.age : 0;
 }
 
+// ==========================================
+// 人間らしい音声選択・抑揚まわり
+// ------------------------------------------
+// ブラウザ既定のまま SpeechSynthesisUtterance を使うと、
+//   ・機械的でロボットっぽい既定音声が選ばれがち
+//   ・毎回まったく同じ速度・高さで喋るため単調に聞こえる
+// という問題があるため、
+//   ① 端末内に入っている自然な日本語音声をなるべく優先して選ぶ
+//   ② 呼び出しごとに速度・ピッチをわずかにゆらす（人間の声の揺らぎに近づける）
+// の2点を追加している。
+// ==========================================
+let cachedJapaneseVoice = null;
+
+// 自然に聞こえやすい音声を優先順位付きで探す
+// （端末・ブラウザによって搭載音声が異なるため、複数候補を用意しフォールバックする）
+function pickNaturalJapaneseVoice() {
+    if (!('speechSynthesis' in window)) return null;
+    const voices = window.speechSynthesis.getVoices();
+    if (!voices || voices.length === 0) return null;
+
+    const jaVoices = voices.filter(v => v.lang && v.lang.toLowerCase().startsWith('ja'));
+    if (jaVoices.length === 0) return null;
+
+    const preferredNames = ['Google 日本語', 'Kyoko', 'O-Ren', 'Microsoft Nanami', 'Microsoft Keita', 'Microsoft Ayumi'];
+    for (const name of preferredNames) {
+        const found = jaVoices.find(v => v.name.includes(name));
+        if (found) return found;
+    }
+    // 端末内蔵（ローカル）の音声は、ネットワーク経由の合成音より自然に聞こえることが多いため次点で優先
+    const localVoice = jaVoices.find(v => v.localService);
+    if (localVoice) return localVoice;
+
+    return jaVoices[0];
+}
+
+// 音声一覧は非同期に読み込まれる（'voiceschanged'）ため、読み込み完了時に候補をキャッシュしておく
+(function initJapaneseVoiceCache() {
+    if (!('speechSynthesis' in window)) return;
+    const tryPick = () => {
+        const v = pickNaturalJapaneseVoice();
+        if (v) cachedJapaneseVoice = v;
+    };
+    tryPick();
+    window.speechSynthesis.onvoiceschanged = tryPick;
+})();
+
 function speak(text) {
     const currentClerk = clerks.find(c => c.name === activeClerkName);
     if (currentClerk && currentClerk.voiceEnabled === false) {
@@ -48,6 +94,15 @@ function speak(text) {
         const uttr = new SpeechSynthesisUtterance(text);
         uttr.lang = 'ja-JP';
         uttr.volume = 1.0;
+
+        // 毎回まったく同じ速度・高さだと機械的に聞こえるため、人間の声の揺らぎに近づけて
+        // わずかにランダムなゆらぎを持たせる（速度: 0.95〜1.05倍、ピッチ: 0.95〜1.10倍）
+        uttr.rate = 0.95 + Math.random() * 0.1;
+        uttr.pitch = 0.95 + Math.random() * 0.15;
+
+        if (!cachedJapaneseVoice) cachedJapaneseVoice = pickNaturalJapaneseVoice();
+        if (cachedJapaneseVoice) uttr.voice = cachedJapaneseVoice;
+
         window.speechSynthesis.speak(uttr);
     }
 }

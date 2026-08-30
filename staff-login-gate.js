@@ -24,9 +24,38 @@
 
 let staffLoginPendingScreen = 'home-screen';
 
+// セッションタイムアウトなど、担当者ログイン画面の上部に表示したい通知メッセージ。
+// simple-auth-system.js 側から setStaffLoginNotice() 経由で設定される。
+let staffLoginNoticeMessage = '';
+
 function getStaffLoginModalEl() {
     return document.getElementById('staff-login-modal');
 }
+
+// ログイン画面（ゲート）の上に表示する通知メッセージを設定する（空文字/未指定で非表示）。
+// 他のファイルからも呼べるようwindowにも公開しておく。
+function setStaffLoginNotice(message) {
+    staffLoginNoticeMessage = message || '';
+    renderStaffLoginNotice();
+}
+
+function clearStaffLoginNotice() {
+    setStaffLoginNotice('');
+}
+
+function renderStaffLoginNotice() {
+    const el = document.getElementById('staff-login-notice');
+    if (!el) return;
+    if (staffLoginNoticeMessage) {
+        el.innerText = staffLoginNoticeMessage;
+        el.style.display = 'block';
+    } else {
+        el.style.display = 'none';
+    }
+}
+
+window.setStaffLoginNotice = setStaffLoginNotice;
+window.clearStaffLoginNotice = clearStaffLoginNotice;
 
 // ログイン画面（ゲート）を表示する。他の全操作をブロックする。
 function showStaffLoginGate(pendingScreenId) {
@@ -42,6 +71,7 @@ function showStaffLoginGate(pendingScreenId) {
     const input = document.getElementById('staff-login-barcode-input');
     const err = document.getElementById('staff-login-error');
     if (err) err.style.display = 'none';
+    renderStaffLoginNotice();
     if (input) {
         input.value = '';
         setTimeout(() => input.focus(), 50);
@@ -52,6 +82,7 @@ function showStaffLoginGate(pendingScreenId) {
 function closeStaffLoginGate() {
     const modal = getStaffLoginModalEl();
     if (modal) modal.style.display = 'none';
+    clearStaffLoginNotice();
 }
 
 // ログイン試行
@@ -129,25 +160,16 @@ function attemptStaffLogin() {
 })();
 
 /* =========================================================
-   起動時：まだログインしていなければ、最初にログインゲートを表示する
+   起動時について（ブランディング要件対応）
    ------------------------------------------
-   home-screen は index.html 側で最初から class="active" になっているため、
-   showScreen() を経由せずに表示されてしまう。そのため起動直後にも
-   明示的にチェックする。
+   以前は起動直後に無条件でログインゲートを表示していたが、
+   「ホームページがログインなしでは何も見られない」状態は
+   Googleのブランディング確認等で問題として指摘されるため、
+   ホーム画面（メニュー表示のみ）はログイン無しで見られるようにする。
+   ログインが必要になるのは、実際にレジ・管理系の各画面を開こうとした
+   タイミング（上のshowScreen()フック側）のみとする。
    ========================================================= */
 document.addEventListener('DOMContentLoaded', () => {
-    function tryInit() {
-        if (typeof isLoggedIn !== 'function' || typeof clerks === 'undefined') {
-            setTimeout(tryInit, 300);
-            return;
-        }
-        if (!isLoggedIn()) {
-            showStaffLoginGate('home-screen');
-        }
-    }
-    // 他の初期化（clerks の読み込みなど）より後に確認する
-    setTimeout(tryInit, 200);
-
     const input = document.getElementById('staff-login-barcode-input');
     if (input) {
         input.addEventListener('keydown', function (e) {

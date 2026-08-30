@@ -14,6 +14,7 @@ const SYNC_DEVICE_ID = 'dev_' + Date.now().toString(36) + '_' + Math.random().to
 
 let lastSyncedProductsSnapshot = null;
 let lastSyncedHistorySnapshot = null;
+let lastKnownHistoryKeys = null;
 let lastSyncedTimecardSnapshot = null;
 
 // 商品マスタの「前回ポーリング時点でのスナップショット」（jan→商品データの複製）。
@@ -123,6 +124,67 @@ function mergeProductLists(localList, remoteList, deletedList) {
     return Array.from(map.values());
 }
 
+// 会計履歴どうしをマージする（同じ取引を重複させない）
+// ------------------------------------------
+// 【以前の問題】単純な「和集合（両方とも残す）」方式だったため、
+// 返金（refund.js）や履歴削除でこの端末からレコードを消しても、
+// 他端末からの同期がその古いレコードをまた運んできてしまい、
+// 消したはずの履歴が復活する／他端末には反映されない、という不具合があった。
+// 【対応】商品マスタと同じ「削除記録（tombstone）」方式にする。
+function keyOfHistory(item) { return item.id || item.dateISO || item.date; }
+
+function getDeletedHistoryFromStorage() {
+    try {
+        return JSON.parse(localStorage.getItem('pos_deleted_history') || '[]');
+    } catch (e) {
+        return [];
+    }
+}
+
+// 削除記録どうしをマージする（同じキーは、より新しい削除時刻を優先）。
+// 90日より古い削除記録は間引く（商品の削除記録と同じ方針）。
+function mergeDeletedHistoryLists(localList, remoteList) {
+    const map = new Map();
+    [...(localList || []), ...(remoteList || [])].forEach(d => {
+        if (!d || !d.key) return;
+        const existing = map.get(d.key);
+        if (!existing || d.deletedAt > existing.deletedAt) map.set(d.key, d);
+    });
+    const cutoff = Date.now() - 90 * 24 * 60 * 60 * 1000;
+    return Array.from(map.values()).filter(d => d.deletedAt >= cutoff);
+}
+
+// この端末で履歴が削除された（返金・履歴削除・全削除）ことを記録する
+function recordDeletedHistory(key, deletedAt) {
+    if (!key) return;
+    const list = getDeletedHistoryFromStorage();
+    list.push({ key: key, deletedAt: deletedAt || Date.now() });
+    localStorage.setItem('pos_deleted_history', JSON.stringify(mergeDeletedHistoryLists(list, [])));
+}
+
+function mergeHistoryLists(localList, remoteList, deletedList) {
+    const deletedMap = new Map();
+    (deletedList || []).forEach(d => {
+        if (d && d.key) deletedMap.set(d.key, d);
+    });
+
+    const map = new Map();
+    [...localList, ...remoteList].forEach(item => {
+        map.set(keyOfHistory(item), item);
+    });
+
+    // 削除記録があるものは除外する（返金・履歴削除で消えた取引を復活させない）
+    deletedMap.forEach((d, key) => {
+        map.delete(key);
+    });
+
+    return Array.from(map.values()).sort((a, b) => {
+        const ta = a.dateISO ? new Date(a.dateISO).getTime() : new Date(a.date).getTime();
+        const tb = b.dateISO ? new Date(b.dateISO).getTime() : new Date(b.date).getTime();
+        return tb - ta; // 新しい順
+    }).slice(0, 3000);
+}
+
 // タイムカードどうしをマージする（同じ記録[id]は、より多く打刻されている方を優先する）
 function mergeTimecardLists(localList, remoteList) {
     const fillCount = (r) => ['clockIn', 'breakStart', 'breakEnd', 'clockOut'].filter(k => r && r[k]).length;
@@ -141,20 +203,9 @@ function mergeTimecardLists(localList, remoteList) {
 }
 
 // 会計履歴どうしをマージする（同じ取引を重複させない）
-function mergeHistoryLists(localList, remoteList) {
-    const map = new Map();
-    const keyOf = (item) => item.id || item.dateISO || item.date;
-
-    [...localList, ...remoteList].forEach(item => {
-        map.set(keyOf(item), item);
-    });
-
-    return Array.from(map.values()).sort((a, b) => {
-        const ta = a.dateISO ? new Date(a.dateISO).getTime() : new Date(a.date).getTime();
-        const tb = b.dateISO ? new Date(b.dateISO).getTime() : new Date(b.date).getTime();
-        return tb - ta; // 新しい順
-    }).slice(0, 3000);
-}
+// ※ 実際の定義は上のtombstone対応版（keyOfHistoryを使うもの）を使用する。
+//    この位置には以前、和集合のみの単純な旧実装があったが、削除記録を
+//    考慮していなかったため上に置き換えた（重複定義になるため削除）。
 
 function broadcastProductsSync() {
     if (typeof channel === 'undefined' || !channel || typeof products === 'undefined') return;
@@ -173,7 +224,12 @@ function broadcastProductsSync() {
 function broadcastHistorySync() {
     if (typeof channel === 'undefined' || !channel) return;
     try {
-        channel.publish('history-sync', { history: getHistoryFromStorage(), senderId: SYNC_DEVICE_ID, time: Date.now() });
+        channel.publish('history-sync', {
+            history: getHistoryFromStorage(),
+            deletedHistory: getDeletedHistoryFromStorage(),
+            senderId: SYNC_DEVICE_ID,
+            time: Date.now()
+        });
     } catch (err) {
         console.warn('会計履歴の同期送信に失敗しました:', err);
     }
@@ -232,8 +288,24 @@ setInterval(() => {
     const currentHistorySnapshot = localStorage.getItem('pos_history') || '[]';
     if (lastSyncedHistorySnapshot === null) {
         lastSyncedHistorySnapshot = currentHistorySnapshot;
+        lastKnownHistoryKeys = new Set(getHistoryFromStorage().map(keyOfHistory));
     } else if (currentHistorySnapshot !== lastSyncedHistorySnapshot) {
+        const nowHistory = Date.now();
+        const currentHistoryList = getHistoryFromStorage();
+        const currentKeys = new Set(currentHistoryList.map(keyOfHistory));
+
+        // 前回は存在したのに今回消えている取引 → 返金・履歴削除されたとみなし、tombstoneを記録
+        // （これにより、他端末からの同期で消したはずの履歴が復活するのを防ぐ）
+        if (lastKnownHistoryKeys) {
+            lastKnownHistoryKeys.forEach(key => {
+                if (!currentKeys.has(key)) {
+                    recordDeletedHistory(key, nowHistory);
+                }
+            });
+        }
+
         lastSyncedHistorySnapshot = currentHistorySnapshot;
+        lastKnownHistoryKeys = currentKeys;
         broadcastHistorySync();
     }
 
@@ -282,9 +354,13 @@ setInterval(() => {
             if (!Array.isArray(msg.data.history)) return;
 
             const localHistory = getHistoryFromStorage();
-            const merged = mergeHistoryLists(localHistory, msg.data.history);
+            const remoteDeleted = Array.isArray(msg.data.deletedHistory) ? msg.data.deletedHistory : [];
+            const mergedDeleted = mergeDeletedHistoryLists(getDeletedHistoryFromStorage(), remoteDeleted);
+            const merged = mergeHistoryLists(localHistory, msg.data.history, mergedDeleted);
             localStorage.setItem('pos_history', JSON.stringify(merged));
+            localStorage.setItem('pos_deleted_history', JSON.stringify(mergedDeleted));
             lastSyncedHistorySnapshot = JSON.stringify(merged);
+            lastKnownHistoryKeys = new Set(merged.map(keyOfHistory));
             if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
 
             const historyScreen = document.getElementById('history-screen');

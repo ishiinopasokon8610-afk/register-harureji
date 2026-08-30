@@ -8,10 +8,10 @@
 // ==========================================
 
 const MEMBER_RANKS = [
-    { key: 'regular', name: 'レギュラー',   color: '#78909c', threshold: 0,      rate: 0.5, benefit: '特典なし' },
-    { key: 'silver',  name: 'シルバー',     color: '#90a4ae', threshold: 30000,  rate: 1.0, benefit: 'バースデークーポン' },
-    { key: 'gold',    name: 'ゴールド',     color: '#ffb300', threshold: 100000, rate: 2.0, benefit: '会員限定セール招待' },
-    { key: 'diamond', name: 'ダイヤモンド', color: '#26c6da', threshold: 300000, rate: 3.0, benefit: '送料無料・先行予約権' }
+    { key: 'regular', name: 'レギュラー',   color: '#78909c', threshold: 0,      rate: 0.5, discountRate: 0, benefit: '特典なし' },
+    { key: 'silver',  name: 'シルバー',     color: '#90a4ae', threshold: 30000,  rate: 1.0, discountRate: 0, benefit: 'バースデークーポン' },
+    { key: 'gold',    name: 'ゴールド',     color: '#ffb300', threshold: 100000, rate: 2.0, discountRate: 3, benefit: '会員限定セール招待・会計時3%自動割引' },
+    { key: 'diamond', name: 'ダイヤモンド', color: '#26c6da', threshold: 300000, rate: 3.0, discountRate: 5, benefit: '送料無料・先行予約権・会計時5%自動割引' }
 ];
 
 function getMemberRankIndex(rankKey) {

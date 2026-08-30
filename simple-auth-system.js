@@ -151,6 +151,31 @@ function isLoggedIn() {
 }
 
 /**
+ * セッションタイムアウト時の共通処理
+ * ------------------------------------------
+ * 以前はポップアップ（showCustomConfirm）でお知らせしていたが、
+ * ポップアップを閉じるとメッセージが消えてしまい分かりづらいため、
+ * ログアウトと同時に担当者ログイン画面（ゲート）を開き、
+ * その画面の担当者バーコード入力欄の上にメッセージを表示し続ける方式にしている。
+ */
+function handleSessionTimeout() {
+    logout();
+    if (typeof playSound === 'function') playSound('error');
+    if (typeof speak === 'function') speak('せっしょん が たいむあうと しました');
+
+    if (typeof setStaffLoginNotice === 'function') {
+        setStaffLoginNotice('セッションがタイムアウトしました。再度ログインしてください。');
+    }
+
+    if (typeof showStaffLoginGate === 'function') {
+        showStaffLoginGate('home-screen');
+    } else {
+        // 万一 staff-login-gate.js が読み込まれていない場合の保険
+        window.location.hash = '#home';
+    }
+}
+
+/**
  * セッションタイムアウト設定
  */
 let timeoutTimer = null;
@@ -158,16 +183,7 @@ function setupSessionTimeout(timeoutMs) {
     if (timeoutTimer) clearTimeout(timeoutTimer);
 
     timeoutTimer = setTimeout(() => {
-        logout();
-        if (typeof playSound === 'function') playSound('error');
-        if (typeof showCustomConfirm === 'function') {
-            showCustomConfirm(
-                'セッションがタイムアウトしました。再度ログインしてください。',
-                'せっしょん が たいむあうと しました',
-                () => { window.location.hash = '#home'; },
-                true
-            );
-        }
+        handleSessionTimeout();
     }, timeoutMs);
 }
 
@@ -188,16 +204,7 @@ function checkStaffSessionExpiry() {
 
     const loginTime = parseInt(session.loginTime || '0', 10);
     if (!loginTime || (Date.now() - loginTime) > role.sessionTimeout) {
-        logout();
-        if (typeof playSound === 'function') playSound('error');
-        if (typeof showCustomConfirm === 'function') {
-            showCustomConfirm(
-                'セッションがタイムアウトしました。再度ログインしてください。',
-                'せっしょん が たいむあうと しました',
-                () => { window.location.hash = '#home'; },
-                true
-            );
-        }
+        handleSessionTimeout();
     }
 }
 

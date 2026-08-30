@@ -297,7 +297,50 @@ function addDiscountBarcode() {
         oneTime: oneTimeCb ? oneTimeCb.checked : false
     };
 
+    // 【重複チェック】discountBarcodes配列には、使用済み（アーカイブ）になったものも
+    // 削除されずそのまま残っている（archived:trueフラグが付くだけ）ため、
+    // ここでの findIndex は通常の有効なバーコードだけでなく、アーカイブ済みのものとも
+    // 重複していないかを確認できる。
     const existingIndex = discountBarcodes.findIndex(d => d.barcode === barcode);
+
+    if (existingIndex !== -1 && discountBarcodes[existingIndex].archived) {
+        // 使用済み（アーカイブ）のバーコードと同じ番号 → 過去の使用履歴が消えてしまうため、
+        // 確認なしでの上書きはさせない（登録をブロックする）。
+        const oldName = discountBarcodes[existingIndex].name;
+        if (typeof playSound === 'function') playSound('error');
+        if (typeof showCustomConfirm === 'function') {
+            showCustomConfirm(
+                `このバーコード番号「${barcode}」は、使用済み（アーカイブ）の自動化バーコード「${oldName}」ですでに使われています。このまま登録すると過去の使用履歴が失われるため登録できません。別のバーコード番号を使うか、「使用済み一覧」からそのバーコードを完全に削除してから登録し直してください。`,
+                "この ばーこーど ばんごう は、 しようずみ の ものと じゅうふく し て い ます。",
+                () => {},
+                true
+            );
+        }
+        return;
+    }
+
+    if (existingIndex !== -1) {
+        // 有効な（アーカイブされていない）既存バーコードと重複 → 上書き前に必ず確認する
+        const oldName = discountBarcodes[existingIndex].name;
+        if (typeof showCustomConfirm === 'function') {
+            showCustomConfirm(
+                `このバーコード番号「${barcode}」は、すでに登録されている自動化バーコード「${oldName}」と同じです。内容を上書きしますか？`,
+                "この ばーこーど ばんごう は、 すでに とうろく さ れ て い ます。 うわがき し ます か？",
+                (res) => {
+                    if (!res) return;
+                    finalizeAddDiscountBarcode(discData, existingIndex);
+                },
+                true
+            );
+        }
+        return;
+    }
+
+    finalizeAddDiscountBarcode(discData, -1);
+}
+
+// addDiscountBarcode() の実際の保存処理（重複チェック・確認後に呼ばれる）
+function finalizeAddDiscountBarcode(discData, existingIndex) {
     if (existingIndex !== -1) {
         discountBarcodes[existingIndex] = discData;
         if (typeof speak === 'function') speak("わりびき バーコード を うわがき ほぞん し まし た");
@@ -309,6 +352,14 @@ function addDiscountBarcode() {
     saveDiscounts();
 
     // フォームをリセット
+    const barcodeInput = document.getElementById('new-disc-barcode');
+    const nameInput = document.getElementById('new-disc-name');
+    const useDiscountCb = document.getElementById('new-disc-use-discount');
+    const valueInput = document.getElementById('new-disc-value');
+    const dateFromInput = document.getElementById('new-disc-date-from');
+    const dateToInput = document.getElementById('new-disc-date-to');
+    const oneTimeCb = document.getElementById('new-disc-one-time');
+
     if (barcodeInput) barcodeInput.value = '';
     if (nameInput) nameInput.value = '';
     if (valueInput) valueInput.value = '';
