@@ -368,7 +368,7 @@ function finalizeAddDiscountBarcode(discData, existingIndex) {
     if (useDiscountCb) useDiscountCb.checked = false;
     if (dateFromInput) dateFromInput.value = '';
     if (dateToInput) dateToInput.value = '';
-    if (oneTimeCb) oneTimeCb.checked = false;
+    if (oneTimeCb) oneTimeCb.checked = true;
     toggleDiscValueRow('new');
     newDiscStagedProducts = [];
 
@@ -865,5 +865,30 @@ function applyDiscountValue(disc) {
             }
             return result;
         };
+    }
+})();
+
+/* =========================================================
+   「使い切りバーコードにする」チェックの初期値
+   ------------------------------------------
+   index.html側のcheckboxはデフォルトで未チェックだが、運用上は
+   チェック済みで使うことが多いため、ページを開いた最初の状態
+   （まだ何も追加していない状態）でも、あらかじめチェック済みに
+   しておく。index.htmlは直接編集せず、ここでJS側から初期値を
+   設定するだけにする（追加後のリセット時にtrueへ戻す処理は
+   finalizeAddDiscountBarcode側ですでに対応済み）。
+   ========================================================= */
+(function setDefaultOneTimeCheckboxChecked() {
+    function applyDefault() {
+        const cb = document.getElementById('new-disc-one-time');
+        if (cb && !cb.dataset.oneTimeDefaultApplied) {
+            cb.checked = true;
+            cb.dataset.oneTimeDefaultApplied = '1';
+        }
+    }
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', applyDefault);
+    } else {
+        applyDefault();
     }
 })();

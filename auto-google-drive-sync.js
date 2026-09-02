@@ -46,15 +46,29 @@ async function autoRestoreFromGoogleDriveOnLoad() {
     if (isCustomerDisplaySafe()) return; // 客用ディスプレイは対象外
     if (!isGoogleDriveConnectedFlag()) return; // 未連携ならローカルのlocalStorageのまま何もしない
 
+    // 【不具合修正】同じタブ内でこの自動復元処理が何度も繰り返し走ってしまう
+    // （＝バックアップ／ログイン画面が延々ループして見える）事態を防ぐため、
+    // 1タブ・1セッションにつき一度しか実行しないようにする。
+    // sessionStorageはページを再読み込みしても保持される（location.reloadを
+    // 挟むような処理があっても、ここで確実にループを断ち切れる）。
+    if (sessionStorage.getItem('pos_gdrive_autorestore_done') === '1') return;
+    sessionStorage.setItem('pos_gdrive_autorestore_done', '1');
+
     if (typeof ensureGoogleDriveToken !== 'function' || typeof findGoogleDriveBackupFileId !== 'function' ||
         typeof gDriveApiFetch !== 'function') {
         return; // google-drive-backup.js がまだ読み込まれていない場合は何もしない（次回起動時に期待）
     }
 
     try {
-        // すでに一度連携済みの端末なので、interactive=true でもGoogle側の同意画面が
-        // 出るのは初回や失効時のみで、通常はサイレントにトークンが更新される想定。
-        const ok = await ensureGoogleDriveToken(true);
+        // 【不具合修正】以前はここで interactive:true を渡していたため、
+        // ページを開くたびにGoogleのログイン/同意画面と「連携が完了しました」
+        // ダイアログが自動で（人の操作なしに）表示されてしまっていた。
+        // google-drive-backup.js 自身の設計方針（自動実行時は画面を絶対に出さず、
+        // トークンが無ければ静かに諦める）に合わせ、ここも interactive:false（サイレント）
+        // に統一する。すでに有効なトークンがメモリ上にある場合のみ、その場でDriveの
+        // 最新データを取り込む。トークンが無ければ何もせずローカルのデータで続行する
+        // （＝Google側の画面は自動実行では一切表示されない）。
+        const ok = await ensureGoogleDriveToken(false);
         if (!ok) return; // トークンが取れなければ、今まで通りローカルのlocalStorageで起動を続ける
 
         const fileId = await findGoogleDriveBackupFileId();
