@@ -2,96 +2,34 @@
 // home-automation-blocks.js
 // ホーム画面 長押しで「自動化バーコード」をブロック表示する機能
 // ------------------------------------------
-// ・自動化バーコード作成画面（discount-system.js）の一覧に、
-//   「ホーム表示」チェック列（✅）を追加する。チェックを入れた
-//   バーコードだけがホーム画面のブロックに表示される。
+// 【2026年9月変更】
+// 以前は自動化バーコード一覧に「ホーム表示」チェック（🏠ボタン）があり、
+// チェックを入れたものだけがホーム画面のブロックに表示される仕組みだったが、
+// 「チェックを付けなくても、登録されている自動化バーコードは強制的にすべて
+// ホームのブロック一覧に出るようにしたい」という要望のため、
+// チェック機能自体を廃止し、無効化（⛔）・アーカイブされていない
+// 自動化バーコードは常に全件、ホームのブロック一覧に表示されるようにした。
+// これに伴い、ブロックの2秒長押しで個別に非表示にする機能も廃止した
+// （全件を強制表示する方針と矛盾するため）。
+// ------------------------------------------
 // ・ホーム画面のどこか（ボタン等の操作要素を除く）を4秒間長押しすると、
-//   「ホーム表示」がONの自動化バーコードをブロックとして一覧表示する。
-// ・各ブロックの右上には、表示され始めてからの経過時間を
+//   登録されている自動化バーコードをブロックとして一覧表示する。
+// ・各ブロックの右上には、初めて表示されてからの経過時間を
 //   mm:ss 形式（例: 00:00）でリアルタイム表示する。
-// ・ブロックを2秒間長押しすると、そのブロックを削除する
-//   （＝そのバーコードの「ホーム表示」チェックを自動的にOFFにする）。
 //
-// discount-system.js / index.html は直接編集せず、
-//   ・renderDiscounts() をフックして一覧にチェック列を追加
-// という「フック方式」＋ホーム画面へのイベントリスナー追加で実現する
+// discount-system.js / index.html は直接編集せず、ホーム画面への
+// イベントリスナー追加＋renderHomeAutomationBlocksGrid()で実現する
 // （他の追加機能ファイルと同じ考え方）。
 // ==========================================
 
 const HOME_LONG_PRESS_MS = 4000;
-const HOME_BLOCK_DELETE_PRESS_MS = 2000;
+
+// 各ブロックを個別に長押し（2秒）すると、そのバーコードだけを
+// アーカイブしてホームのブロック一覧から消す
+const HOME_BLOCK_ARCHIVE_LONG_PRESS_MS = 2000;
 
 /* =========================================================
-   ① 自動化バーコード一覧：「ホーム表示」チェック列を追加
-   ========================================================= */
-(function hookRenderDiscountsForHomeCheckbox() {
-    function tryHook() {
-        if (typeof window.renderDiscounts !== 'function') {
-            setTimeout(tryHook, 300);
-            return;
-        }
-        const original = window.renderDiscounts;
-        window.renderDiscounts = function (...args) {
-            const result = original.apply(this, args);
-            injectHomeBlockCheckboxColumn();
-            return result;
-        };
-    }
-    tryHook();
-})();
-
-// 新しい列を追加すると、表が横に長くなり画面幅に収まらず見えなくなることがあるため、
-// 既存の「操作」列（変更・削除ボタンがある一番右のセル）の中にボタンとして追加する。
-function injectHomeBlockCheckboxColumn() {
-    const tbody = document.getElementById('discount-tbody');
-    if (!tbody || typeof discountBarcodes === 'undefined') return;
-
-    // renderDiscounts() 内と同じ「アーカイブ済みを除いたリスト」の並びに合わせる
-    const activeList = discountBarcodes
-        .map((disc, index) => ({ disc, index }))
-        .filter(({ disc }) => !disc.archived);
-
-    Array.from(tbody.children).forEach((tr, i) => {
-        if (tr.querySelector('td[colspan]')) return; // 空リストのプレースホルダー行
-        const entry = activeList[i];
-        if (!entry) return;
-
-        const actionCell = tr.lastElementChild;
-        if (!actionCell) return;
-
-        let btn = actionCell.querySelector('.home-block-toggle-btn');
-        const isOn = !!entry.disc.showOnHome;
-        if (!btn) {
-            btn = document.createElement('button');
-            btn.className = 'select-btn home-block-toggle-btn';
-            btn.style.marginRight = '6px';
-            actionCell.insertBefore(btn, actionCell.firstChild);
-        }
-        btn.setAttribute('onclick', `toggleDiscountShowOnHome(${entry.index})`);
-        btn.style.background = isOn ? '#00897b' : '#9e9e9e';
-        btn.innerText = isOn ? '🏠 ホーム表示中' : '🏠 ホームに表示';
-    });
-}
-
-function toggleDiscountShowOnHome(index) {
-    if (typeof discountBarcodes === 'undefined' || !discountBarcodes[index]) return;
-    const disc = discountBarcodes[index];
-    const nowOn = !disc.showOnHome;
-    disc.showOnHome = nowOn;
-    if (nowOn) {
-        disc.homeBlockStartAt = Date.now();
-    } else {
-        delete disc.homeBlockStartAt;
-    }
-    localStorage.setItem('pos_discounts', JSON.stringify(discountBarcodes));
-    if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
-    if (typeof playSound === 'function') playSound('click');
-    injectHomeBlockCheckboxColumn(); // ボタンの見た目（ON/OFF）をその場で更新する
-    renderHomeAutomationBlocksIfVisible();
-}
-
-/* =========================================================
-   ② ホーム画面：ブロック表示オーバーレイ
+   ホーム画面：ブロック表示オーバーレイ
    ========================================================= */
 let homeLongPressTimer = null;
 let homeBlockTickInterval = null;
@@ -104,7 +42,7 @@ function ensureHomeBlockOverlay() {
     overlay.style.cssText = 'display:none; position:fixed; inset:0; background:rgba(0,0,0,0.75); z-index:9998; padding:20px; overflow-y:auto;';
     overlay.innerHTML = `
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
-            <h3 style="color:#fff; margin:0;">🏷️ 自動化バーコード（ブロックを2秒長押しで削除）</h3>
+            <h3 style="color:#fff; margin:0;">🏷️ 自動化バーコード一覧</h3>
             <button onclick="closeHomeAutomationBlocks()" style="border:none; background:#eee; border-radius:6px; padding:8px 14px; font-weight:bold; cursor:pointer;">閉じる</button>
         </div>
         <div id="home-automation-blocks-grid" style="display:flex; flex-wrap:wrap; gap:12px;"></div>
@@ -166,31 +104,127 @@ function renderHomeAutomationBlocksGrid() {
     const grid = document.getElementById('home-automation-blocks-grid');
     if (!grid || typeof discountBarcodes === 'undefined') return;
 
+    // 【変更】「ホーム表示」チェックは廃止。無効化・アーカイブされていない
+    // 自動化バーコードは強制的にすべて表示対象にする。
     const shown = discountBarcodes
         .map((disc, index) => ({ disc, index }))
-        .filter(({ disc }) => !disc.archived && disc.showOnHome);
+        .filter(({ disc }) => !disc.archived);
 
     if (shown.length === 0) {
-        grid.innerHTML = '<div style="color:#eee;">ホーム表示に設定された自動化バーコードがありません。「🏷️ 自動化バーコード作成」の一覧で「ホーム表示」にチェックを入れてください。</div>';
+        grid.innerHTML = '<div style="color:#eee;">登録されている自動化バーコードがありません。「🏷️ 自動化バーコード作成」から登録してください。</div>';
         return;
     }
 
+    // 初めて画面に出た自動化バーコードには、経過時間タイマーの起点(homeBlockStartAt)を
+    // ここで一度だけ記録しておく（無いと毎回「今」を起点にしてしまい、タイマーが進まないため）。
+    let needsSave = false;
+    shown.forEach(({ disc }) => {
+        if (!disc.homeBlockStartAt) {
+            disc.homeBlockStartAt = Date.now();
+            needsSave = true;
+        }
+    });
+    if (needsSave) {
+        localStorage.setItem('pos_discounts', JSON.stringify(discountBarcodes));
+        if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
+    }
+
     const safe = (typeof escapeHtml === 'function') ? escapeHtml : (s) => s;
+    const displayName = (typeof discDisplayName === 'function') ? discDisplayName : (d) => (d && d.name) || '（名称未設定）';
 
     grid.innerHTML = shown.map(({ disc, index }) => `
         <div class="home-automation-block" data-disc-index="${index}"
-            style="position:relative; width:160px; min-height:90px; background:#fff; border-radius:10px; padding:10px; box-shadow:0 2px 6px rgba(0,0,0,0.3); user-select:none; transition: background-color 0.4s;">
+            style="position:relative; width:160px; min-height:90px; background:#fff; border-radius:10px; padding:10px; box-shadow:0 2px 6px rgba(0,0,0,0.3); user-select:none; transition: background-color 0.4s, transform 150ms ease, opacity 150ms ease; overflow:hidden;">
             <div class="home-automation-block-timer" style="position:absolute; top:6px; right:8px; font-size:11px; color:#888; font-family:monospace;">00:00</div>
-            <div class="home-automation-block-title" style="font-weight:bold; color:#6a1b9a; margin-top:14px; word-break:break-all;">🏷️ ${safe(disc.name)}</div>
+            <div class="home-automation-block-title" style="font-weight:bold; color:#6a1b9a; margin-top:14px; word-break:break-all;">🏷️ ${safe(displayName(disc))}</div>
             <div class="home-automation-block-barcode" style="font-size:11px; color:#999; font-family:monospace; margin-top:4px;">${safe(disc.barcode)}</div>
+            <div class="home-automation-block-archive-bar" style="position:absolute; left:0; bottom:0; height:4px; width:0%; background:#e53935;"></div>
         </div>
     `).join('');
 
-    attachHomeBlockLongPressHandlers();
+    grid.querySelectorAll('.home-automation-block').forEach(blockEl => {
+        const idx = parseInt(blockEl.dataset.discIndex, 10);
+        attachBlockArchiveLongPress(blockEl, idx);
+    });
+
     updateHomeAutomationBlockTimers();
 }
 
-// 各ブロックの右上に、表示され始めてからの経過時間を mm:ss で表示する
+/* =========================================================
+   ブロック単体の長押し（2秒）→ そのバーコードだけをアーカイブする
+   ------------------------------------------
+   ・押している間：カードがわずかに縮み、下端の赤いバーが左から右へ伸びる
+     （「消そうとしている」ことが視覚的にわかるようにするため）
+   ・2秒経つ前に指を離した場合：バーを0%に戻し、何も起きない
+   ・2秒経過した場合：disc.archived = trueにしてlocalStorageへ保存し、
+     一覧を再描画して即座にそのブロックを消す
+   ========================================================= */
+function archiveDiscountBarcode(index) {
+    if (typeof discountBarcodes === 'undefined' || !Array.isArray(discountBarcodes)) return;
+    const disc = discountBarcodes[index];
+    if (!disc) return;
+
+    disc.archived = true;
+
+    try {
+        localStorage.setItem('pos_discounts', JSON.stringify(discountBarcodes));
+        if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
+    } catch (e) {
+        console.warn('自動化バーコードのアーカイブ保存に失敗しました:', e);
+    }
+
+    if (typeof playSound === 'function') playSound('success');
+
+    // 開いたままのオーバーレイに即座に反映する（このブロックが一覧から消える）
+    renderHomeAutomationBlocksIfVisible();
+}
+
+function attachBlockArchiveLongPress(blockEl, index) {
+    const bar = blockEl.querySelector('.home-automation-block-archive-bar');
+    let pressTimer = null;
+    let archived = false;
+
+    const start = (e) => {
+        if (archived) return;
+        if (bar) {
+            bar.style.transition = 'none';
+            bar.style.width = '0%';
+            requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                    bar.style.transition = `width ${HOME_BLOCK_ARCHIVE_LONG_PRESS_MS}ms linear`;
+                    bar.style.width = '100%';
+                });
+            });
+        }
+        blockEl.style.transform = 'scale(0.94)';
+
+        pressTimer = setTimeout(() => {
+            archived = true;
+            blockEl.style.opacity = '0';
+            blockEl.style.transform = 'scale(0.85)';
+            setTimeout(() => archiveDiscountBarcode(index), 150);
+        }, HOME_BLOCK_ARCHIVE_LONG_PRESS_MS);
+    };
+
+    const cancel = () => {
+        if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
+        if (archived) return;
+        blockEl.style.transform = 'scale(1)';
+        if (bar) {
+            bar.style.transition = 'width 150ms ease-out';
+            bar.style.width = '0%';
+        }
+    };
+
+    blockEl.addEventListener('pointerdown', start);
+    blockEl.addEventListener('pointerup', cancel);
+    blockEl.addEventListener('pointerleave', cancel);
+    blockEl.addEventListener('pointercancel', cancel);
+    // 長押し中にコンテキストメニューが出て操作が中断されないようにする
+    blockEl.addEventListener('contextmenu', (e) => e.preventDefault());
+}
+
+// 各ブロックの右上に、初めて表示されてからの経過時間を mm:ss で表示する
 // あわせて、経過時間に応じてブロックの色を変える（3分未満=緑／3〜5分=黄／5分以上=赤）
 function updateHomeAutomationBlockTimers() {
     if (typeof discountBarcodes === 'undefined') return;
@@ -229,69 +263,8 @@ function applyHomeBlockStatusColor(blockEl, elapsedSec) {
     if (timerEl) timerEl.style.color = timerColor;
 }
 
-// ブロックを2秒間長押しすると削除する（＝「ホーム表示」チェックをOFFにする）
-// こちらも同様に、ブロック下部に左から右へ伸びる進捗バーを表示する
-function attachHomeBlockLongPressHandlers() {
-    document.querySelectorAll('.home-automation-block').forEach(blockEl => {
-        if (blockEl.dataset.longPressBound) return;
-        blockEl.dataset.longPressBound = '1';
-        let pressTimer = null;
-
-        let progressBar = blockEl.querySelector('.home-automation-block-progress-bar');
-        if (!progressBar) {
-            const track = document.createElement('div');
-            track.style.cssText = 'position:absolute; left:0; bottom:0; width:100%; height:4px; background:rgba(0,0,0,0.1); border-radius:0 0 10px 10px; overflow:hidden;';
-            progressBar = document.createElement('div');
-            progressBar.className = 'home-automation-block-progress-bar';
-            progressBar.style.cssText = 'height:100%; width:0%; background:#e53935;';
-            track.appendChild(progressBar);
-            blockEl.appendChild(track);
-        }
-
-        const start = (e) => {
-            e.preventDefault();
-            progressBar.style.transition = 'none';
-            progressBar.style.width = '0%';
-            requestAnimationFrame(() => {
-                requestAnimationFrame(() => {
-                    progressBar.style.transition = `width ${HOME_BLOCK_DELETE_PRESS_MS}ms linear`;
-                    progressBar.style.width = '100%';
-                });
-            });
-            pressTimer = setTimeout(() => {
-                const idx = parseInt(blockEl.dataset.discIndex, 10);
-                deleteHomeAutomationBlock(idx);
-            }, HOME_BLOCK_DELETE_PRESS_MS);
-        };
-        const cancel = () => {
-            if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
-            progressBar.style.transition = 'none';
-            progressBar.style.width = '0%';
-        };
-
-        blockEl.addEventListener('mousedown', start);
-        blockEl.addEventListener('touchstart', start, { passive: false });
-        ['mouseup', 'mouseleave', 'touchend', 'touchcancel'].forEach(evt => blockEl.addEventListener(evt, cancel));
-    });
-}
-
-function deleteHomeAutomationBlock(index) {
-    if (typeof discountBarcodes === 'undefined' || !discountBarcodes[index]) return;
-    const disc = discountBarcodes[index];
-    disc.showOnHome = false;
-    delete disc.homeBlockStartAt;
-    localStorage.setItem('pos_discounts', JSON.stringify(discountBarcodes));
-    if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
-    if (typeof playSound === 'function') playSound('click');
-    if (typeof speak === 'function') speak(`${disc.name} の ブロック を さくじょ し まし た`);
-
-    // 自動化バーコード画面が開いていれば、一覧のチェックも連動して外す
-    if (typeof renderDiscounts === 'function') renderDiscounts();
-    renderHomeAutomationBlocksGrid();
-}
-
 /* =========================================================
-   ③ ホーム画面：4秒長押しの検知
+   ホーム画面：4秒長押しの検知
    ------------------------------------------
    ホーム画面はボタンがほぼ隙間なく並んでいるため、「ボタンの上は
    無視する」形にすると実質どこを押しても反応しなくなってしまう。

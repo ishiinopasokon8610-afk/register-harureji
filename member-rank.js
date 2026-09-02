@@ -40,8 +40,15 @@ function ensureCustomerRankFields(cust) {
 }
 
 // 現在「確定している」ランク情報を取得
+// ------------------------------------------
+// 【不具合修正】以前はここで maybeEvaluateMonthlyRank() を呼んでいなかったため、
+// 「会計する」まで月次判定が走らず、月が変わってもレジ画面のバッジや
+// 会員管理画面の一覧が古いランクのまま表示され続けていた（＝購入があるまで
+// 昇格しないように見えてしまっていた）。
+// ランク情報を「見る」タイミングであれば必ず最新の判定を先に行うようにする。
 function getCustomerRankInfo(cust) {
     ensureCustomerRankFields(cust);
+    maybeEvaluateMonthlyRank(cust);
     return MEMBER_RANKS[getMemberRankIndex(cust.rank)];
 }
 
@@ -68,6 +75,7 @@ function maybeEvaluateMonthlyRank(cust) {
     const calculatedRank = calcRankByAmount(cust.annualPurchase);
     const currentIdx = getMemberRankIndex(cust.rank);
     const calcIdx = getMemberRankIndex(calculatedRank.key);
+    const rankBefore = cust.rank;
 
     if (calcIdx >= currentIdx) {
         // 現状維持 または ランクアップ → そのまま反映し、猶予をリセット
@@ -83,6 +91,30 @@ function maybeEvaluateMonthlyRank(cust) {
         }
     }
     cust.rankEvalMonth = ym;
+
+    // 【不具合修正】この判定は会計（addPurchaseAndGetRewardRate）だけでなく
+    // getCustomerRankInfo() 経由（＝ただ画面に表示しただけ）でも走るようになったため、
+    // ランクが変わった場合はその場でlocalStorageにも保存しておく。
+    // そうしないと、会計せずに閲覧しただけではメモリ上のcustomersは更新されても
+    // pos_customersは古いままになり、ページ再読み込みや他端末との同期で
+    // 判定結果が失われてしまう（＝購入するまで昇格が「なかったこと」になる）。
+    if (cust.rank !== rankBefore) {
+        persistCustomerRankChange(cust);
+    }
+}
+
+// ランク判定の結果をlocalStorage（および他端末）へ反映する
+function persistCustomerRankChange(cust) {
+    if (typeof customers === 'undefined' || !Array.isArray(customers) || !cust) return;
+    const idx = customers.findIndex(c => c === cust || (cust.barcode && c.barcode === cust.barcode));
+    if (idx === -1) return;
+    customers[idx] = cust;
+    try {
+        localStorage.setItem('pos_customers', JSON.stringify(customers));
+        if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
+    } catch (e) {
+        console.warn('会員ランク判定結果の保存に失敗しました:', e);
+    }
 }
 
 // 購入時に呼び出す：年間購入額に加算し、その場でのポイント付与率（％）を返す

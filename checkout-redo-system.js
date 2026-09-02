@@ -67,9 +67,19 @@ function showConfirmSafe(msg, kana, cb, alertOnly) {
 
 /* ---------- 取引番号の検索 → レジ画面へ読み込み ---------- */
 
+// 「R000123」の「R」を毎回打つのは手間なので、数字だけの入力
+// （例: "123" や "000123"）でも同じ取引を検索できるようにする。
+// 大文字小文字・前後の空白・「R」の有無を吸収し、最終的に
+// history-receipt-number-system.js が発行する形式（R+6桁）に揃える。
+function normalizeReceiptNoInput(raw) {
+    const digits = (raw || '').replace(/[^0-9]/g, '');
+    if (!digits) return '';
+    return 'R' + digits.padStart(6, '0');
+}
+
 function searchRedoCheckoutTarget() {
     const input = document.getElementById('redo-checkout-no-input');
-    const no = input ? input.value.trim().toUpperCase() : '';
+    const no = input ? normalizeReceiptNoInput(input.value) : '';
 
     if (!no) {
         if (typeof playSound === 'function') playSound('error');

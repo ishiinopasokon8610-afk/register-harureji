@@ -66,7 +66,7 @@ function renderDiscounts() {
                 const tr = document.createElement('tr');
                 tr.innerHTML = `
                     <td style="font-family:monospace; font-weight:bold; color:#0066cc;">${disc.barcode}</td>
-                    <td><b>🏷️ ${disc.name}</b></td>
+                    <td><b>🏷️ ${discDisplayName(disc)}</b></td>
                     <td style="line-height:1.6;">${contentText}</td>
                     <td><button class="select-btn" style="${statusBtnStyle}" onclick="toggleDiscountEnabled(${index})">${statusLabel}</button></td>
                     <td>
@@ -107,7 +107,7 @@ function renderArchivedDiscounts() {
         const tr = document.createElement('tr');
         tr.innerHTML = `
             <td style="font-family:monospace; font-weight:bold; color:#888;">${disc.barcode}</td>
-            <td><b>🏷️ ${disc.name}</b></td>
+            <td><b>🏷️ ${discDisplayName(disc)}</b></td>
             <td style="line-height:1.6;">${contentText}</td>
             <td style="font-size:12px; color:#888; white-space:nowrap;">${archivedAtLabel}</td>
             <td>
@@ -117,6 +117,14 @@ function renderArchivedDiscounts() {
         `;
         tbody.appendChild(tr);
     });
+}
+
+// 表示用の名前を返す
+// 【不具合修正】割引名（disc.name）は入力必須ではなくなったため、
+// 未入力の場合に一覧・確認ダイアログ・音声案内などで空欄や"undefined"に
+// ならないよう、表示のたびにこの関数を通してフォールバック文言を補う。
+function discDisplayName(disc) {
+    return (disc && disc.name && disc.name.trim()) ? disc.name.trim() : '（名称未設定）';
 }
 
 // 内容列（商品追加＋割引の複数表示に対応）
@@ -253,16 +261,10 @@ function addDiscountBarcode() {
     const oneTimeCb = document.getElementById('new-disc-one-time');
 
     const barcode = (barcodeInput && barcodeInput.value.trim()) ? barcodeInput.value.trim() : Date.now().toString();
+    // 【不具合修正】割引名（name）は必須ではなくなった。未入力のまま登録できる
+    // （一覧・確認ダイアログ・音声案内などでの表示は discDisplayName() がフォールバックする）。
     const name = nameInput ? nameInput.value.trim() : '';
     const useDiscount = useDiscountCb ? useDiscountCb.checked : false;
-
-    if (!name) {
-        if (typeof playSound === 'function') playSound('error');
-        if (typeof showCustomConfirm === 'function') {
-            showCustomConfirm("割引名を入力してください。", "わりびきめい を にゅうりょく し て ください。", () => {}, true);
-        }
-        return;
-    }
 
     if (newDiscStagedProducts.length === 0 && !useDiscount) {
         if (typeof playSound === 'function') playSound('error');
@@ -306,7 +308,7 @@ function addDiscountBarcode() {
     if (existingIndex !== -1 && discountBarcodes[existingIndex].archived) {
         // 使用済み（アーカイブ）のバーコードと同じ番号 → 過去の使用履歴が消えてしまうため、
         // 確認なしでの上書きはさせない（登録をブロックする）。
-        const oldName = discountBarcodes[existingIndex].name;
+        const oldName = discDisplayName(discountBarcodes[existingIndex]);
         if (typeof playSound === 'function') playSound('error');
         if (typeof showCustomConfirm === 'function') {
             showCustomConfirm(
@@ -321,7 +323,7 @@ function addDiscountBarcode() {
 
     if (existingIndex !== -1) {
         // 有効な（アーカイブされていない）既存バーコードと重複 → 上書き前に必ず確認する
-        const oldName = discountBarcodes[existingIndex].name;
+        const oldName = discDisplayName(discountBarcodes[existingIndex]);
         if (typeof showCustomConfirm === 'function') {
             showCustomConfirm(
                 `このバーコード番号「${barcode}」は、すでに登録されている自動化バーコード「${oldName}」と同じです。内容を上書きしますか？`,
@@ -343,10 +345,10 @@ function addDiscountBarcode() {
 function finalizeAddDiscountBarcode(discData, existingIndex) {
     if (existingIndex !== -1) {
         discountBarcodes[existingIndex] = discData;
-        if (typeof speak === 'function') speak("わりびき バーコード を うわがき ほぞん し まし た");
+        if (typeof speak === 'function') speak("ごちゅうもんありがとうございます。とうろくしました。");
     } else {
         discountBarcodes.push(discData);
-        if (typeof speak === 'function') speak("わりびき バーコード を とうろく し まし た");
+        if (typeof speak === 'function') speak("ついかのごちゅうもんです。");
     }
 
     saveDiscounts();
@@ -390,7 +392,7 @@ function editDiscountBarcode(index) {
     }
 
     const nameDisp = document.getElementById('edit-disc-name-display');
-    if (nameDisp) nameDisp.innerText = `${disc.name} の編集 (バーコード: ${disc.barcode})`;
+    if (nameDisp) nameDisp.innerText = `${discDisplayName(disc)} の編集 (バーコード: ${disc.barcode})`;
 
     document.getElementById('edit-disc-name-input').value = disc.name;
 
@@ -440,7 +442,8 @@ function saveEditDisc() {
     const useDiscount = document.getElementById('edit-disc-use-discount').checked;
     const err = document.getElementById('edit-disc-error');
 
-    if (!name || (editDiscStagedProducts.length === 0 && !useDiscount)) {
+    // 【不具合修正】割引名（name）は必須ではなくなった。空欄のまま保存できる。
+    if (editDiscStagedProducts.length === 0 && !useDiscount) {
         if (err) err.style.display = 'block';
         if (typeof playSound === 'function') playSound('error');
         return;
@@ -491,7 +494,7 @@ function deleteDiscountBarcode(index) {
     if (!disc) return;
     if (typeof showCustomConfirm === 'function') {
         showCustomConfirm(
-            `自動化バーコード作成「${disc.name}」を削除しますか？`,
+            `自動化バーコード作成「${discDisplayName(disc)}」を削除しますか？`,
             "この 自動化バーコード作成 を さくじょ し ます か？",
             (res) => {
                 if (!res) return;
@@ -698,7 +701,7 @@ function restoreDiscountBarcode(index) {
     if (!disc) return;
     if (typeof showCustomConfirm === 'function') {
         showCustomConfirm(
-            `使用済みバーコード「${disc.name}」を復元し、再び使えるようにしますか？`,
+            `使用済みバーコード「${discDisplayName(disc)}」を復元し、再び使えるようにしますか？`,
             "この バーコード を ふっけん し ます か？",
             (res) => {
                 if (!res) return;
@@ -721,7 +724,7 @@ function permanentlyDeleteDiscountBarcode(index) {
     if (!disc) return;
     if (typeof showCustomConfirm === 'function') {
         showCustomConfirm(
-            `使用済みバーコード「${disc.name}」を完全に削除します。この操作は取り消せません。よろしいですか？`,
+            `使用済みバーコード「${discDisplayName(disc)}」を完全に削除します。この操作は取り消せません。よろしいですか？`,
             "この バーコード を かんぜん に さくじょ し ます か？",
             (res) => {
                 if (!res) return;
@@ -778,7 +781,7 @@ function applyDiscountValue(disc) {
             if (typeof showCustomConfirm === 'function') {
                 showCustomConfirm("値引き対象の商品がカートにありません。", "ねびき たいしょう の しょうひん が あり ませ ん。", () => { if (typeof focusJanInput === 'function') focusJanInput(); }, false);
             }
-            if (typeof speak === 'function') speak(`とくてん バーコード、${disc.name} を てきよう し まし た`);
+            if (typeof speak === 'function') speak(`とくてん バーコード、${discDisplayName(disc)} を てきよう し まし た`);
             if (typeof focusJanInput === 'function') focusJanInput();
             return;
         }
@@ -792,12 +795,12 @@ function applyDiscountValue(disc) {
         if (discountAmount > currentTotal) discountAmount = currentTotal;
 
         if (discountAmount > 0) {
-            cart.push({ name: `🏷️ ${disc.name}`, price: -discountAmount, qty: 1, taxRate: 10, genre: '値引き/その他' });
+            cart.push({ name: `🏷️ ${discDisplayName(disc)}`, price: -discountAmount, qty: 1, taxRate: 10, genre: '値引き/その他' });
             if (typeof updateReceipt === 'function') updateReceipt();
         }
     }
 
-    if (typeof speak === 'function') speak(`とくてん バーコード、${disc.name} を てきよう し まし た`);
+    if (typeof speak === 'function') speak(`とくてん バーコード、${discDisplayName(disc)} を てきよう し まし た`);
     if (typeof focusJanInput === 'function') focusJanInput();
 }
 

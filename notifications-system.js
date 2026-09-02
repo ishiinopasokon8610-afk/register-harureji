@@ -144,6 +144,45 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             lastKnownHistoryIds = new Set(msg.data.history.map(h => h.id));
         });
+
+        // タイムカード（出勤/退勤の打刻）が増えた時
+        // ------------------------------------------
+        // sync-system.js がすでに 'timecard-sync' で他端末へ配信しているが、
+        // これまでは通知の対象になっていなかったため追加する。
+        // 新しい「打刻の1回」を検知したいので、record単位ではなく
+        // record内の各打刻(clockIn/breakStart/breakEnd/clockOut)の値を
+        // 「日付＋担当者名＋打刻種別＋時刻」のキーにして前回との差分を取る。
+        const buildTimecardStampKeys = (timecards) => {
+            const keys = new Set();
+            (timecards || []).forEach(rec => {
+                ['clockIn', 'breakStart', 'breakEnd', 'clockOut'].forEach(type => {
+                    if (rec[type]) keys.add(`${rec.date}_${rec.clerkName}_${type}_${rec[type]}`);
+                });
+            });
+            return keys;
+        };
+        const timecardStampLabel = { clockIn: '出勤', breakStart: '休憩開始', breakEnd: '休憩終了', clockOut: '退勤' };
+
+        let lastKnownTimecardStamps = buildTimecardStampKeys(
+            JSON.parse(localStorage.getItem('pos_timecard') || '[]')
+        );
+        channel.subscribe('timecard-sync', (msg) => {
+            if (!msg || !msg.data || !Array.isArray(msg.data.timecards)) return;
+            const isOwn = (typeof SYNC_DEVICE_ID !== 'undefined') && msg.data.senderId === SYNC_DEVICE_ID;
+            const newStamps = buildTimecardStampKeys(msg.data.timecards);
+            if (!isOwn) {
+                msg.data.timecards.forEach(rec => {
+                    ['clockIn', 'breakStart', 'breakEnd', 'clockOut'].forEach(type => {
+                        if (!rec[type]) return;
+                        const key = `${rec.date}_${rec.clerkName}_${type}_${rec[type]}`;
+                        if (!lastKnownTimecardStamps.has(key)) {
+                            fireDesktopNotification('🕒 タイムカードが記録されました', `${rec.clerkName || '担当者'}: ${timecardStampLabel[type] || type}（${rec[type]}）`);
+                        }
+                    });
+                });
+            }
+            lastKnownTimecardStamps = newStamps;
+        });
     }
     tryHook();
 })();

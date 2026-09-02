@@ -1,0 +1,64 @@
+/* ==========================================
+   custom-styles.css
+   ------------------------------------------
+   元々 index.html の <head> 内に直接 <style> として埋め込まれていた
+   CSSを、そのままの内容で切り出したファイル。
+   ========================================== */
+
+/* ==========================================
+   処理中ローディングオーバーレイ用スタイル
+   画面の読み込み中／レジの開局・閉局の処理中に
+   くるくる回るスピナーを画面全体に表示するためのCSS。
+   ========================================== */
+#app-loading-overlay {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(20, 20, 20, 0.82);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 999999;
+    color: #ffffff;
+    opacity: 1;
+    transition: opacity 0.35s ease;
+}
+#app-loading-overlay.app-loading-hidden {
+    opacity: 0;
+    pointer-events: none;
+}
+.app-loading-spinner {
+    width: 64px;
+    height: 64px;
+    border: 6px solid rgba(255, 255, 255, 0.25);
+    border-top-color: #e91e63;
+    border-radius: 50%;
+    animation: app-loading-spin 0.85s linear infinite;
+}
+@keyframes app-loading-spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+#app-loading-text {
+    margin-top: 18px;
+    font-size: 18px;
+    font-weight: bold;
+    letter-spacing: 0.05em;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.6);
+}
+
+/* 担当者ログインモーダル：セッションタイムアウトなどの通知メッセージ */
+.staff-login-notice {
+    background: #fff3e0;
+    border: 1px solid #ffb74d;
+    color: #e65100;
+    font-weight: bold;
+    font-size: 14px;
+    padding: 10px 12px;
+    border-radius: 6px;
+    margin: 4px 0 12px 0;
+    text-align: center;
+    line-height: 1.5;
+}

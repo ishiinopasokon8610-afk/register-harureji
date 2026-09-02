@@ -200,6 +200,13 @@
     <!-- PDF生成・ダウンロード用ライブラリ (html2canvas & jsPDF) -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <!-- バーコード画像生成用ライブラリ (会員バーコードPDF出力で使用)
+         【修正】通信環境（ファイアウォール・Webフィルタリング等）によっては
+         cdnjs.cloudflare.comへの通信がブロックされ、「バーコードライブラリが
+         読み込まれていません」という失敗表示になることがあるため、
+         読み込みに失敗した場合は別のCDN（jsDelivr）から自動で読み込み直す。 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/JsBarcode/3.11.5/JsBarcode.all.min.js"
+            onerror="(function(){var s=document.createElement('script');s.src='https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js';document.head.appendChild(s);})();"></script>
     
     <link rel="stylesheet" href="style.css">
 
@@ -1394,7 +1401,7 @@
     <div class="modal-box medium">
         <h3 class="modal-title" style="color: #e65100;">✏️ 会計やり直し</h3>
         <p class="modal-desc">内容を変更したい会計の取引番号を入力してください（例: R000123）。取引番号はレシート下部・お会計履歴に記載されています。入力すると、その時の内容がレジ画面に読み込まれます。</p>
-        <input type="text" id="redo-checkout-no-input" placeholder="例: R000123" style="width:100%; box-sizing:border-box; font-size:18px; padding:10px; margin-top:6px; text-align:center; letter-spacing:1px;">
+        <input type="text" id="redo-checkout-no-input" placeholder="例: 123（Rは省略可）" style="width:100%; box-sizing:border-box; font-size:18px; padding:10px; margin-top:6px; text-align:center; letter-spacing:1px;">
         <div class="modal-btn-group" style="margin-top:14px;">
             <button onclick="closeRedoCheckoutLookupModal()" class="modal-btn cancel">キャンセル</button>
             <button onclick="searchRedoCheckoutTarget()" class="modal-btn" style="background:#f57c00; color:white;">読み込む</button>
@@ -1666,6 +1673,13 @@
     <script src="refund.js"></script>
     <script src="local-backup.js"></script>
     <script src="google-drive-backup.js"></script>
+<script src="auto-google-drive-sync.js"></script>
+<script src="product-export-system.js"></script>
+<script src="product-picker-block-system.js"></script>
+<script src="product-picker-hash-system.js"></script>
+<script src="customer-export-system.js"></script>
+<script src="customer-barcode-pdf-system.js"></script>
+<script src="clerk-barcode-pdf-system.js"></script>
     <script src="sales-mgmt.js"></script>
     <script src="discount-system.js"></script>
     <script src="checkout-demographics.js"></script>
@@ -1680,11 +1694,17 @@
     <script src="history-receipt-number-system.js"></script>
     <script src="checkout-redo-system.js"></script>
     <script src="member-rank-discount.js"></script>
+    <script src="member-rank-monthly-refresh.js"></script>
     <script src="tax-report-system.js"></script>
     <script src="receipt-hide-name-system.js"></script>
     <script src="analytics-weather-patch.js"></script>
     <script src="order-system-settings.js"></script>
     <script src="order-checkout-display.js"></script>
+    <script src="call-number-system.js"></script>
+    <script src="call-number-receipt-print.js"></script>
+    <script src="tax-exclusive-pricing-system.js"></script>
+    <script src="home-blocks-hash-navigation.js"></script>
+    <script src="home-automation-blocks-sync.js"></script>
     <script src="home-automation-blocks.js"></script>
     <script src="screen-hash-navigation.js"></script>
     <script src="screen-title-system.js"></script>
