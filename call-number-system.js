@@ -18,6 +18,14 @@
 // order-checkout-display.js が導入されている場合は、直近の注文カードにも
 // 呼び出し番号を差し込む（互いにtypeofで存在確認するだけの緩い連携で、
 // どちらか片方だけが入っている環境でも問題なく動く）。
+//
+// 【改訂】order-checkout-display.js が「直近1件を保存」から「未受け渡し分を
+// 全件キューで保持する」方式に作り替えられ、以前あった saveLastOrderDisplay() /
+// broadcastOrderDisplay() が削除されていた（getLastOrderDisplay() だけは
+// 互換のため残っている）。そのため syncCallNumberIntoOrderDisplay() が
+// 冒頭のtypeofガードで毎回何もせず抜けてしまい、呼び出し一覧に番号が
+// 一切反映されない不具合になっていた。新しいキューAPIである
+// upsertOrderInQueue() / broadcastOrderEvent() を使うように修正した。
 // ==========================================
 
 const CALL_NUMBER_COUNTER_KEY = 'pos_call_number_counter';
@@ -91,7 +99,10 @@ function resetCallNumberCounter() {
 // order-checkout-display.js が入っている場合、直近の注文カードにも
 // 呼び出し番号を反映する（無ければ何もしない）
 function syncCallNumberIntoOrderDisplay(historyRecord, num) {
-    if (typeof getLastOrderDisplay !== 'function' || typeof saveLastOrderDisplay !== 'function') return;
+    // getLastOrderDisplay() は今のキュー方式でも「先頭＝一番新しい未完了注文」を
+    // 返す互換関数として残っているので、そのまま使う。保存・他端末への送信だけ
+    // 新しいキューAPI（upsertOrderInQueue / broadcastOrderEvent）に合わせる。
+    if (typeof getLastOrderDisplay !== 'function' || typeof upsertOrderInQueue !== 'function') return;
     const record = getLastOrderDisplay();
     if (!record) return;
     // 同じ会計かどうかを、取引番号（あれば）か日時で緩く照合する
@@ -101,8 +112,8 @@ function syncCallNumberIntoOrderDisplay(historyRecord, num) {
     if (!sameTransaction) return;
 
     record.callNumber = num;
-    saveLastOrderDisplay(record);
-    if (typeof broadcastOrderDisplay === 'function') broadcastOrderDisplay(record);
+    upsertOrderInQueue(record);
+    if (typeof broadcastOrderEvent === 'function') broadcastOrderEvent({ action: 'upsert', record });
     if (typeof renderAllOrderCards === 'function') renderAllOrderCards();
 }
 

@@ -70,10 +70,23 @@ function updateNotifButtonState() {
     }
 }
 
-function fireDesktopNotification(title, body) {
+// タッチパネルからの「呼び出し」「お会計希望」は、0円引きの自動化バーコードとして
+// 登録される（touch-panel-order-system.js）。名前の先頭アイコンで判別し、
+// 他の通常の自動化バーコードと違う分かりやすい通知にする。
+const TOUCH_PANEL_CALL_ICONS = ['🔔', '🧊', '🚬', '✋', '💰'];
+function isTouchPanelCallDiscountName(name) {
+    return !!name && TOUCH_PANEL_CALL_ICONS.some(icon => name.startsWith(icon));
+}
+
+// 【今回追加】通知にアイコン画像を付けられるように、第3引数(iconUrl)を追加。
+// 省略した場合はこれまで通り（ブラウザ標準のアイコン）で、既存の呼び出し
+// 箇所はすべて無改造のまま動く。
+function fireDesktopNotification(title, body, iconUrl) {
     if (!isDesktopNotificationEnabled()) return;
     try {
-        const n = new Notification(title, { body: body || '' });
+        const options = { body: body || '' };
+        if (iconUrl) options.icon = iconUrl;
+        const n = new Notification(title, options);
         n.onclick = () => { window.focus(); n.close(); };
     } catch (err) {
         console.warn('通知の表示に失敗しました:', err);
@@ -104,7 +117,11 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!isOwn) {
                 msg.data.discounts.forEach(d => {
                     if (!lastKnownDiscountBarcodes.has(d.barcode)) {
-                        fireDesktopNotification('🏷️ 新しい自動化バーコードが追加されました', d.name || d.barcode);
+                        if (isTouchPanelCallDiscountName(d.name)) {
+                            fireDesktopNotification('🍽️ タッチパネルからの呼び出しです', d.name);
+                        } else {
+                            fireDesktopNotification('🏷️ 新しい自動化バーコードが追加されました', d.name || d.barcode);
+                        }
                     }
                 });
             }
@@ -183,6 +200,24 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             lastKnownTimecardStamps = newStamps;
         });
+
+        // 新しい会員が登録された時
+        let lastKnownCustomerBarcodes = new Set(
+            (JSON.parse(localStorage.getItem('pos_customers') || '[]')).map(c => c.barcode)
+        );
+        channel.subscribe('customers-sync', (msg) => {
+            if (!msg || !msg.data || !Array.isArray(msg.data.customers)) return;
+            const isOwn = (typeof SYNC_DEVICE_ID !== 'undefined') && msg.data.senderId === SYNC_DEVICE_ID;
+            if (!isOwn) {
+                msg.data.customers.forEach(c => {
+                    if (c && c.barcode && !lastKnownCustomerBarcodes.has(c.barcode)) {
+                        const name = c.name || `${c.lastName || ''} ${c.firstName || ''}`.trim() || c.barcode;
+                        fireDesktopNotification('👤 新しい会員が登録されました', name);
+                    }
+                });
+            }
+            lastKnownCustomerBarcodes = new Set(msg.data.customers.filter(c => c && c.barcode).map(c => c.barcode));
+        });
     }
     tryHook();
 })();
@@ -203,10 +238,11 @@ function checkInactivityAndNotify() {
     const sevenDays = 7 * 24 * 60 * 60 * 1000;
     if (Date.now() - lastActivity < sevenDays) return;
 
-    // 同じ不在期間について、1日1回までしか通知しない
+    // 同じ不在期間についての再通知間隔（以前は1日1回までだったが、頻度を上げてほしい
+    // という要望があったため8時間おきに短縮した）
     const lastNudgeKey = 'pos_last_inactivity_nudge';
     const lastNudgeAt = parseInt(localStorage.getItem(lastNudgeKey) || '0', 10);
-    if (Date.now() - lastNudgeAt < 24 * 60 * 60 * 1000) return;
+    if (Date.now() - lastNudgeAt < 8 * 60 * 60 * 1000) return;
 
     localStorage.setItem(lastNudgeKey, Date.now().toString());
     fireDesktopNotification('👋 1週間ほどお会計がありません', '再開しませんか？今すぐチェック！');
@@ -214,5 +250,79 @@ function checkInactivityAndNotify() {
 
 document.addEventListener('DOMContentLoaded', () => {
     setTimeout(checkInactivityAndNotify, 3000);
-    setInterval(checkInactivityAndNotify, 6 * 60 * 60 * 1000); // 6時間ごとに再チェック
+    // 頻度を上げてほしいという要望に合わせ、チェック間隔を6時間→1時間に短縮
+    // （実際に通知が届く間隔は上のlastNudgeKeyによる8時間おきの制限がベースになる）
+    setInterval(checkInactivityAndNotify, 60 * 60 * 1000);
 });
+
+/* =========================================================
+   保留会計（hold-sale-system.js）が長時間放置されている場合の通知
+   ========================================================= */
+const HELD_SALE_STALE_MINUTES = 20;      // 何分放置されたら通知するか
+const HELD_SALE_RENOTIFY_MINUTES = 20;   // 同じ保留を何分おきに再通知するか
+const HELD_SALE_NOTIFIED_KEY = 'pos_held_sale_notified_at';
+
+function getHeldSaleNotifiedMap() {
+    try { return JSON.parse(localStorage.getItem(HELD_SALE_NOTIFIED_KEY) || '{}'); } catch (e) { return {}; }
+}
+
+function checkHeldSalesAndNotify() {
+    let heldSales = [];
+    try { heldSales = JSON.parse(localStorage.getItem('pos_held_sales') || '[]'); } catch (e) { return; }
+    if (heldSales.length === 0) return;
+
+    const notifiedMap = getHeldSaleNotifiedMap();
+    const now = Date.now();
+    let changed = false;
+
+    heldSales.forEach(sale => {
+        if (!sale || !sale.id || !sale.heldAt) return;
+        const heldAgeMin = (now - new Date(sale.heldAt).getTime()) / 60000;
+        if (heldAgeMin < HELD_SALE_STALE_MINUTES) return;
+
+        const lastNotifiedAt = notifiedMap[sale.id] || 0;
+        if (now - lastNotifiedAt < HELD_SALE_RENOTIFY_MINUTES * 60000) return;
+
+        fireDesktopNotification('⏸️ 保留中の会計があります', `${Math.floor(heldAgeMin)}分前から保留中です（担当: ${sale.clerk || '-'}）`);
+        notifiedMap[sale.id] = now;
+        changed = true;
+    });
+
+    // 呼び出し済み・削除済みの保留IDはマップから間引く（際限なく増えないように）
+    const currentIds = new Set(heldSales.map(s => s.id));
+    Object.keys(notifiedMap).forEach(id => { if (!currentIds.has(id)) { delete notifiedMap[id]; changed = true; } });
+
+    if (changed) localStorage.setItem(HELD_SALE_NOTIFIED_KEY, JSON.stringify(notifiedMap));
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    setTimeout(checkHeldSalesAndNotify, 5000);
+    setInterval(checkHeldSalesAndNotify, 5 * 60 * 1000);
+});
+
+/* =========================================================
+   Google Driveへの自動バックアップが失敗した場合の通知
+   ------------------------------------------
+   google-drive-backup.js の backupToGoogleDriveNow() をラップし、
+   例外（通信失敗・認証切れ等）が発生した場合にデスクトップ通知を出す。
+   gdrive-sync-indicator.js 側の同名フックとは独立して動作する
+   （他の追加機能ファイルと同じ「多重フックOK」の方式）。
+   ========================================================= */
+(function hookGDriveBackupForFailureNotification() {
+    function tryHook() {
+        if (typeof window.backupToGoogleDriveNow !== 'function') {
+            setTimeout(tryHook, 300);
+            return;
+        }
+        const original = window.backupToGoogleDriveNow;
+        window.backupToGoogleDriveNow = async function (silent) {
+            try {
+                return await original.call(this, silent);
+            } catch (err) {
+                fireDesktopNotification('☁️ Google Drive同期に失敗しました', '通信環境をご確認のうえ、後でもう一度お試しください。');
+                throw err;
+            }
+        };
+    }
+    tryHook();
+})();

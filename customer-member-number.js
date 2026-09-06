@@ -10,7 +10,7 @@
 //     auth-system.js の buildAllDataObject / applyImportedDataObject に追加している
 //
 // 表示箇所：
-//   ①「会員・顧客管理」画面の一覧（#customer-tbody）に「会員番号」列を追加
+//   ①「会員・顧客管理」画面の一覧（#customer-tbody）で、バーコード欄に番号を併記
 //   ②レジ画面で会員バーコードをスキャンした時の表示（#ac-name）に番号を付記
 //   ③客用画面の会員カード（#cm-name）に番号を付記
 //
@@ -19,8 +19,21 @@
 //     ac-name の書き換え＆customerDisplayMemberInfo への番号追加を行う
 //   ・updateCustomerDisplay() をラップして、客用画面side の cm-name に番号を追記する
 //   ・addCustomer()（存在すれば）をラップして、新規登録時にその場で番号を発番する
-//   ・#customer-tbody を MutationObserver で監視し、一覧表示に「会員番号」列を追加する
+//   ・#customer-tbody を MutationObserver で監視し、一覧の該当セルに番号を書き足す
 // という「フック方式」で実現する。
+//
+// 【2026-09 不具合修正・その後の方針転換】
+// 以前は「会員番号」という新しい列（<th>/<td>）そのものを一覧に追加していた。
+// 最初は先頭に追加していたため、他の列（バーコード等）の位置がずれ、行内の
+// 1列目を見て会員を特定する処理（一覧の「変更」ボタン等）が該当会員を見つけ
+// られず反応しなくなる不具合が起きた。列を末尾に追加する方式に直したが、
+// 今度は「末尾＝操作ボタン列」という別の前提を壊しかねない、根本的に同じ
+// 種類の不具合（列位置に依存する既存コードとの衝突）を再発させるリスクが
+// 残っていた。
+// そのため今回、そもそも列（<th>/<td>）を増やすのをやめ、既存の「バーコード」
+// セルの中に番号をそのまま書き足す方式に変更した。これなら表の列数・列の
+// 並び順は一切変化しないため、変更／削除ボタンなど他の場所のコードが列位置
+// を前提にしていても絶対に影響しない。
 // ==========================================
 
 const CUSTOMER_MEMBER_NO_COUNTER_KEY = 'pos_member_no_counter';
@@ -127,48 +140,49 @@ function ensureCustomerMemberNo(cust) {
 })();
 
 /* =========================================================
-   ③「会員・顧客管理」一覧（#customer-tbody）に「会員番号」列を追加する
+   ③「会員・顧客管理」一覧（#customer-tbody）のバーコードセルに
+      番号を書き足す（＝新しい列は増やさない）
+   ------------------------------------------
+   【方針】
+   行の中から「顧客のバーコードと完全一致するセル」を探し（列の位置に
+   依存しないので、他の機能が列を増減させても崩れない）、そのセルの
+   末尾に会員番号のバッジを追記するだけにする。<tr>のセル数（<td>の数）
+   自体は一切変えないため、「変更」ボタンなど他のコードが列の並び順・
+   列数に依存していても絶対に影響しない。
    ========================================================= */
-function ensureCustomerMemberNoHeader() {
-    const tbody = document.getElementById('customer-tbody');
-    if (!tbody) return;
-    const table = tbody.closest('table');
-    if (!table) return;
-    const headerRow = table.querySelector('thead tr');
-    if (!headerRow || headerRow.dataset.memberNoHeaderAdded === 'true') return;
-
-    const th = document.createElement('th');
-    th.innerText = '会員番号';
-    headerRow.insertBefore(th, headerRow.firstChild);
-    headerRow.dataset.memberNoHeaderAdded = 'true';
-}
-
 function renderCustomerMemberNoColumn() {
-    ensureCustomerMemberNoHeader();
-
     const tbody = document.getElementById('customer-tbody');
     if (!tbody || typeof customers === 'undefined' || !Array.isArray(customers)) return;
 
     Array.from(tbody.querySelectorAll('tr')).forEach(row => {
-        // すでに番号セルを挿入済みの行はスキップ
-        if (row.querySelector('.member-no-cell')) return;
-
-        const firstCell = row.cells[0];
-        if (!firstCell) return;
         // 空データ時の案内行（colspanで1セルのみ）は対象外
         if (row.cells.length <= 1) return;
+        // すでにバッジを書き足し済みの行はスキップ（番号は一度発番したら変わらないため）
+        if (row.querySelector('.member-no-badge')) return;
 
-        const barcodeText = firstCell.innerText.trim();
-        const cust = customers.find(c => c.barcode === barcodeText);
-        if (!cust) return; // 一致する顧客が見つからない行は触らない（安全側）
+        // 行内のどのセルでもいいので、実際のバーコード値と完全一致する
+        // セル（＝バーコード欄）を探す。
+        let barcodeCell = null;
+        let cust = null;
+        for (const td of row.cells) {
+            const text = (td.innerText || td.textContent || '').trim();
+            if (!text) continue;
+            const found = customers.find(c => c.barcode && c.barcode === text);
+            if (found) { barcodeCell = td; cust = found; break; }
+        }
+        if (!barcodeCell || !cust) return; // 一致する顧客が見つからない行は触らない（安全側）
 
         const no = ensureCustomerMemberNo(cust);
 
-        const td = document.createElement('td');
-        td.className = 'member-no-cell';
-        td.style.cssText = 'font-weight:bold; color:#5e35b1; white-space:nowrap;';
-        td.innerText = formatMemberNo(no);
-        row.insertBefore(td, row.firstChild);
+        // すでにバッジを書き足し済みなら、内容だけ更新する
+        let badge = barcodeCell.querySelector('.member-no-badge');
+        if (!badge) {
+            badge = document.createElement('div');
+            badge.className = 'member-no-badge';
+            badge.style.cssText = 'font-size:11px; font-weight:bold; color:#5e35b1; margin-top:2px; white-space:nowrap;';
+            barcodeCell.appendChild(badge);
+        }
+        badge.textContent = formatMemberNo(no);
     });
 }
 
@@ -179,7 +193,6 @@ function renderCustomerMemberNoColumn() {
             setTimeout(trySetup, 300);
             return;
         }
-        ensureCustomerMemberNoHeader();
         renderCustomerMemberNoColumn();
 
         const observer = new MutationObserver(() => {

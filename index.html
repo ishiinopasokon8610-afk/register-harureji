@@ -184,13 +184,19 @@
     <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-storage-compat.js"></script>
     <script>
       // Firebaseコンソール「プロジェクトの設定 > マイアプリ」からコピーした設定
+      // ※ このapiKeyはFirebaseの「Webアプリを特定するための公開設定値」であり、
+      //   サーバーの秘密鍵のような機密情報ではない（Google公式もこの値を隠す必要はないと案内している）。
+      //   実際のアクセス制御はFirestore/Storageの「セキュリティルール」側で行うものなので、
+      //   ここに書かれていること自体は問題ない。
       const firebaseConfig = {
         apiKey: "AIzaSyAK6G4aDoCg04GyV5e4rn_wb1zawUs1cCc",
         authDomain: "register-harureji.firebaseapp.com",
+        databaseURL: "https://register-harureji-default-rtdb.asia-southeast1.firebasedatabase.app",
         projectId: "register-harureji",
         storageBucket: "register-harureji.firebasestorage.app",
         messagingSenderId: "17949520906",
-        appId: "1:17949520906:web:2f80088d5fc591e38c9bf3"
+        appId: "1:17949520906:web:8d6441300ceeaf748c9bf3",
+        measurementId: "G-7SWDH5HEMK"
       };
       firebase.initializeApp(firebaseConfig);
     </script>
@@ -211,64 +217,10 @@
     <link rel="stylesheet" href="style.css">
 
     <!-- ==========================================
-         処理中ローディングオーバーレイ用スタイル
-         画面の読み込み中／レジの開局・閉局の処理中に
-         くるくる回るスピナーを画面全体に表示するためのCSS。
+         処理中ローディングオーバーレイ用スタイル・担当者ログイン通知等
+         （custom-styles.css として切り出し済み）
          ========================================== -->
-    <style>
-        #app-loading-overlay {
-            position: fixed;
-            inset: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(20, 20, 20, 0.82);
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            z-index: 999999;
-            color: #ffffff;
-            opacity: 1;
-            transition: opacity 0.35s ease;
-        }
-        #app-loading-overlay.app-loading-hidden {
-            opacity: 0;
-            pointer-events: none;
-        }
-        .app-loading-spinner {
-            width: 64px;
-            height: 64px;
-            border: 6px solid rgba(255, 255, 255, 0.25);
-            border-top-color: #e91e63;
-            border-radius: 50%;
-            animation: app-loading-spin 0.85s linear infinite;
-        }
-        @keyframes app-loading-spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-        #app-loading-text {
-            margin-top: 18px;
-            font-size: 18px;
-            font-weight: bold;
-            letter-spacing: 0.05em;
-            text-shadow: 0 1px 3px rgba(0,0,0,0.6);
-        }
-
-        /* 担当者ログインモーダル：セッションタイムアウトなどの通知メッセージ */
-        .staff-login-notice {
-            background: #fff3e0;
-            border: 1px solid #ffb74d;
-            color: #e65100;
-            font-weight: bold;
-            font-size: 14px;
-            padding: 10px 12px;
-            border-radius: 6px;
-            margin: 4px 0 12px 0;
-            text-align: center;
-            line-height: 1.5;
-        }
-    </style>
+    <link rel="stylesheet" href="custom-styles.css">
 </head>
 <body>
 
@@ -576,6 +528,15 @@
             <div class="input-cust-birth-container">
                 <label class="input-label-small">生年月日</label>
                 <input type="date" id="new-cust-birthday" class="input-cust-birth">
+            </div>
+            <div class="input-cust-birth-container">
+                <label class="input-label-small">性別</label>
+                <select id="new-cust-gender" class="input-cust-birth">
+                    <option value="">選択しない</option>
+                    <option value="男性">男性</option>
+                    <option value="女性">女性</option>
+                    <option value="その他">その他</option>
+                </select>
             </div>
             <input type="number" id="new-cust-points" placeholder="初期/入会特典pt" class="input-cust-points">
             <input type="text" id="new-cust-phone" placeholder="電話番号" class="input-cust-phone">
@@ -1377,6 +1338,15 @@
                 <input type="date" id="edit-cust-birthday-input" class="modal-input small">
             </div>
             <div class="modal-form-group small">
+                <label class="modal-label small">性別</label>
+                <select id="edit-cust-gender-input" class="modal-input small">
+                    <option value="">選択しない</option>
+                    <option value="男性">男性</option>
+                    <option value="女性">女性</option>
+                    <option value="その他">その他</option>
+                </select>
+            </div>
+            <div class="modal-form-group small">
                 <label class="modal-label small">保有ポイント</label>
                 <input type="number" id="edit-cust-points-input" class="modal-input small">
             </div>
@@ -1528,17 +1498,95 @@
     </div>
 
     <script>
-        document.addEventListener('DOMContentLoaded', () => {
+        // =========================================================
+        // Ably用APIキーの保存・取得（Firestore方式）
+        // ---------------------------------------------------------
+        // 「APIキーをHTML/JSファイルやlocalStorageに直接残さない」という
+        // ご要望のため、ai-store-analysis-system.js（AI分析機能）と同じ考え方で、
+        // このキーもFirestoreの pos_realtime_settings/{ショップID} に保存し、
+        // 使うたびにそこから読み込む方式にしている。
+        // ※ Firestoreのセキュリティルールで、このコレクションは店長など
+        //   限られたユーザーだけが読み書きできるように制限することを推奨する
+        //   （Firebaseコンソール側での設定が別途必要）。
+        // =========================================================
+        const POS_REALTIME_SETTINGS_COLLECTION = 'pos_realtime_settings';
+
+        function getShopIdForRealtimeKey() {
+            const fnCandidates = ['getShopId', 'getCurrentShopId'];
+            for (const fn of fnCandidates) {
+                if (typeof window[fn] === 'function') {
+                    try {
+                        const v = window[fn]();
+                        if (v) return String(v);
+                    } catch (e) { /* 次の候補を試す */ }
+                }
+            }
+            const varCandidates = ['SHOP_ID', 'shopId', 'currentShopId'];
+            for (const key of varCandidates) {
+                if (typeof window[key] === 'string' && window[key]) return window[key];
+            }
+            return 'default';
+        }
+
+        function getFirestoreForRealtimeKey() {
+            try {
+                if (typeof firebase !== 'undefined' && firebase.firestore) return firebase.firestore();
+            } catch (e) { /* 無視 */ }
+            return null;
+        }
+
+        async function loadPosApiKeyFromFirestore() {
+            const db = getFirestoreForRealtimeKey();
+            if (!db) return '';
+            try {
+                const snap = await db.collection(POS_REALTIME_SETTINGS_COLLECTION).doc(getShopIdForRealtimeKey()).get();
+                if (snap.exists && snap.data() && snap.data().apiKey) return snap.data().apiKey;
+            } catch (e) {
+                console.warn('Ably用APIキーの取得に失敗しました:', e);
+            }
+            return '';
+        }
+
+        async function savePosApiKeyToFirestore(key) {
+            const db = getFirestoreForRealtimeKey();
+            if (!db) throw new Error('NO_FIRESTORE');
+            await db.collection(POS_REALTIME_SETTINGS_COLLECTION).doc(getShopIdForRealtimeKey()).set({ apiKey: key }, { merge: true });
+        }
+
+        // 他ファイル（Ablyクライアントを実際に初期化している箇所）からも
+        // 同じ値を使えるように、取得済みのキーを window に置き、
+        // 準備できたタイミングで 'pos-ably-key-ready' イベントを発火する。
+        window.getPosApiKeyAsync = loadPosApiKeyFromFirestore;
+
+        document.addEventListener('DOMContentLoaded', async () => {
             const apiKeyInput = document.getElementById('api-key-input');
             const guideMsg = document.getElementById('api-guide-msg');
-            
-            const savedKey = localStorage.getItem('pos_api_key');
+
+            let savedKey = await loadPosApiKeyFromFirestore();
+
+            // 旧方式（localStorage）にキーが残っている場合は、
+            // 一度だけFirestoreへ移行してlocalStorageからは削除する。
+            if (!savedKey) {
+                try {
+                    const legacyKey = localStorage.getItem('pos_api_key');
+                    if (legacyKey) {
+                        await savePosApiKeyToFirestore(legacyKey);
+                        savedKey = legacyKey;
+                    }
+                } catch (e) {
+                    console.warn('旧APIキーの移行に失敗しました:', e);
+                }
+            }
+            try { localStorage.removeItem('pos_api_key'); } catch (e) { /* 無視 */ }
+
             if (savedKey) {
                 apiKeyInput.value = savedKey;
                 guideMsg.style.display = 'none';
+                window.POS_ABLY_API_KEY = savedKey;
             } else {
                 guideMsg.style.display = 'block';
             }
+            window.dispatchEvent(new CustomEvent('pos-ably-key-ready', { detail: { apiKey: savedKey || '' } }));
 
             document.addEventListener('keydown', (e) => {
                 const checkoutModal = document.getElementById('checkout-modal');
@@ -1648,11 +1696,16 @@
             });
         });
 
-        function saveApiKey() {
+        async function saveApiKey() {
             const apiKeyInput = document.getElementById('api-key-input');
             const val = apiKeyInput.value.trim();
-            localStorage.setItem('pos_api_key', val);
-            location.reload();
+            try {
+                await savePosApiKeyToFirestore(val);
+                location.reload();
+            } catch (e) {
+                console.error('APIキーの保存に失敗しました:', e);
+                alert('APIキーの保存に失敗しました。通信環境をご確認のうえ、もう一度お試しください。');
+            }
         }
     </script>
 
@@ -1667,6 +1720,7 @@
 <script src="master-mgmt.js"></script>
     <script src="register.js"></script>
     <script src="ui.js"></script>
+    <script src="deposit-shortage-guard-system.js"></script>
     <script src="staff-login-gate.js"></script>
     <script src="checkout-image.js"></script>
     <script src="keyboarddown.js"></script>
@@ -1675,11 +1729,13 @@
     <script src="google-drive-backup.js"></script>
 <script src="auto-google-drive-sync.js"></script>
 <script src="product-export-system.js"></script>
+<script src="product-variant-system.js"></script>
 <script src="product-picker-block-system.js"></script>
 <script src="product-picker-hash-system.js"></script>
 <script src="customer-export-system.js"></script>
 <script src="customer-barcode-pdf-system.js"></script>
 <script src="clerk-barcode-pdf-system.js"></script>
+<script src="clerk-wage-system.js"></script>
     <script src="sales-mgmt.js"></script>
     <script src="discount-system.js"></script>
     <script src="checkout-demographics.js"></script>
@@ -1692,6 +1748,7 @@
     <script src="sync-system.js"></script>
     <script src="customer-sync-system.js"></script>
     <script src="member-number-system.js"></script>
+     <script src="ai-store-analysis-system.js"></script>
     <script src="history-receipt-number-system.js"></script>
     <script src="checkout-redo-system.js"></script>
     <script src="member-rank-discount.js"></script>
@@ -1702,11 +1759,15 @@
     <script src="order-system-settings.js"></script>
     <script src="order-checkout-display.js"></script>
     <script src="call-number-system.js"></script>
+    <script src="touch-panel-order-system.js"></script>
+    <script src="genre-background-system.js"></script>
+<script src="table-usage-timer-system.js"></script>
     <script src="call-number-receipt-print.js"></script>
     <script src="tax-exclusive-pricing-system.js"></script>
     <script src="home-blocks-hash-navigation.js"></script>
     <script src="home-automation-blocks-sync.js"></script>
     <script src="home-automation-blocks.js"></script>
+    <script src="auto-home-block-on-use.js"></script>
     <script src="screen-hash-navigation.js"></script>
     <script src="screen-title-system.js"></script>
     <script src="screen-loading-bar.js"></script>
@@ -1720,6 +1781,21 @@
     <script src="copy-deterrence.js"></script>
     <script src="legal-documents-system.js"></script>
     <script src="first-visit-notice-system.js"></script>
+<script src="discount-home-visibility-toggle.js"></script>
+<script src="discount-barcode-pdf-system.js"></script>
+    <script src="discount-screen-mobile-fix.js"></script>
+    <script src="clerk-font-size-system.js"></script>
+    <script src="night-mode-system.js"></script>
+    <script src="migration-anchor-nav-system.js"></script>
+    <script src="hold-sale-system.js"></script>
+    <script src="gdrive-sync-indicator.js"></script>
+    <script src="backup-extra-settings-sync.js"></script>
+    <script src="json-export-import-system.js"></script>
+    <script src="update-notification-system.js"></script>
+    <script src="faq-help-system.js"></script>
+    <script src="recommended-peripherals-system.js"></script>
+    <script src="confirm-modal-topmost-fix.js"></script>
+    <script src="screen-title-system.js"></script>
 
     <!-- ==========================================
          処理中ローディングオーバーレイの制御スクリプト

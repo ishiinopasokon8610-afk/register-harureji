@@ -28,6 +28,16 @@
 //   イベント名 'order-checkout-event' で publish/subscribe することで、
 //   厨房端末が画面を開いたまま自動的に更新されるようにする
 //   （utils.js 自体は編集しない）。
+//
+// 【2026年9月変更】
+// 以前は注文（お会計）カードも home-automation-blocks.js の自動化バーコード
+// ブロックと同じ「2秒長押しで消える」方式だったが、注文カードは
+// 自動化バーコードと違って削除しても「アーカイブ→復元」で戻す手段が無く、
+// 誤って長押ししてしまうと会計済みの注文がそのまま失われてしまう
+// （＝お客様に商品を渡し忘れる事故につながる）ため危険だった。
+// そのため、注文カードだけは長押しでは消えないようにし、代わりに
+// カード左上の「✕」ボタン＋確認ダイアログを押した場合のみ削除できる
+// ようにした（自動化バーコード側の2秒長押しアーカイブはそのまま）。
 // ==========================================
 
 const ORDER_DISPLAY_STORAGE_KEY = 'pos_last_order_display'; // 【2026年9月変更】キー名はそのままだが、中身は「直近1件」ではなく「未完了の会計を全件」保持する配列にする
@@ -306,9 +316,27 @@ function notifyAndShowNewOrder() {
    ④ 注文カードの中身（HTML）を組み立てる共通処理
    ------------------------------------------
    ①オーバーレイ内のカードと②ホームウィジェットのカードは、
-   見た目・機能（チェック／受け渡し完了／長押し削除）が全く同じなので、
+   見た目・機能（チェック／受け渡し完了／✕ボタンでの削除）が全く同じなので、
    中身の組み立てをここに共通化する。
    ========================================================= */
+// レシート（お会計履歴・取引番号入力欄に「例: R000123」と案内されているもの）に
+// 実際に印字される番号を取得する。
+// history-receipt-number-system.js 側がpos_historyの各レコードにどの
+// プロパティ名で保存しているか（receiptNo / receiptNumber 等）がこのファイルからは
+// 断定できないため、customer-export-system.js の getCustomerRankSafe() と同じ考え方で、
+// よくありそうな候補名を順に試し、見つからなければ「receipt」「transaction」を
+// 含むキー名を総当たりで探す（プロパティ名が今後変わっても追従できるようにする保険）。
+function getReceiptNumberSafe(record) {
+    if (!record) return '';
+    const candidates = ['receiptNo', 'receiptNumber', 'receiptId', 'receiptNum', 'transactionNo', 'transactionNumber', 'txnNo', 'invoiceNo', 'orderNumber'];
+    for (const key of candidates) {
+        const v = record[key];
+        if (v !== undefined && v !== null && String(v).trim() !== '') return String(v);
+    }
+    const fallbackKey = Object.keys(record).find(k => /receipt|transaction/i.test(k) && record[k] !== undefined && record[k] !== null && String(record[k]).trim() !== '');
+    return fallbackKey ? String(record[fallbackKey]) : '';
+}
+
 function buildOrderCardInnerHTML(record) {
     const orderId = record.orderId;
     const items = Array.isArray(record.cartSnapshot) ? record.cartSnapshot : [];
@@ -330,7 +358,6 @@ function buildOrderCardInnerHTML(record) {
         <div class="order-checkout-home-block-timer" style="position:absolute; top:6px; right:8px; font-size:11px; color:#e65100; font-family:monospace;">00:00</div>
         <div class="order-checkout-home-block-title" style="font-weight:bold; color:#e65100; margin-top:2px;">🍽️ ご注文</div>
         <div class="order-checkout-home-block-sub" style="font-size:11px; color:#8d6e63; margin:4px 0;">${safe(record.date || '')}　担当: ${safe(record.clerk || '')}</div>
-        ${record.receiptNo ? `<div class="order-checkout-home-block-receipt-no" style="font-size:11px; color:#8d6e63; font-family:monospace; margin-bottom:4px;">伝票番号: ${safe(record.receiptNo)}</div>` : ''}
         ${record.callNumber ? `<div class="order-checkout-home-block-call-no" style="font-size:13px; font-weight:bold; color:#c62828; background:rgba(255,255,255,0.5); border-radius:6px; padding:2px 6px; display:inline-block; margin-bottom:6px;">🔔 呼び出し番号 ${String(record.callNumber).padStart(3, '0')}</div>` : ''}
         <div class="order-checkout-home-block-items" style="font-size:13px; color:#333;">${itemsHtml}</div>
         <div class="order-checkout-home-block-total" style="display:flex; justify-content:space-between; font-weight:bold; margin-top:6px; border-top:1px dashed #ffb74d; padding-top:4px; color:#e65100;">
@@ -341,6 +368,13 @@ function buildOrderCardInnerHTML(record) {
             style="margin-top:8px; width:100%; padding:8px; border:none; border-radius:6px; font-size:12px; font-weight:bold; cursor:${allChecked ? 'pointer' : 'not-allowed'}; background:${allChecked ? '#ffffff' : 'rgba(255,255,255,0.3)'}; color:${allChecked ? '#2e7d32' : 'rgba(255,255,255,0.75)'};">
             ${allChecked ? '✅ 受け渡し完了にする' : `商品をタップしてチェック（未チェック${uncheckedCount}件）`}
         </button>` : ''}
+        ${(() => {
+            // 【今回追加】レシートに印字されるレシート番号を、一覧カードの一番下に追加する
+            const receiptNo = getReceiptNumberSafe(record);
+            return receiptNo
+                ? `<div class="order-checkout-home-block-receipt-no" style="font-size:11px; color:#8d6e63; font-family:monospace; text-align:right; margin-top:6px;">レシート番号: ${safe(receiptNo)}</div>`
+                : '';
+        })()}
     `;
 }
 
@@ -362,10 +396,12 @@ function injectOrderHomeBlock() {
     const queue = getOrderQueue();
     if (queue.length === 0) return; // 未完了の会計が無ければ何も出さない
 
-    // discountBarcodes 側が0件のときに出る「ホーム表示に設定された
-    // 自動化バーコードがありません」というプレースホルダー文を、
-    // 注文カードがある場合は消してから差し替える
-    if (grid.textContent.includes('ホーム表示に設定された自動化バーコードがありません')) {
+    // home-automation-blocks.js側が「表示できる自動化バーコードがありません」
+    // 等のプレースホルダー文を出しているだけで、実際のブロック要素
+    // (.home-automation-block) が1件も無い場合は、注文カードを差し込む前に
+    // そのプレースホルダー文を消しておく（文言が変わっても追従できるよう、
+    // 特定の文字列との一致ではなく要素の有無で判定する）。
+    if (grid.querySelectorAll('.home-automation-block').length === 0) {
         grid.innerHTML = '';
     }
 
@@ -379,7 +415,6 @@ function injectOrderHomeBlock() {
         card.innerHTML = buildOrderCardInnerHTML(record);
 
         grid.insertBefore(card, grid.firstChild);
-        attachOrderHomeBlockLongPressHandler(card, record.orderId);
     });
 
     updateAllOrderCardTimers();
@@ -436,65 +471,42 @@ function renderOrderHomeWidget() {
     card.innerHTML = buildOrderCardInnerHTML(record);
 
     wrap.style.display = 'block';
-    attachOrderHomeBlockLongPressHandler(card, record.orderId);
     updateAllOrderCardTimers();
 }
 
 /* =========================================================
-   ⑦ 注文カードの2秒長押しで削除する
+   ⑦ 注文カードを削除する（✕ボタン＋確認ダイアログ）
    ------------------------------------------
-   home-automation-blocks.js の attachHomeBlockLongPressHandlers() と
-   同じ「2秒長押しで削除」の考え方だが、この注文カードには商品行の
-   タップ（チェック切り替え）・完了ボタンのタップという別の操作があるため、
-   それらの上から長押しが始まった場合は無視し、カードのそれ以外の部分
-   （タイトル・日時・合計など）を長押しした場合のみ削除を発動する。
+   【不具合修正】以前はこの注文カードも自動化バーコードのブロックと
+   同じ「2秒長押しで削除」だったが、注文カードは削除しても
+   （自動化バーコードのようなアーカイブ／復元の仕組みが無く）元に戻せず、
+   誤って長押ししてしまうとお客様に商品を渡し忘れる事故につながるため、
+   長押しでは絶対に消えないようにする。
+   代わりに、カード左上の「✕」ボタンを押した場合のみ、確認ダイアログを
+   経てから削除する（チェック状況にかかわらず、その1件だけを片付ける。
+   他に表示されている未完了の注文はそのまま残る）。
    ①オーバーレイのカード・②ホームウィジェットのカードのどちらにも使う。
    ========================================================= */
-const ORDER_HOME_BLOCK_DELETE_PRESS_MS = 2000;
+function confirmDeleteOrderHomeBlock(event, orderId) {
+    if (event) event.stopPropagation();
+    if (!orderId) return;
 
-function attachOrderHomeBlockLongPressHandler(card, orderId) {
-    if (!card || card.dataset.longPressBound) return;
-    card.dataset.longPressBound = '1';
-    let pressTimer = null;
+    const doDelete = () => deleteOrderHomeBlock(orderId);
 
-    const track = document.createElement('div');
-    track.style.cssText = 'position:absolute; left:0; bottom:0; width:100%; height:4px; background:rgba(0,0,0,0.15); border-radius:0 0 10px 10px; overflow:hidden;';
-    const progressBar = document.createElement('div');
-    progressBar.style.cssText = 'height:100%; width:0%; background:rgba(255,255,255,0.9);';
-    track.appendChild(progressBar);
-    card.appendChild(track);
-
-    function isInteractiveTarget(target) {
-        return !!(target.closest('.order-checkout-home-block-item') || target.closest('.order-checkout-home-block-complete-btn'));
+    if (typeof showCustomConfirm === 'function') {
+        showCustomConfirm(
+            'この注文カードを削除しますか？受け渡しが完了していなくても削除され、元に戻せません。',
+            'この ちゅうもん かーど を さくじょ し ます か？',
+            (res) => { if (res) doDelete(); },
+            true
+        );
+    } else {
+        // showCustomConfirmが読み込まれていない環境向けのフォールバック
+        if (window.confirm('この注文カードを削除しますか？受け渡しが完了していなくても削除され、元に戻せません。')) doDelete();
     }
-
-    const start = (e) => {
-        if (isInteractiveTarget(e.target)) return;
-        progressBar.style.transition = 'none';
-        progressBar.style.width = '0%';
-        requestAnimationFrame(() => {
-            requestAnimationFrame(() => {
-                progressBar.style.transition = `width ${ORDER_HOME_BLOCK_DELETE_PRESS_MS}ms linear`;
-                progressBar.style.width = '100%';
-            });
-        });
-        pressTimer = setTimeout(() => {
-            deleteOrderHomeBlock(orderId);
-        }, ORDER_HOME_BLOCK_DELETE_PRESS_MS);
-    };
-    const cancel = () => {
-        if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
-        progressBar.style.transition = 'none';
-        progressBar.style.width = '0%';
-    };
-
-    card.addEventListener('mousedown', start);
-    card.addEventListener('touchstart', start, { passive: true });
-    ['mouseup', 'mouseleave', 'touchend', 'touchcancel'].forEach(evt => card.addEventListener(evt, cancel));
 }
 
-// 長押しで削除（チェック状況にかかわらず、その1件だけをそのまま片付ける。
-// 他に表示されている未完了の注文はそのまま残る）
+// 実際の削除処理（確認後・「受け渡し完了」ボタンの両方から呼ばれる）
 function deleteOrderHomeBlock(orderId) {
     if (!orderId) return;
     removeOrderFromQueue(orderId);
@@ -598,11 +610,13 @@ function applyOrderHomeBlockStatusColor(card, elapsedSec) {
     const timerEl = card.querySelector('.order-checkout-home-block-timer');
     const itemsEl = card.querySelector('.order-checkout-home-block-items');
     const totalEl = card.querySelector('.order-checkout-home-block-total');
+    const deleteBtnEl = card.querySelector('.order-checkout-home-block-delete-btn');
     if (titleEl) titleEl.style.color = titleColor;
     if (subEl) subEl.style.color = subColor;
     if (timerEl) timerEl.style.color = timerColor;
     if (itemsEl) itemsEl.style.color = itemsColor;
     if (totalEl) totalEl.style.color = titleColor;
+    if (deleteBtnEl) deleteBtnEl.style.color = timerColor;
 }
 
 /* =========================================================

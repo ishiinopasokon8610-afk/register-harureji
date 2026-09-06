@@ -1,36 +1,42 @@
 // ==========================================
-// clerk-barcode-pdf-system.js
-// 担当者バーコードのPDF出力（1人ずつ／全員一括）
+// discount-barcode-pdf-system.js
+// 自動化バーコードのPDF出力（1件ずつ／全件一括）
 // ------------------------------------------
-// 担当者管理画面(clerk-screen)の各担当者が持つ「店員用バーコード」
-// (clerk.barcode) を、印刷して使えるようバーコード画像＋名前入りの
-// PDFとして書き出す。customer-barcode-pdf-system.js（会員用）と同じ考え方・
-// 同じライブラリ（JsBarcode + jsPDF）を使う独立機能。
-//   ・1人分だけ … 一覧の各行に追加する「PDF」ボタン
-//   ・全員まとめて … 画面右上の「🖨️ バーコード一括PDF」ボタン
-//     （A4にラベルシートのように複数人分を敷き詰める）
+// 自動化バーコード作成画面(discount-screen)に登録されている各バーコード
+// (discountBarcodes[].barcode) を、customer-barcode-pdf-system.js /
+// clerk-barcode-pdf-system.js と同じ考え方・同じライブラリ（JsBarcode + jsPDF）
+// を使ってPDFに書き出す。
+//   ・1件分だけ … 一覧の各行に追加する「PDF」ボタン
+//   ・全件まとめて … 画面右上の「🖨️ バーコード一括PDF」ボタン
+//     （A4にラベルシートのように複数件分を敷き詰める）
+// アーカイブ済み（使用済み）のバーコードは対象外（discount-tbodyに
+// 表示されているものだけを対象にする）。
 //
-// register.js / ui.js（担当者管理の一覧描画本体）には一切手を加えず、
-// clerk-tbody を MutationObserver で監視してボタンを追加する
+// register.js / ui.js / discount-system.js には一切手を加えず、
+// discount-tbody を MutationObserver で監視してボタンを追加する
 // 「フック/DOM注入方式」で実現する。
 //
-// ※ バーコード画像生成・PDF生成のライブラリ（JsBarcode / jsPDF）は
-//   customer-barcode-pdf-system.js 側ですでに読み込み指示済みのため、
-//   index.htmlへの追加は不要です（このファイルの<script>だけ足してください）。
+// ※ バーコード画像生成・PDF生成・日本語文字化け対策のヘルパーは
+//   customer-barcode-pdf-system.js側で定義済みのため使い回す
+//   （無い環境でも動くよう、無ければ自前で用意する＝他の追加機能
+//   ファイルと同じフォールバック方式）。
 // ==========================================
 
-function getClerkListSafe() {
+function getDiscountListSafe() {
     try {
-        if (typeof clerks !== 'undefined' && Array.isArray(clerks)) return clerks;
-        return JSON.parse(localStorage.getItem('pos_clerks') || '[]');
+        if (typeof discountBarcodes !== 'undefined' && Array.isArray(discountBarcodes)) return discountBarcodes;
+        return JSON.parse(localStorage.getItem('pos_discounts') || '[]');
     } catch (e) {
         return [];
     }
 }
 
-// customer-barcode-pdf-system.js が既に定義していれば使い回し、
-// 無い環境（このファイル単体導入時）でも動くよう、無ければ自前で用意する
-function renderBarcodeDataUrlForClerk(value, opts) {
+function discDisplayNameForPdf(disc) {
+    if (typeof discDisplayName === 'function') return discDisplayName(disc);
+    return (disc && disc.name && disc.name.trim()) ? disc.name.trim() : '（名称未設定）';
+}
+
+function renderBarcodeDataUrlForDiscount(value, opts) {
     if (typeof renderBarcodeDataUrl === 'function') return renderBarcodeDataUrl(value, opts);
     if (typeof JsBarcode === 'undefined') return null;
     try {
@@ -45,11 +51,11 @@ function renderBarcodeDataUrlForClerk(value, opts) {
     }
 }
 
-// 【不具合修正】PDF内の日本語（担当者名）が文字化けする問題への対応。
+// 【不具合修正】PDF内の日本語（割引名）が文字化けする問題への対応。
 // customer-barcode-pdf-system.js側の addPdfTextCentered（テキストを
 // canvasで画像化してから貼り付ける方式）があれば使い回し、無い環境
 // （このファイル単体導入時）でも同じ考え方の自前版で描画する。
-function addPdfTextCenteredForClerk(doc, text, centerXmm, centerYmm, opts) {
+function addPdfTextCenteredForDiscount(doc, text, centerXmm, centerYmm, opts) {
     if (typeof addPdfTextCentered === 'function') {
         addPdfTextCentered(doc, text, centerXmm, centerYmm, opts);
         return;
@@ -83,12 +89,9 @@ function addPdfTextCenteredForClerk(doc, text, centerXmm, centerYmm, opts) {
     doc.addImage(canvas.toDataURL('image/png'), 'PNG', centerXmm - widthMm / 2, centerYmm - heightMm / 2, widthMm, heightMm);
 }
 
-async function ensureJsPdfAndBarcodeReadyForClerk() {
-    // customer-barcode-pdf-system.js側の判定・自動読み込み再試行ロジックがあればそれを使い回す
+async function ensureJsPdfAndBarcodeReadyForDiscount() {
     if (typeof ensureJsPdfAndBarcodeReady === 'function') return ensureJsPdfAndBarcodeReady();
 
-    // 【不具合修正】customer-barcode-pdf-system.js が無い単体導入時も、
-    // 即座にエラーを出す前にその場で読み込みを試みる（別CDNへのフォールバックも行う）
     if (typeof ensureBarcodePdfLibrariesLoaded === 'function') {
         await ensureBarcodePdfLibrariesLoaded(2);
     }
@@ -105,49 +108,52 @@ async function ensureJsPdfAndBarcodeReadyForClerk() {
 }
 
 /* =========================================================
-   ① 1人分のバーコードPDFを出力する
+   ① 1件分のバーコードPDFを出力する
    ========================================================= */
-async function exportSingleClerkBarcodePdf(clerk) {
-    if (!clerk || !clerk.barcode) {
+async function exportSingleDiscountBarcodePdf(disc) {
+    if (!disc || !disc.barcode) {
         if (typeof showCustomConfirm === 'function') {
-            showCustomConfirm('この担当者にはバーコードが登録されていません。', 'ばーこーど が とうろく さ れ て い ませ ん。', () => {}, false);
+            showCustomConfirm('このバーコードには値が登録されていません。', 'ばーこーど が とうろく さ れ て い ませ ん。', () => {}, false);
         }
         return;
     }
-    if (!(await ensureJsPdfAndBarcodeReadyForClerk())) return;
+    if (!(await ensureJsPdfAndBarcodeReadyForDiscount())) return;
 
     if (typeof playSound === 'function') playSound('click');
 
-    const dataUrl = renderBarcodeDataUrlForClerk(clerk.barcode, { width: 3, height: 100, fontSize: 20 });
+    const dataUrl = renderBarcodeDataUrlForDiscount(disc.barcode, { width: 3, height: 100, fontSize: 20 });
     if (!dataUrl) return;
 
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: [90, 55] }); // 名刺サイズ相当
 
-    const name = clerk.name || '担当者';
-    addPdfTextCenteredForClerk(doc, name, 45, 12, { heightMm: 4.6 });
+    const name = discDisplayNameForPdf(disc);
+    addPdfTextCenteredForDiscount(doc, name, 45, 12, { heightMm: 4.6 });
 
     const imgWidth = 70;
     const imgHeight = 28;
     doc.addImage(dataUrl, 'PNG', (90 - imgWidth) / 2, 18, imgWidth, imgHeight);
 
     const today = new Date().toISOString().slice(0, 10);
-    doc.save(`担当者バーコード_${name}_${today}.pdf`);
+    doc.save(`自動化バーコード_${name}_${today}.pdf`);
 
     if (typeof playSound === 'function') playSound('success');
 }
 
 /* =========================================================
-   ② 全員分をまとめて1つのPDFに出力する（ラベルシート状に敷き詰める）
+   ② 全件分をまとめて1つのPDFに出力する（ラベルシート状に敷き詰める）
+   ------------------------------------------
+   対象は discount-tbody に表示されているもの＝アーカイブ済み（使用済み）
+   を除いた現在有効な自動化バーコードのみ。
    ========================================================= */
-async function exportAllClerkBarcodesPdf() {
-    if (!(await ensureJsPdfAndBarcodeReadyForClerk())) return;
+async function exportAllDiscountBarcodesPdf() {
+    if (!(await ensureJsPdfAndBarcodeReadyForDiscount())) return;
 
-    const clerkList = getClerkListSafe();
-    const targets = clerkList.filter(c => c && c.barcode);
+    const list = getDiscountListSafe();
+    const targets = list.filter(d => d && d.barcode && !d.archived);
     if (targets.length === 0) {
         if (typeof showCustomConfirm === 'function') {
-            showCustomConfirm('バーコードが登録されている担当者がいません。', 'ばーこーど が とうろく さ れ て い る たんとうしゃ が い ませ ん。', () => {}, false);
+            showCustomConfirm('PDF出力できる自動化バーコードがありません。', 'ばーこーど が あり ませ ん。', () => {}, false);
         }
         return;
     }
@@ -157,14 +163,14 @@ async function exportAllClerkBarcodesPdf() {
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
 
-    // A4に 3列 x 6行 = 18枚/ページ のラベルとして敷き詰める（会員用と同じレイアウト）
+    // A4に 3列 x 6行 = 18枚/ページ のラベルとして敷き詰める（会員用・担当者用と同じレイアウト）
     const cols = 3, rows = 6;
     const pageW = 210, pageH = 297;
     const marginX = 8, marginY = 10;
     const cellW = (pageW - marginX * 2) / cols;
     const cellH = (pageH - marginY * 2) / rows;
 
-    targets.forEach((clerk, idx) => {
+    targets.forEach((disc, idx) => {
         const perPage = cols * rows;
         const posInPage = idx % perPage;
         if (idx > 0 && posInPage === 0) doc.addPage();
@@ -177,10 +183,9 @@ async function exportAllClerkBarcodesPdf() {
         doc.setDrawColor(200);
         doc.rect(x + 1, y + 1, cellW - 2, cellH - 2);
 
-        doc.setFontSize(9);
-        addPdfTextCenteredForClerk(doc, clerk.name || '担当者', x + cellW / 2, y + 8, { heightMm: 3.4 });
+        addPdfTextCenteredForDiscount(doc, discDisplayNameForPdf(disc), x + cellW / 2, y + 8, { heightMm: 3.4 });
 
-        const dataUrl = renderBarcodeDataUrlForClerk(clerk.barcode, { width: 1.4, height: 45, fontSize: 12, margin: 2 });
+        const dataUrl = renderBarcodeDataUrlForDiscount(disc.barcode, { width: 1.4, height: 45, fontSize: 12, margin: 2 });
         if (dataUrl) {
             const imgW = cellW - 8;
             const imgH = cellH - 16;
@@ -189,7 +194,7 @@ async function exportAllClerkBarcodesPdf() {
     });
 
     const today = new Date().toISOString().slice(0, 10);
-    doc.save(`担当者バーコード一括_${today}.pdf`);
+    doc.save(`自動化バーコード一括_${today}.pdf`);
 
     if (typeof playSound === 'function') playSound('success');
 }
@@ -197,64 +202,64 @@ async function exportAllClerkBarcodesPdf() {
 /* =========================================================
    ③ UI注入：一覧の右上に「一括PDF」ボタン、各行に「PDF」ボタン
    ========================================================= */
-function ensureClerkBarcodePdfBulkButton() {
-    if (document.getElementById('clerk-barcode-pdf-all-btn')) return;
-    const topBar = document.querySelector('#clerk-screen .top-bar');
+function ensureDiscountBarcodePdfBulkButton() {
+    if (document.getElementById('discount-barcode-pdf-all-btn')) return;
+    const topBar = document.querySelector('#discount-screen .top-bar');
     if (!topBar) return;
 
     const btn = document.createElement('button');
-    btn.id = 'clerk-barcode-pdf-all-btn';
+    btn.id = 'discount-barcode-pdf-all-btn';
     btn.className = 'csv-export-btn';
     btn.innerText = '🖨️ バーコード一括PDF';
-    btn.onclick = exportAllClerkBarcodesPdf;
+    btn.onclick = exportAllDiscountBarcodesPdf;
     btn.style.marginLeft = (topBar.children.length > 2) ? '0' : 'auto';
 
     topBar.appendChild(btn);
 }
 
-function injectClerkBarcodePdfRowButtons() {
-    const tbody = document.getElementById('clerk-tbody');
+function injectDiscountBarcodePdfRowButtons() {
+    const tbody = document.getElementById('discount-tbody');
     if (!tbody) return;
 
-    const clerkList = getClerkListSafe();
+    const list = getDiscountListSafe();
 
     Array.from(tbody.querySelectorAll('tr')).forEach(tr => {
-        if (tr.querySelector('.clerk-barcode-pdf-cell')) return;
+        if (tr.querySelector('.discount-barcode-pdf-cell')) return;
         if (tr.children.length === 0) return;
 
-        // 列の位置に依存せず、行内のどのセルでもいいので実際の担当者のbarcode値と
-        // 完全一致するセルを探す方式にする（他の機能が列を増減させても崩れないように、
-        // customer-barcode-pdf-system.jsと同じ考え方に揃えてある）。
+        // 列の位置に依存せず、行内のどのセルでもいいので実際のバーコード値と
+        // 完全一致するセルを探す方式にする（他の追加機能ファイルが列を増減
+        // させても崩れないように、会員用・担当者用と同じ考え方に揃えてある）。
         const cellTexts = Array.from(tr.children).map(td => (td.textContent || '').trim());
-        const matchedClerk = clerkList.find(c => c.barcode && cellTexts.includes(c.barcode));
-        if (!matchedClerk) return;
+        const matched = list.find(d => d.barcode && !d.archived && cellTexts.includes(d.barcode));
+        if (!matched) return;
 
         const td = document.createElement('td');
-        td.className = 'clerk-barcode-pdf-cell';
+        td.className = 'discount-barcode-pdf-cell';
 
         const btn = document.createElement('button');
         btn.innerText = 'PDF';
         btn.title = 'このバーコードをPDF出力';
         btn.style.cssText = 'padding:4px 10px; font-size:12px; background:#5c6bc0; color:#fff; border:none; border-radius:4px; cursor:pointer;';
-        btn.addEventListener('click', () => exportSingleClerkBarcodePdf(matchedClerk));
+        btn.addEventListener('click', () => exportSingleDiscountBarcodePdf(matched));
 
         td.appendChild(btn);
         tr.appendChild(td);
     });
 }
 
-function ensureClerkBarcodePdfHeaderColumn() {
-    const table = document.getElementById('clerk-tbody') && document.getElementById('clerk-tbody').closest('table');
+function ensureDiscountBarcodePdfHeaderColumn() {
+    const table = document.getElementById('discount-tbody') && document.getElementById('discount-tbody').closest('table');
     if (!table) return;
     const headRow = table.querySelector('thead tr');
-    if (!headRow || headRow.querySelector('.clerk-barcode-pdf-header')) return;
+    if (!headRow || headRow.querySelector('.discount-barcode-pdf-header')) return;
     const th = document.createElement('th');
-    th.className = 'clerk-barcode-pdf-header';
+    th.className = 'discount-barcode-pdf-header';
     th.innerText = 'バーコードPDF';
     headRow.appendChild(th);
 }
 
-(function hookShowScreenForClerkBarcodePdfBulkButton() {
+(function hookShowScreenForDiscountBarcodePdfBulkButton() {
     function tryHook() {
         if (typeof window.showScreen !== 'function') {
             setTimeout(tryHook, 300);
@@ -263,25 +268,25 @@ function ensureClerkBarcodePdfHeaderColumn() {
         const original = window.showScreen;
         window.showScreen = function (screenId, ...rest) {
             const result = original.apply(this, [screenId, ...rest]);
-            if (screenId === 'clerk-screen') ensureClerkBarcodePdfBulkButton();
+            if (screenId === 'discount-screen') ensureDiscountBarcodePdfBulkButton();
             return result;
         };
     }
     tryHook();
 })();
 
-(function observeClerkTbodyForBarcodePdf() {
+(function observeDiscountTbodyForBarcodePdf() {
     function trySetup() {
-        const tbody = document.getElementById('clerk-tbody');
+        const tbody = document.getElementById('discount-tbody');
         if (!tbody) {
             setTimeout(trySetup, 300);
             return;
         }
-        ensureClerkBarcodePdfHeaderColumn();
-        injectClerkBarcodePdfRowButtons();
+        ensureDiscountBarcodePdfHeaderColumn();
+        injectDiscountBarcodePdfRowButtons();
         const observer = new MutationObserver(() => {
-            ensureClerkBarcodePdfHeaderColumn();
-            injectClerkBarcodePdfRowButtons();
+            ensureDiscountBarcodePdfHeaderColumn();
+            injectDiscountBarcodePdfRowButtons();
         });
         observer.observe(tbody, { childList: true, subtree: true });
     }

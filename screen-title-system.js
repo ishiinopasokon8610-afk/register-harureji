@@ -1,39 +1,41 @@
 // ==========================================
 // screen-title-system.js
-// 画面が切り替わるたびに、ページタイトル（ブラウザのタブに表示される文字）も
-// その画面名に合わせて切り替える
 // ------------------------------------------
-// screen-hash-navigation.js が showScreen() をフックしてURLハッシュを
-// 設定しているのと同じ考え方で、ここでも showScreen() をフックし、
-// 「画面名-haruレジ」という形式でタイトルを設定する。
-// ホーム画面のときは、元々の <title>haruレジ</title> のままにする。
+// 【背景】
+// タッチパネル注文画面(touch-panel-order-system.js)を開いたときだけ、
+// ブラウザ／タブのタイトルが「タッチパネル - haruレジ」に変わるように
+// なっていた一方、レジ本体側の各画面（データ管理画面など）を開いても
+// タイトルは常に固定の「haruレジ」のままで変化しなかった。
+// 複数のタブ・ウィンドウを開いて作業しているときに、タブの見た目だけで
+// 「どの画面を開いているタブか」が分かりづらいという不便があった。
 //
-// ui.js は直接編集せず、他の追加機能ファイルと同じ「フック方式」で実現する。
+// 【この機能】
+// データ管理画面(migration-screen)を開いている間だけ、タブのタイトルを
+// 「データ管理 - haruレジ」に変更する。他の画面に移動したら、元の
+// タイトル（index.htmlの<title>にある「haruレジ」）に戻す。
+//
+// index.html / ui.js は直接編集せず、showScreen() をラップする
+// 「フック方式」で実現する（他の追加機能ファイルと同じ方針）。
+//
+// 【今後、他の画面にもタイトルを付けたい場合】
+// 下の SCREEN_TITLES に { 画面ID: 表示したい見出し } を追加するだけでよい。
 // ==========================================
 
-const BASE_PAGE_TITLE = 'haruレジ';
-
-const SCREEN_TITLE_MAP = {
-    'home-screen': null, // ホームはベースタイトルのまま
-    'register-screen': 'レジ作業',
-    'customer-screen': '客用画面',
-    'clerk-screen': '担当者管理',
-    'product-screen': '商品管理',
-    'history-screen': '会計履歴',
-    'migration-screen': 'データ管理',
-    'customer-mgmt-screen': '会員管理',
-    'discount-screen': '自動化バーコード',
-    'analytics-screen': '売上分析',
-    'sales-mgmt-screen': '売上管理・精算',
-    'timecard-screen': 'タイムカード'
+const SCREEN_TITLES = {
+    'migration-screen': 'データ管理'
 };
 
-function updatePageTitleForScreen(screenId) {
-    const label = SCREEN_TITLE_MAP[screenId];
-    document.title = label ? `${label}-${BASE_PAGE_TITLE}` : BASE_PAGE_TITLE;
+let baseAppTitleForScreenTitle = null;
+
+function applyScreenTitle(screenId) {
+    if (baseAppTitleForScreenTitle === null) {
+        baseAppTitleForScreenTitle = document.title;
+    }
+    const label = SCREEN_TITLES[screenId];
+    document.title = label ? `${label} - ${baseAppTitleForScreenTitle}` : baseAppTitleForScreenTitle;
 }
 
-(function hookShowScreenForTitle() {
+(function hookShowScreenForScreenTitle() {
     function tryHook() {
         if (typeof window.showScreen !== 'function') {
             setTimeout(tryHook, 300);
@@ -42,9 +44,15 @@ function updatePageTitleForScreen(screenId) {
         const original = window.showScreen;
         window.showScreen = function (screenId, ...rest) {
             const result = original.apply(this, [screenId, ...rest]);
-            updatePageTitleForScreen(screenId);
+            applyScreenTitle(screenId);
             return result;
         };
     }
     tryHook();
 })();
+
+document.addEventListener('DOMContentLoaded', () => {
+    // すでにデータ管理画面が開いた状態でリロードされた場合にも対応
+    const active = document.querySelector('.screen.active');
+    if (active && active.id) applyScreenTitle(active.id);
+});

@@ -114,6 +114,56 @@ function renderBarcodeDataUrl(value, opts) {
     }
 }
 
+/* =========================================================
+   【不具合修正】PDF内の日本語が文字化けする問題への対応
+   ------------------------------------------
+   jsPDFは標準で日本語フォント（Helveticaなど）しか持っておらず、
+   doc.text()で日本語をそのまま書くと文字化け・空白になってしまう。
+   日本語TTFフォントを追加で埋め込む方法は、フォントファイルの
+   サイズが大きく、通信環境によっては読み込みに失敗するリスクも
+   あるため採用せず、代わりに「名前の文字列をブラウザ標準のcanvasで
+   一度画像として描画し、その画像をPDFに貼り付ける」方式にする
+   （ブラウザ自身が持っている日本語フォントでレンダリングされるため、
+   端末を選ばず必ず正しく表示される）。
+   ========================================================= */
+function renderPdfTextImage(text, opts) {
+    opts = opts || {};
+    const fontSizePx = opts.fontSizePx || 40; // 高解像度で描画し、PDF上で縮小して使うことで印刷しても綺麗に見えるようにする
+    const fontWeight = opts.fontWeight || 'bold';
+    const fontFamily = opts.fontFamily || "'Hiragino Sans', 'Yu Gothic', 'Meiryo', 'MS PGothic', sans-serif";
+    const color = opts.color || '#111111';
+    const paddingPx = opts.paddingPx != null ? opts.paddingPx : 6;
+    const str = (text === null || text === undefined) ? '' : String(text);
+
+    const measure = document.createElement('canvas').getContext('2d');
+    measure.font = `${fontWeight} ${fontSizePx}px ${fontFamily}`;
+    const textWidthPx = Math.max(1, Math.ceil(measure.measureText(str).width));
+    const textHeightPx = Math.ceil(fontSizePx * 1.3);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = textWidthPx + paddingPx * 2;
+    canvas.height = textHeightPx + paddingPx * 2;
+    const ctx = canvas.getContext('2d');
+    ctx.font = `${fontWeight} ${fontSizePx}px ${fontFamily}`;
+    ctx.fillStyle = color;
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left';
+    ctx.fillText(str, paddingPx, canvas.height / 2);
+
+    return { dataUrl: canvas.toDataURL('image/png'), widthPx: canvas.width, heightPx: canvas.height };
+}
+
+// 日本語を含むテキストを、指定した中心X座標・Y座標（mm単位）を基準に
+// PDFへ画像として貼り付ける（doc.text()の日本語版代替）
+function addPdfTextCentered(doc, text, centerXmm, centerYmm, opts) {
+    opts = opts || {};
+    const heightMm = opts.heightMm || 4.2;
+    const img = renderPdfTextImage(text, opts);
+    const aspect = img.widthPx / img.heightPx;
+    const widthMm = heightMm * aspect;
+    doc.addImage(img.dataUrl, 'PNG', centerXmm - widthMm / 2, centerYmm - heightMm / 2, widthMm, heightMm);
+}
+
 async function ensureJsPdfAndBarcodeReady() {
     if (!isBarcodePdfLibsReady()) {
         // 【不具合修正】即座にエラーを出す前に、その場でもう一度だけ読み込みを試みる
@@ -161,8 +211,7 @@ async function exportSingleCustomerBarcodePdf(cust) {
     const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: [90, 55] }); // 名刺サイズ相当のカード
 
     const name = getCustomerDisplayNameSafeForPdf(cust);
-    doc.setFontSize(12);
-    doc.text(name || '会員証', 45, 12, { align: 'center' });
+    addPdfTextCentered(doc, name || '会員証', 45, 12, { heightMm: 4.6 });
 
     const imgWidth = 70;
     const imgHeight = 28;
@@ -224,8 +273,7 @@ async function exportAllCustomerBarcodesPdf() {
         doc.rect(x + 1, y + 1, cellW - 2, cellH - 2);
 
         const name = getCustomerDisplayNameSafeForPdf(cust);
-        doc.setFontSize(9);
-        doc.text(name || '会員証', x + cellW / 2, y + 8, { align: 'center' });
+        addPdfTextCentered(doc, name || '会員証', x + cellW / 2, y + 8, { heightMm: 3.4 });
 
         const dataUrl = renderBarcodeDataUrl(cust.barcode, { width: 1.4, height: 45, fontSize: 12, margin: 2 });
         if (dataUrl) {
