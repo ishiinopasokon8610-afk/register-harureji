@@ -1,0 +1,52 @@
+# ==========================================
+# .github/workflows/bump-version.yml
+# ------------------------------------------
+# 【これは何？】
+# push（普段どおりGitHubの画面上でファイルを編集して「Commit changes」する操作）
+# のたびに、GitHub側のサーバーが自動で bump-version.js を実行し、
+# 変わっていれば結果を自動でコミット＆プッシュし直してくれる仕組みです。
+# ブラウザだけで作業していても、node bump-version.js を自分で実行する
+# 必要は一切なくなります。
+#
+# 【無限ループにならない理由】
+# 自動コミットは update-notification-system.js と sw.js の2ファイルしか
+# 変更しません。下の paths-ignore により、「その2ファイルだけを変更した
+# push」ではこのワークフロー自身が再度動かないようになっているため、
+# 自動コミット→再トリガー→自動コミット…とループしません。
+# ==========================================
+
+name: Auto Bump Version
+
+on:
+  push:
+    paths-ignore:
+      - 'update-notification-system.js'
+      - 'sw.js'
+
+permissions:
+  contents: write
+
+jobs:
+  bump-version:
+    runs-on: ubuntu-latest
+    steps:
+      - name: リポジトリを取得
+        uses: actions/checkout@v4
+        with:
+          # 自動コミットをpushし返せるように、デフォルトのGITHUB_TOKENを使う
+          persist-credentials: true
+
+      - name: バージョン番号を1つ繰り上げる（bump-version.jsをそのまま実行）
+        run: node bump-version.js
+
+      - name: 変更があれば自動でコミット＆プッシュ
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add update-notification-system.js sw.js
+          if git diff --cached --quiet; then
+            echo "変更なし（バージョンファイルが見つからない、または既に最新でした）"
+          else
+            git commit -m "chore: バージョン番号を自動で繰り上げ [skip ci]"
+            git push
+          fi

@@ -8,8 +8,9 @@
 // 1タブ・1セッションにつき一度しか実行しない仕組み
 // （sessionStorageの pos_gdrive_autorestore_done）になっている。
 // リロードは同じタブ・同じセッションの継続とみなされるため、
-// このままだと「アップデートを反映した直後の再読み込み」では
-// Google Driveの最新データが再取得されない可能性がある。
+// このままだと「アップデートを反映した直後の再読み込み」（sw.jsが
+// 古いキャッシュを削除した直後）では、Google Driveの最新データが
+// 再取得されない可能性がある。
 //
 // 【この機能】
 // 画面左下のバージョン表示（update-notification-system.jsが表示する
@@ -21,9 +22,18 @@
 // （Google Drive未連携・客用ディスプレイ端末の場合は、
 //   auto-google-drive-sync.js側の判定により何も起きない）
 //
-// update-notification-system.js / auto-google-drive-sync.js は
-// 直接編集せず、既存のバージョン表示要素と公開関数を読み取って
-// 利用するだけの、完全に独立したファイルとして実装する。
+// 【今回の強化：APIキー（Ably）も一緒に取り直す】
+// これまではGoogle Driveのデータだけを取り直していたが、
+// index.html側が持つAbly用APIキー（Firestoreの pos_realtime_settings
+// から読み込む方式）も、ページを開きっぱなしのまま長時間経ってから
+// アップデートが反映されたようなケースでは、念のため最新の値に
+// 取り直しておきたい。index.htmlが用意している
+// window.getPosApiKeyAsync()（＝loadPosApiKeyFromFirestoreの公開版）を
+// 使って再取得し、window.POS_ABLY_API_KEY を更新したうえで、
+// 他ファイルが待ち受けている 'pos-ably-key-ready' イベントを
+// 改めて発火させる。こちらもindex.html / auto-google-drive-sync.jsを
+// 直接編集せず、既存の公開関数・イベントを読み取って利用するだけの
+// 独立したファイルとして実装する。
 // ==========================================
 
 const LAST_SEEN_APP_VERSION_KEY = 'pos_last_seen_app_version';
@@ -31,6 +41,21 @@ const LAST_SEEN_APP_VERSION_KEY = 'pos_last_seen_app_version';
 function getDisplayedAppVersion() {
     const badge = document.getElementById('app-version-badge');
     return badge ? badge.innerText.trim() : null;
+}
+
+async function resyncPosApiKeyAfterUpdate() {
+    if (typeof window.getPosApiKeyAsync !== 'function') return; // index.html側が未準備
+
+    try {
+        const key = await window.getPosApiKeyAsync();
+        if (key) {
+            window.POS_ABLY_API_KEY = key;
+            window.dispatchEvent(new CustomEvent('pos-ably-key-ready', { detail: { apiKey: key } }));
+            console.info('アップデートを検知したため、Ably用APIキーを最新の状態に取り直しました。');
+        }
+    } catch (e) {
+        console.warn('アップデート後のAPIキー再取得に失敗しました:', e);
+    }
 }
 
 function checkVersionChangeAndResyncGoogleDrive() {
@@ -47,6 +72,8 @@ function checkVersionChangeAndResyncGoogleDrive() {
             console.info(`アップデートを検知しました（${lastSeenVersion} → ${currentVersion}）。Google Driveの最新データを確認します。`);
             autoRestoreFromGoogleDriveOnLoad();
         }
+
+        resyncPosApiKeyAfterUpdate();
     }
 
     localStorage.setItem(LAST_SEEN_APP_VERSION_KEY, currentVersion);
