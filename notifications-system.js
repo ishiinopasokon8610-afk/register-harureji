@@ -78,14 +78,18 @@ function isTouchPanelCallDiscountName(name) {
     return !!name && TOUCH_PANEL_CALL_ICONS.some(icon => name.startsWith(icon));
 }
 
-// 【今回追加】通知にアイコン画像を付けられるように、第3引数(iconUrl)を追加。
-// 省略した場合はこれまで通り（ブラウザ標準のアイコン）で、既存の呼び出し
-// 箇所はすべて無改造のまま動く。
+// 通知に表示するアイコン画像（店のロゴ）。個別の呼び出し側でiconUrlを
+// 指定しなかった場合は、常にこの画像が使われる。
+const DEFAULT_NOTIFICATION_ICON_URL = 'https://raw.githubusercontent.com/ishiinopasokon8610-afk/image-list/main/images/register-sabicon.png';
+
+// 通知にアイコン画像を付けられるように、第3引数(iconUrl)を用意。
+// 省略した場合は上のDEFAULT_NOTIFICATION_ICON_URL（店のロゴ）が使われる。
+// 既存の呼び出し箇所（iconUrlを渡していない箇所）はすべて無改造のまま、
+// このロゴが表示されるようになる。
 function fireDesktopNotification(title, body, iconUrl) {
     if (!isDesktopNotificationEnabled()) return;
     try {
-        const options = { body: body || '' };
-        if (iconUrl) options.icon = iconUrl;
+        const options = { body: body || '', icon: iconUrl || DEFAULT_NOTIFICATION_ICON_URL };
         const n = new Notification(title, options);
         n.onclick = () => { window.focus(); n.close(); };
     } catch (err) {
