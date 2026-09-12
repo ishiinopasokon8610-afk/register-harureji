@@ -61,7 +61,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>haruレジ</title>
     <!-- ウェブアイコン（Favicon）の設定 -->
-    <link rel="icon" href="https://illust8.com/wp-content/uploads/2022/04/cash-register_16279.png" type="image/png">
+    <link rel="icon" href="https://raw.githubusercontent.com/ishiinopasokon8610-afk/image-list/main/images/register-icon.png" type="image/png">
     
     <!-- manifest.jsonの読み込み -->
     <link rel="manifest" href="./manifest.json">
@@ -315,7 +315,7 @@
         <div class="home-header">
             <!-- 文字を消してロゴ画像を表示するように変更 -->
             <!-- ホーム画面のロゴ（サイズ拡大版） -->
-<img id="home-shop-logo" src="https://illust8.com/wp-content/uploads/2022/04/cash-register_16279.png" alt="ここにロゴを設定できます。" class="home-shop-logo-img">
+<img id="home-shop-logo" src="https://raw.githubusercontent.com/ishiinopasokon8610-afk/image-list/main/images/%E3%83%AD%E3%82%B4%E3%82%92%E8%A8%AD%E5%AE%9A%E3%81%99%E3%82%8B%E3%81%A8%E3%81%93%E3%81%93%E3%81%AB%E8%A1%A8%E7%A4%BA%E3%81%95%E3%82%8C%E3%81%BE%E3%81%99%E3%80%82.png" alt="ここにロゴを設定できます。" class="home-shop-logo-img">
         </div>
         
         <!-- API設定コンテナ -->
@@ -1003,21 +1003,26 @@
             <button class="btn-migration" style="background:#f44336; color:white; padding:8px 12px; border:none; border-radius:4px; font-weight:bold; cursor:pointer;" onclick="clearShopLogo()">ロゴを初期化する</button>
         </div>
 
+        <!-- 追加：ホーム画面の背景画像アップロード設定ブロック -->
+        <div class="migration-block" style="background:#f3e5f5; border:2px solid #ce93d8; padding:15px; border-radius:6px; margin-bottom:15px;">
+            <h3 class="migration-title" style="color:#6a1b9a;">🖼️ ホーム画面の背景の登録</h3>
+            <p class="migration-desc">ホーム画面（レジ起動時の最初の画面）の背景を、お好きな画像に変更できます。「ファイルを選択」ボタンからアップロードしてください。</p>
+            <input type="file" id="home-bg-upload-input" accept="image/*" onchange="uploadHomeBg(event)" style="margin-bottom: 10px;">
+            <br>
+            <button class="btn-migration" style="background:#f44336; color:white; padding:8px 12px; border:none; border-radius:4px; font-weight:bold; cursor:pointer;" onclick="clearHomeBg()">背景を初期化する</button>
+        </div>
+
         <!-- 追加：キャッシュ・Cookie削除に負けないファイルバックアップ -->
         <div class="migration-block" style="background:#e8f5e9; border:2px solid #81c784; padding:15px; border-radius:6px; margin-bottom:15px;">
-            <h3 class="migration-title" style="color:#2e7d32;">💾 データのバックアップ（キャッシュ・Cookie削除対策）</h3>
+            <h3 class="migration-title" style="color:#2e7d32;">💾 データのバックアップ（データ自動削除対策）</h3>
             <p class="migration-desc">
-                万が一に備えて、バックアップファイルの保存やGoogle Driveへの保存をお勧めします。
+                万が一に備えて、Google Driveへの保存をお勧めします。ファイルとしてバックアップしたい債はスクロール先にあります。
             </p>
-            <button class="btn-migration" style="background:#2e7d32; color:white; padding:8px 12px; border:none; border-radius:4px; font-weight:bold; cursor:pointer; margin-right:8px;" onclick="downloadDataBackupFile()">📥 バックアップファイルを保存する</button>
-            <button class="btn-migration" style="background:#1565c0; color:white; padding:8px 12px; border:none; border-radius:4px; font-weight:bold; cursor:pointer; margin-right:8px;" onclick="document.getElementById('backup-restore-file-input').click()">📂 バックアップファイルから復元する</button>
-            <br><br>
             <button class="btn-migration" style="background:#0f9d58; color:white; padding:8px 12px; border:none; border-radius:4px; font-weight:bold; cursor:pointer; margin-right:8px;" onclick="connectGoogleDrive()">📗 Google Driveと連携</button>
             <button class="btn-migration" style="background:#0f9d58; color:white; padding:8px 12px; border:none; border-radius:4px; font-weight:bold; cursor:pointer; margin-right:8px;" onclick="backupToGoogleDriveNow()">📤 今すぐDriveにバックアップ</button>
             <button class="btn-migration" style="background:#0f9d58; color:white; padding:8px 12px; border:none; border-radius:4px; font-weight:bold; cursor:pointer;" onclick="restoreFromGoogleDrive()">📥 Driveから復元</button>
-            <input type="file" id="backup-restore-file-input" accept="application/json,.json" style="display:none;">
             <p class="migration-desc" style="margin-top:10px; font-size:12px; color:#555;">
-                📁「レシート保存フォルダ」を設定済みの場合は、そのフォルダにも自動でバックアップ（haru-pos-backup.json）が更新され続けます。Google Driveと連携しておくと、そちらにも自動でバックアップされます。
+               Google Driveと連携しておくと、そちらに自動でバックアップされます。
             </p>
         </div>
 
@@ -1149,7 +1154,7 @@
             <div id="receipt-capture-area" style="background: #ffffff; padding: 15px; border-radius: 4px;">
                 <div class="receipt-preview-title" style="text-align:center;">
                     <!-- レシートプレビューのロゴ -->
-                    <img id="receipt-preview-logo" src="https://illust8.com/wp-content/uploads/2022/04/cash-register_16279.png" style="max-height: 80px; width: auto; margin-bottom: 10px;">
+                    <img id="receipt-preview-logo" src="https://raw.githubusercontent.com/ishiinopasokon8610-afk/image-list/main/images/%E3%83%AD%E3%82%B4%E3%82%92%E8%A8%AD%E5%AE%9A%E3%81%99%E3%82%8B%E3%81%A8%E3%81%93%E3%81%93%E3%81%AB%E8%A1%A8%E7%A4%BA%E3%81%95%E3%82%8C%E3%81%BE%E3%81%99%E3%80%82.png" style="max-height: 80px; width: auto; margin-bottom: 10px;">
                 </div>
                 <div id="print-receipt-content"></div>
             </div>
@@ -1715,6 +1720,8 @@
     <script src="shop-id-system.js"></script>
     <script src="simple-auth-system.js"></script>
     <script src="auth-system.js"></script>
+<script src="home-bg-fit-contain-fix.js"></script>
+<script src="home-bg-fit-contain-ensure-fix.js"></script>
     <script src="firebase-manager-auth.js"></script>
     <script src="firebase-image-storage.js"></script>
 <script src="master-mgmt.js"></script>
@@ -1723,6 +1730,7 @@
     <script src="deposit-shortage-guard-system.js"></script>
     <script src="staff-login-gate.js"></script>
     <script src="checkout-image.js"></script>
+     <script src="checkout-image-hide-on-home.js"></script>
     <script src="keyboarddown.js"></script>
     <script src="refund.js"></script>
     <script src="local-backup.js"></script>
@@ -1749,6 +1757,7 @@
     <script src="customer-sync-system.js"></script>
     <script src="member-number-system.js"></script>
      <script src="ai-store-analysis-system.js"></script>
+    <script src="ai-voice-input-system.js"></script>
     <script src="history-receipt-number-system.js"></script>
     <script src="checkout-redo-system.js"></script>
     <script src="member-rank-discount.js"></script>
@@ -1760,9 +1769,15 @@
     <script src="order-checkout-display.js"></script>
     <script src="call-number-system.js"></script>
     <script src="touch-panel-order-system.js"></script>
-    <script src="genre-background-system.js"></script>
+<script src="touch-panel-photo-fit-and-idle-screensaver-system.js"></script>
+<script src="menu-genre-page-grid-system.js"></script>
+<script src="call-staff-barcode-onetime-fix.js"></script>
+<script src="cart-reminder-system.js"></script>
+<script src="bg-setting-modal-filter-fix.js"></script>
+<script src="menu-screen-bg-preview-system.js"></script>
 <script src="table-usage-timer-system.js"></script>
-    <script src="call-number-receipt-print.js"></script>
+   <script src="genre-background-system.js"></script> 
+   <script src="call-number-receipt-print.js"></script>
     <script src="tax-exclusive-pricing-system.js"></script>
     <script src="home-blocks-hash-navigation.js"></script>
     <script src="home-automation-blocks-sync.js"></script>
@@ -1784,13 +1799,15 @@
 <script src="discount-home-visibility-toggle.js"></script>
 <script src="discount-barcode-pdf-system.js"></script>
     <script src="discount-screen-mobile-fix.js"></script>
+    <script src="checkout-automation-barcode-list.js"></script>
     <script src="clerk-font-size-system.js"></script>
-    <script src="night-mode-system.js"></script>
+    <script src="dark-mode-system.js"></script>
     <script src="migration-anchor-nav-system.js"></script>
     <script src="hold-sale-system.js"></script>
     <script src="gdrive-sync-indicator.js"></script>
     <script src="backup-extra-settings-sync.js"></script>
     <script src="json-export-import-system.js"></script>
+<script src="json-export-import-block-position-fix.js"></script>
     <script src="update-notification-system.js"></script>
     <script src="faq-help-system.js"></script>
     <script src="recommended-peripherals-system.js"></script>

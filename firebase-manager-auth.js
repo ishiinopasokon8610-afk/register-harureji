@@ -121,7 +121,7 @@ function isFirebaseAuthReady() {
                 if (typeof openManagerAuthTarget === 'function') {
                     openManagerAuthTarget(typeof managerAuthTarget !== 'undefined' ? managerAuthTarget : 'home');
                 }
-                if (typeof speak === 'function') speak("てんちょう にんしょう せいこう し まし た");
+                if (typeof speak === 'function') speak("店長認証成功しました");
             } catch (e) {
                 // auth/wrong-password（バーコード不一致）
                 // auth/too-many-requests（連続失敗によるFirebase側の一時ロック。ブルートフォース対策として有効に働く）

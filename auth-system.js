@@ -708,7 +708,7 @@ function clearShopLogo() {
 
 function applyShopLogo() {
     const logoData = localStorage.getItem('pos_shop_logo');
-    const defaultLogo = "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6f/Yaoko_logo.svg/512px-Yaoko_logo.svg.png";
+    const defaultLogo = "https://raw.githubusercontent.com/ishiinopasokon8610-afk/image-list/main/images/%E3%83%AD%E3%82%B4%E3%82%92%E8%A8%AD%E5%AE%9A%E3%81%99%E3%82%8B%E3%81%A8%E3%81%93%E3%81%93%E3%81%AB%E8%A1%A8%E7%A4%BA%E3%81%95%E3%82%8C%E3%81%BE%E3%81%99%E3%80%82.png";
     const logoSrc = logoData ? logoData : defaultLogo;
 
     const homeLogo = document.getElementById('home-shop-logo');
@@ -716,6 +716,51 @@ function applyShopLogo() {
 
     const receiptLogo = document.getElementById('receipt-preview-logo');
     if (receiptLogo) receiptLogo.src = logoSrc;
+}
+
+function uploadHomeBg(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        const base64Image = e.target.result;
+        localStorage.setItem('pos_home_bg', base64Image);
+        applyHomeBg();
+        if (typeof playSound === 'function') playSound('success');
+        if (typeof showCustomConfirm === 'function') {
+            showCustomConfirm("ホーム画面の背景を保存しました！", "ほーむがめん の はいけい を ほぞん し まし た", () => {}, false);
+        }
+    };
+    reader.readAsDataURL(file);
+}
+
+function clearHomeBg() {
+    localStorage.removeItem('pos_home_bg');
+    applyHomeBg();
+    if (typeof playSound === 'function') playSound('click');
+    if (typeof showCustomConfirm === 'function') {
+        showCustomConfirm("ホーム画面の背景を初期化しました。", "ほーむがめん の はいけい を しょきか し まし た", () => {}, false);
+    }
+}
+
+function applyHomeBg() {
+    const bgData = localStorage.getItem('pos_home_bg');
+    const homeScreen = document.getElementById('home-screen');
+    if (!homeScreen) return;
+
+    if (bgData) {
+        homeScreen.style.backgroundImage = `url('${bgData}')`;
+        homeScreen.style.backgroundSize = 'cover';
+        homeScreen.style.backgroundPosition = 'center';
+        homeScreen.style.backgroundRepeat = 'no-repeat';
+    } else {
+        // 未設定時は、あらかじめ用意されているデザイン（style.css等）に戻す
+        homeScreen.style.backgroundImage = '';
+        homeScreen.style.backgroundSize = '';
+        homeScreen.style.backgroundPosition = '';
+        homeScreen.style.backgroundRepeat = '';
+    }
 }
 
 // ------------------------------------------
@@ -910,6 +955,7 @@ function exportHistorycsv() {
 // ------------------------------------------
 document.addEventListener('DOMContentLoaded', () => {
     applyShopLogo();
+    applyHomeBg();
 
     if (sessionStorage.getItem('pos_manager_auth') === 'true') {
         if (typeof managerAuthDone !== 'undefined') managerAuthDone = true;

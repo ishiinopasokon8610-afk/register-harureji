@@ -49,10 +49,18 @@
 
 const HOME_LONG_PRESS_MS = 4000;
 
-// 各ブロックを個別に長押し（2秒）すると、そのバーコードだけを
-// ホーム非表示（hideFromHome）にしてホームのブロック一覧から消す
-// （会計成立後に使えなくなる「使用済み(archived)」にはしない。あくまで
-// ホーム画面に出すかどうかだけの設定で、レジでは引き続き使える）
+// 【2026年9月変更・呼び方の統一】
+// 各ブロックを個別に長押し（2秒）すると、そのバーコードを一覧から
+// 「アーカイブ」する（＝以後、店員には「アーカイブした」と伝える）。
+// ただし裏側の実装は従来通り hideFromHome フラグへの切り替えのまま
+// 変更していない。会計成立後に使えなくなる「使用済み(archived)」フラグ
+// を流用すると、レジ画面のスキャン処理が archived===true のバーコード
+// をスキャン対象から除外してしまい、「ホーム画面の一覧から消しただけ」
+// のつもりがレジでも使えなくなる不具合を過去に起こしているため
+// （下の archiveDiscountBarcode() 参照）、これは意図的にそのままにして
+// いる。つまり「アーカイブ」という呼び方・見た目（消え方・トースト表示）
+// だけを変え、実際の動作（レジでは引き続きスキャンして使える／
+// ホームのブロック一覧にだけ出なくなる）は一切変えていない。
 const HOME_BLOCK_ARCHIVE_LONG_PRESS_MS = 2000;
 
 /* =========================================================
@@ -195,24 +203,25 @@ function renderHomeAutomationBlocksGrid() {
 }
 
 /* =========================================================
-   ブロック単体の長押し（2秒）→ そのバーコードをホームの一覧から消す
+   ブロック単体の長押し（2秒）→ そのバーコードを「アーカイブ」する
    ------------------------------------------
    ・押している間：カードがわずかに縮み、下端の赤いバーが左から右へ伸びる
-     （「消そうとしている」ことが視覚的にわかるようにするため）
+     （「アーカイブしようとしている」ことが視覚的にわかるようにするため）
    ・2秒経つ前に指を離した場合：バーを0%に戻し、何も起きない
    ・2秒経過した場合：disc.hideFromHome = trueにしてlocalStorageへ保存し、
-     一覧を再描画して即座にそのブロックを消す
+     一覧を再描画して即座にそのブロックを消し、「🗄 アーカイブしました」と
+     一瞬トースト表示する
    ------------------------------------------
-   【不具合修正】以前はここで disc.archived = true にしていたが、
+   【不具合修正・重要】以前はここで disc.archived = true にしていたが、
    archived は「会計成立後の使用済みバーコード」を表すフラグで、
    discount-system.js 側のレジ画面スキャン処理（fetchAndAddItemのフック）が
    archived === true のバーコードをスキャン対象から除外してしまうため、
    「ホーム画面のブロック一覧から消しただけ」のつもりが、実際には
    そのバーコードがレジで一切使えなくなってしまっていた。
-   ホーム画面に表示するかどうかだけを切り替えたい場合は、
-   discount-home-visibility-toggle.js が使っている hideFromHome
-   フラグ（レジでの使用には影響しない・一覧表示のみ制御する）を
-   代わりに使うようにした。
+   そのためこの「アーカイブ」は、店員から見た呼び方・見た目だけの
+   名称であり、実体は discount-home-visibility-toggle.js が使っている
+   hideFromHome フラグ（レジでの使用には影響しない・ホームのブロック
+   一覧表示のみ制御する）のままにしてある。disc.archived には触れない。
    ========================================================= */
 function archiveDiscountBarcode(index) {
     if (typeof discountBarcodes === 'undefined' || !Array.isArray(discountBarcodes)) return;
@@ -225,13 +234,38 @@ function archiveDiscountBarcode(index) {
         localStorage.setItem('pos_discounts', JSON.stringify(discountBarcodes));
         if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
     } catch (e) {
-        console.warn('自動化バーコードのホーム非表示設定の保存に失敗しました:', e);
+        console.warn('自動化バーコードのアーカイブ設定の保存に失敗しました:', e);
     }
 
     if (typeof playSound === 'function') playSound('success');
+    showHomeAutomationArchiveToast();
 
     // 開いたままのオーバーレイに即座に反映する（このブロックが一覧から消える）
     renderHomeAutomationBlocksIfVisible();
+}
+
+// 「アーカイブしました」の一瞬だけのトースト表示（他機能のトーストとは
+// 独立した、この機能専用の軽量な実装）
+function showHomeAutomationArchiveToast() {
+    const existing = document.getElementById('home-automation-archive-toast');
+    if (existing) existing.remove();
+
+    const toast = document.createElement('div');
+    toast.id = 'home-automation-archive-toast';
+    toast.textContent = '🗄 アーカイブしました';
+    toast.style.cssText = [
+        'position:fixed', 'left:50%', 'bottom:24px', 'transform:translateX(-50%)',
+        'z-index:100050', 'background:rgba(0,0,0,0.8)', 'color:#fff',
+        'padding:10px 18px', 'border-radius:20px', 'font-size:13px', 'font-weight:bold',
+        'box-shadow:0 4px 14px rgba(0,0,0,0.3)', 'transition:opacity 300ms ease',
+        'opacity:1', 'pointer-events:none'
+    ].join(';');
+    document.body.appendChild(toast);
+
+    setTimeout(() => {
+        toast.style.opacity = '0';
+        setTimeout(() => toast.remove(), 300);
+    }, 1300);
 }
 
 function attachBlockArchiveLongPress(blockEl, index) {

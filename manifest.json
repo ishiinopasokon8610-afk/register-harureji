@@ -7,14 +7,8 @@
   "theme_color": "#317EFB",
   "icons": [
     {
-      "src": "./images/icon-192x192.png",
-      "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "any maskable"
-    },
-    {
-      "src": "./images/icon-512x512.png",
-      "sizes": "512x512",
+      "src": "https://raw.githubusercontent.com/ishiinopasokon8610-afk/image-list/main/images/register-sabicon.png",
+      "sizes": "500x500",
       "type": "image/png",
       "purpose": "any maskable"
     }
