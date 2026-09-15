@@ -117,7 +117,11 @@ function showAblyKeyLoadedToast(message) {
         if (isCustDisplay) return;
 
         if (typeof speakVoice === 'function') {
-            speakVoice('Ablyの接続キーを取得しました');
+            // 【修正】'Ably' という英字表記のまま読み上げに渡すと、音声合成
+            // エンジンが未知の英単語として「エー・ビー・エル・ワイ」と
+            // 1文字ずつ読み上げてしまうことがあったため、読み方通りの
+            // カタカナ表記にする（画面表示側のトースト文言は英字のままでよい）。
+            speakVoice('エイブリーの接続キーを取得しました');
         }
         showAblyKeyLoadedToast('✅ Ablyキーを取得しました');
     });
