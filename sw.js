@@ -46,7 +46,16 @@
 // 最新が読み込まれるが、index.htmlに新しい<script>タグを追加したため、
 // 念のためCACHE_VERSIONを上げて古いindex.htmlキャッシュを一掃する。
 // ==========================================
-const CACHE_VERSION = 'v3';
+// ==========================================
+// 【今回の更新内容（変更点まとめ）】
+// ・不具合修正: install時にASSETS（index.html/manifest.jsonのみ）しか
+//   キャッシュしておらず、追加機能スクリプト（register.js等80個近く）が
+//   一切キャッシュ対象外だったため、オフライン時に殻（index.html）だけ
+//   開けて中身が動かない状態だった点を修正。index.htmlの<script src>を
+//   動的に読み取って同一オリジンのスクリプトも全てプリキャッシュする
+//   ように変更（shop-id-system.js。詳細は下のinstallハンドラのコメント参照）。
+// ==========================================
+const CACHE_VERSION = 'v4';
 const CACHE_NAME = `register-cache-${CACHE_VERSION}`;
 const ASSETS = [
   './',
@@ -64,9 +73,46 @@ function isAppShellRequest(request) {
 // インストール時にファイルをキャッシュする
 self.addEventListener('install', (e) => {
   e.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(ASSETS);
-    })
+    (async () => {
+      const cache = await caches.open(CACHE_NAME);
+      await cache.addAll(ASSETS);
+
+      // 【今回追加：追加機能スクリプトのプリキャッシュ】
+      // これまで ASSETS には index.html／manifest.json しか入っておらず、
+      // register.js・ui.js・各種 ○○-system.js 等（80個近く）は一切
+      // キャッシュされていなかった。そのため「オフラインでも今まで通り
+      // アプリを開けるという両立ができる」と書いていたが、実際には
+      // オフライン時に開けるのは index.html の殻だけで、中身のスクリプトが
+      // 1つも読み込めず、実質的に機能しない状態だった。
+      //
+      // 対応：index.html を取得して <script src="..."> を動的に読み取り、
+      // 同一オリジンのものを全てこのキャッシュにも追加する。ファイルを
+      // 1件ずつ手で列挙する方式にしなかったのは、extra-settings-ably-sync.js
+      // 等と同じ理由（新しいスクリプトを追加するたびにこのsw.jsを更新し
+      // 忘れる、という抜け漏れを防ぐため）。
+      // 1件のプリキャッシュが失敗しても（一時的な通信不良など）install
+      // 全体は失敗させず、その1件だけ諦めて続行する。
+      try {
+        const htmlRes = await fetch('./index.html', { cache: 'no-store' });
+        const html = await htmlRes.text();
+        const scriptSrcs = [...html.matchAll(/<script[^>]+src=["']([^"']+)["']/gi)]
+          .map((m) => m[1])
+          .filter((src) => !/^https?:\/\//i.test(src)); // 外部CDN等（同一オリジン以外）は対象外
+
+        await Promise.all(
+          scriptSrcs.map((src) =>
+            cache.add(src).catch((err) => {
+              console.warn(`[sw] プリキャッシュに失敗しました（このファイルだけスキップ）: ${src}`, err);
+            })
+          )
+        );
+      } catch (err) {
+        // index.html自体の取得に失敗した場合（インストール時点で既に
+        // オフライン等）。ASSETS分（殻）は既にキャッシュできているので、
+        // ここは諦めて続行する。
+        console.warn('[sw] スクリプト一覧の動的プリキャッシュに失敗しました:', err);
+      }
+    })()
   );
   // 【今回追加】新しいService Workerを、古いものの終了を待たずすぐに
   // 有効化する。update-notification-system.js側の「リロード」操作と
@@ -104,7 +150,11 @@ self.addEventListener('fetch', (e) => {
     return;
   }
 
-  // ② それ以外：これまで通りキャッシュ優先（無ければネットワーク）
+  // ② それ以外：キャッシュ優先（無ければネットワーク）
+  // 上記のinstall時プリキャッシュにより、追加機能スクリプト等も
+  // ここでキャッシュヒットするようになった。バージョン更新時は
+  // CACHE_VERSIONを上げることで、activateで古いキャッシュごと
+  // 一掃され、次のinstallで新しい内容が入り直す。
   e.respondWith(
     caches.match(req).then((response) => {
       return response || fetch(req);
