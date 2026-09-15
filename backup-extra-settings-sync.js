@@ -81,9 +81,12 @@ const EXTRA_BACKUP_EXCLUDED_KEYS = [
     'pos_ai_webllm_model_id',      // この端末で選んでいるAIモデル（端末の性能に依存するため）
     'pos_last_inactivity_nudge',   // 通知の再送間隔を内部管理するタイムスタンプ（設定でも業務データでもない）
     'pos_is_customer_display',     // この端末を「客用ディスプレイ」にする設定（端末ごとの役割）
-    'pos_shop_id'                  // 2026-09追記：店舗ごとに意図的に別の値を持たせる合言葉のため、
+    'pos_shop_id',                 // 2026-09追記：店舗ごとに意図的に別の値を持たせる合言葉のため、
                                     // バックアップ経由で他店舗・他端末の値を上書きしてしまう事故になり得る
                                     // （shop-id-system.js。extra-settings-ably-sync.jsの除外リストと同じ理由）
+    'pos_sync_password'            // 2026-09追記：pos_shop_idと同じ理由。同期用パスワード
+                                    // （sync-password-encryption-system.js）も店舗ごとに
+                                    // 意図的に別の値を持たせる設定のため対象外にする。
 ];
 const EXTRA_BACKUP_EXCLUDED_PREFIXES = [
     'pos_gdrive_',                 // Google Drive連携に関する、この端末のトークン等の内部状態

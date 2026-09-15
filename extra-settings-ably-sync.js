@@ -86,8 +86,11 @@ const ABLY_SETTINGS_EXCLUDED_KEYS = [
     'pos_ai_webllm_model_id',
     'pos_last_inactivity_nudge',
     'pos_is_customer_display',
-    'pos_shop_id' // 2026-09追記：店舗ごとに意図的に別の値を持たせる設定のため、
+    'pos_shop_id', // 2026-09追記：店舗ごとに意図的に別の値を持たせる設定のため、
                   // 自動同期すると他店舗の値で上書きされる事故になり得る（shop-id-system.js）
+    'pos_sync_password' // 2026-09追記：pos_shop_idと同じ理由。同期用パスワード
+                         // （sync-password-encryption-system.js）も店舗ごとに
+                         // 意図的に別の値を持たせる設定のため対象外にする。
 ];
 const ABLY_SETTINGS_EXCLUDED_PREFIXES = [
     'pos_gdrive_',
