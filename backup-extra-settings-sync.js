@@ -47,6 +47,9 @@
 //   ・ pos_last_inactivity_nudge（通知の再送間隔を内部的に管理するための
 //     　タイムスタンプで、設定でも業務データでもないため）
 //   ・ この端末を「客用ディスプレイ」にするチェック（端末ごとの役割）
+//   ・ pos_shop_id（店舗の合言葉。店舗ごとに意図的に別の値を持たせる設定
+//     　のため、バックアップ経由で他店舗・他端末の値を上書きしてしまう
+//     　事故を防ぐ。shop-id-system.js）
 //
 // 【今後、除外を追加したい場合】
 // pos_ で始まるキーは自動的にバックアップ対象になるため、通常は何もしなくてよい。
@@ -77,7 +80,10 @@ const EXTRA_BACKUP_EXCLUDED_KEYS = [
     'pos_color_mode',              // この端末の画面の見た目設定（配色）
     'pos_ai_webllm_model_id',      // この端末で選んでいるAIモデル（端末の性能に依存するため）
     'pos_last_inactivity_nudge',   // 通知の再送間隔を内部管理するタイムスタンプ（設定でも業務データでもない）
-    'pos_is_customer_display'      // この端末を「客用ディスプレイ」にする設定（端末ごとの役割）
+    'pos_is_customer_display',     // この端末を「客用ディスプレイ」にする設定（端末ごとの役割）
+    'pos_shop_id'                  // 2026-09追記：店舗ごとに意図的に別の値を持たせる合言葉のため、
+                                    // バックアップ経由で他店舗・他端末の値を上書きしてしまう事故になり得る
+                                    // （shop-id-system.js。extra-settings-ably-sync.jsの除外リストと同じ理由）
 ];
 const EXTRA_BACKUP_EXCLUDED_PREFIXES = [
     'pos_gdrive_',                 // Google Drive連携に関する、この端末のトークン等の内部状態

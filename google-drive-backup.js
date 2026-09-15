@@ -311,13 +311,17 @@ async function restoreFromGoogleDrive() {
 }
 
 function disconnectGoogleDrive() {
+    // 【不具合修正】以前はここでgDriveAccessTokenを先にnullにしてしまっていたため、
+    // 直後のrevoke()の条件判定（gDriveAccessTokenが存在するか）が常にfalseになり、
+    // 「連携解除」してもGoogle側でのトークン失効が一度も実行されていなかった。
+    // 変数をnullにする前に、まずrevoke()を呼ぶ順序に修正する。
+    if (isGoogleIdentityServicesReady() && gDriveAccessToken) {
+        google.accounts.oauth2.revoke(gDriveAccessToken, () => {});
+    }
     gDriveAccessToken = null;
     gDriveAccessTokenExpiresAt = 0;
     gDriveFileId = null;
     localStorage.removeItem('pos_gdrive_connected');
-    if (isGoogleIdentityServicesReady() && gDriveAccessToken) {
-        google.accounts.oauth2.revoke(gDriveAccessToken, () => {});
-    }
     if (typeof playSound === 'function') playSound('click');
 }
 

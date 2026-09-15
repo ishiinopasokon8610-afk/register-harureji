@@ -170,7 +170,7 @@ const TOUCH_PANEL_GENRE_ICONS = {
 const TOUCH_PANEL_CALL_REASONS = [
     { key: 'staff',   label: '店員を呼ぶ',      icon: '🔔', voice: 'てんいん を よびだし まし た',       notifyTitle: '🔔 呼び出しがあります',   notifyBodySuffix: 'から呼び出しです' },
     { key: 'water',   label: 'お冷・おしぼり',  icon: '🧊', voice: 'おひや と おしぼり を おねがいします', notifyTitle: '🧊 お冷・おしぼりの依頼', notifyBodySuffix: 'からお冷・おしぼりの依頼です' },
-    { key: 'ashtray', label: '灰皿がほしい',    icon: '🚬', voice: 'はいざら を おねがいします',         notifyTitle: '🚬 灰皿の依頼',          notifyBodySuffix: 'から灰皿の依頼です' },
+    { key: 'ashtray', label: '取り皿がほしい',    icon: '🚬', voice: 'とりざら を おねがいします',         notifyTitle: '☕　取り皿の依頼',          notifyBodySuffix: 'から取り皿の依頼です' },
     { key: 'other',   label: 'その他のご用件',  icon: '✋', voice: 'ようけん が あります',               notifyTitle: '✋ ご用件があります',     notifyBodySuffix: 'からご用件があります' }
 ];
 
@@ -611,7 +611,7 @@ function showTouchPanelCheckoutThanksScreen() {
             <div class="tp-complete-check">✅</div>
             <div class="tp-complete-text">ありがとうございました</div>
             <div class="tp-complete-sub">レジにお進みください</div>
-            <div class="tp-table-occupied-badge">テーブル使用中です</div>
+            <div class="tp-table-occupied-badge">片付け作業を行ってください</div>
         </div>
     `;
     applyTouchPanelBackground();

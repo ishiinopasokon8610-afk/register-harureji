@@ -1540,16 +1540,44 @@
             return null;
         }
 
-        async function loadPosApiKeyFromFirestore() {
+        // 【バグ修正】APIキー入力欄が「時々勝手に消える」問題について
+        // ------------------------------------------------------------
+        // 原因：このFirestore読み込みはページ読み込み直後の1回きりで、
+        // 失敗（一時的な通信不良や、Firebase Authの状態確定がまだ
+        // 間に合っていない等）してもcatchで握りつぶして空文字を返して
+        // いたため、「本当は保存されているのに、その回だけ読み込めな
+        // かった」場合と「本当にまだ未設定」の場合の区別がつかず、
+        // 前者でも入力欄が空＆「初めての方は設定してください」の
+        // 案内が出てしまっていた（＝キーが消えたように見える）。
+        //
+        // 対策：読み込みに失敗した場合は空文字ではなく例外を投げる
+        // ようにし、呼び出し側で自動リトライ（数回のすぐ後のリトライ＋
+        // それでも失敗する場合は間隔を空けたバックグラウンド再試行）を
+        // 行う。読み込みが完全に成功して初めて「未設定」と判断する。
+        async function loadPosApiKeyFromFirestoreRaw() {
             const db = getFirestoreForRealtimeKey();
-            if (!db) return '';
-            try {
-                const snap = await db.collection(POS_REALTIME_SETTINGS_COLLECTION).doc(getShopIdForRealtimeKey()).get();
-                if (snap.exists && snap.data() && snap.data().apiKey) return snap.data().apiKey;
-            } catch (e) {
-                console.warn('Ably用APIキーの取得に失敗しました:', e);
+            if (!db) throw new Error('FIRESTORE_NOT_READY');
+            const snap = await db.collection(POS_REALTIME_SETTINGS_COLLECTION).doc(getShopIdForRealtimeKey()).get();
+            if (snap.exists && snap.data() && snap.data().apiKey) return snap.data().apiKey;
+            return ''; // ここまで到達して初めて「本当に未設定」と判断できる
+        }
+
+        async function loadPosApiKeyFromFirestore(retries = 3, delayMs = 700) {
+            let lastError = null;
+            for (let i = 0; i < retries; i++) {
+                try {
+                    return await loadPosApiKeyFromFirestoreRaw();
+                } catch (e) {
+                    lastError = e;
+                    console.warn(`Ably用APIキーの取得に失敗しました（${i + 1}/${retries}回目）:`, e);
+                    if (i < retries - 1) {
+                        await new Promise((resolve) => setTimeout(resolve, delayMs * (i + 1)));
+                    }
+                }
             }
-            return '';
+            // ここまで全て失敗＝「未設定」ではなく「読み込みエラー」なので、
+            // 空文字を返さず例外を投げて呼び出し側に判別させる。
+            throw lastError || new Error('UNKNOWN_ERROR');
         }
 
         async function savePosApiKeyToFirestore(key) {
@@ -1566,32 +1594,65 @@
         document.addEventListener('DOMContentLoaded', async () => {
             const apiKeyInput = document.getElementById('api-key-input');
             const guideMsg = document.getElementById('api-guide-msg');
+            const guideMsgDefaultText = guideMsg ? guideMsg.textContent : '';
+            let bgRetryCount = 0;
+            const MAX_BG_RETRIES = 5; // これ以上失敗が続く場合のみ、手動リロードを案内する
 
-            let savedKey = await loadPosApiKeyFromFirestore();
-
-            // 旧方式（localStorage）にキーが残っている場合は、
-            // 一度だけFirestoreへ移行してlocalStorageからは削除する。
-            if (!savedKey) {
+            async function refreshApiKeyDisplay() {
+                let savedKey = '';
+                let loadFailed = false;
                 try {
-                    const legacyKey = localStorage.getItem('pos_api_key');
-                    if (legacyKey) {
-                        await savePosApiKeyToFirestore(legacyKey);
-                        savedKey = legacyKey;
-                    }
+                    savedKey = await loadPosApiKeyFromFirestore();
                 } catch (e) {
-                    console.warn('旧APIキーの移行に失敗しました:', e);
+                    loadFailed = true;
+                }
+
+                // 旧方式（localStorage）にキーが残っている場合は、
+                // 一度だけFirestoreへ移行してlocalStorageからは削除する。
+                // ※読み込み自体に失敗した回はこの移行処理を行わない
+                //   （誤って空のキーで上書きしないようにするため）。
+                if (!savedKey && !loadFailed) {
+                    try {
+                        const legacyKey = localStorage.getItem('pos_api_key');
+                        if (legacyKey) {
+                            await savePosApiKeyToFirestore(legacyKey);
+                            savedKey = legacyKey;
+                        }
+                    } catch (e) {
+                        console.warn('旧APIキーの移行に失敗しました:', e);
+                    }
+                }
+                if (!loadFailed) {
+                    try { localStorage.removeItem('pos_api_key'); } catch (e) { /* 無視 */ }
+                }
+
+                if (savedKey) {
+                    apiKeyInput.value = savedKey;
+                    guideMsg.textContent = guideMsgDefaultText;
+                    guideMsg.style.display = 'none';
+                    window.POS_ABLY_API_KEY = savedKey;
+                    window.dispatchEvent(new CustomEvent('pos-ably-key-ready', { detail: { apiKey: savedKey } }));
+                } else if (loadFailed) {
+                    // 保存されているキー自体が消えたわけではなく、
+                    // 一時的に読み込めなかっただけの可能性が高いので、
+                    // 「初めての方は設定してください」の案内は出さない。
+                    bgRetryCount++;
+                    if (bgRetryCount <= MAX_BG_RETRIES) {
+                        guideMsg.textContent = '⚠ APIキーを読み込めませんでした。自動で再確認しています…（保存済みのキーが消えたわけではありません）';
+                        guideMsg.style.display = 'block';
+                        setTimeout(refreshApiKeyDisplay, 3000 * bgRetryCount);
+                    } else {
+                        guideMsg.textContent = '⚠ APIキーの読み込みに失敗しました。通信環境をご確認のうえ、ページを再読み込みしてください（保存済みのキーが消えたわけではありません）。';
+                        guideMsg.style.display = 'block';
+                    }
+                } else {
+                    guideMsg.textContent = guideMsgDefaultText;
+                    guideMsg.style.display = 'block';
+                    window.dispatchEvent(new CustomEvent('pos-ably-key-ready', { detail: { apiKey: '' } }));
                 }
             }
-            try { localStorage.removeItem('pos_api_key'); } catch (e) { /* 無視 */ }
 
-            if (savedKey) {
-                apiKeyInput.value = savedKey;
-                guideMsg.style.display = 'none';
-                window.POS_ABLY_API_KEY = savedKey;
-            } else {
-                guideMsg.style.display = 'block';
-            }
-            window.dispatchEvent(new CustomEvent('pos-ably-key-ready', { detail: { apiKey: savedKey || '' } }));
+            await refreshApiKeyDisplay();
 
             document.addEventListener('keydown', (e) => {
                 const checkoutModal = document.getElementById('checkout-modal');
@@ -1722,6 +1783,7 @@
     <script src="auth-system.js"></script>
 <script src="home-bg-fit-contain-fix.js"></script>
 <script src="home-bg-fit-contain-ensure-fix.js"></script>
+<script src="home-bg-logo-image-resize.js"></script>
     <script src="firebase-manager-auth.js"></script>
     <script src="firebase-image-storage.js"></script>
 <script src="master-mgmt.js"></script>
@@ -1755,6 +1817,7 @@
     <script src="language-system.js"></script>
     <script src="sync-system.js"></script>
     <script src="customer-sync-system.js"></script>
+    <script src="extra-settings-ably-sync.js"></script>
     <script src="member-number-system.js"></script>
      <script src="ai-store-analysis-system.js"></script>
     <script src="ai-voice-input-system.js"></script>
@@ -1769,8 +1832,26 @@
     <script src="order-checkout-display.js"></script>
     <script src="call-number-system.js"></script>
     <script src="touch-panel-order-system.js"></script>
+<script src="touch-panel-call-reason-icon-fix.js"></script>
+<script src="touch-panel-product-variant-sync-system.js"></script>
 <script src="touch-panel-photo-fit-and-idle-screensaver-system.js"></script>
+<script src="touch-panel-menu-card-clear-display-system.js"></script>
+<script src="touch-panel-menu-genre-top-tabs-system.js"></script>
+<script src="touch-panel-menu-swipe-navigation-system.js"></script>
+<script src="touch-panel-menu-genre-tabs-flat-style-system.js"></script>
+<script src="touch-panel-item-detail-large-display-system.js"></script>
+<script src="touch-panel-kiosk-usability-polish-system.js"></script>
+<script src="touch-panel-table-number-buttons-larger-system.js"></script>
+<script src="touch-panel-table-number-80-and-bigger-system.js"></script>
+<script src="touch-panel-table-badge-larger-system.js"></script>
+<script src="touch-panel-table-reset-and-badge-position-system.js"></script>
+<script src="touch-panel-price-tax-included-label-system.js"></script>
+<script src="touch-panel-tax-exclusive-price-display-fix-system.js"></script>
 <script src="menu-genre-page-grid-system.js"></script>
+<script src="touch-panel-menu-unified-swipe-and-side-arrows-system.js"></script>
+<script src="touch-panel-side-arrow-taller-and-table-badge-corner-system.js"></script>
+<script src="touch-panel-compact-menu-for-less-scrolling-system.js"></script>
+<script src="touch-panel-menu-grid-dynamic-fit-no-scroll-system.js"></script>
 <script src="call-staff-barcode-onetime-fix.js"></script>
 <script src="cart-reminder-system.js"></script>
 <script src="bg-setting-modal-filter-fix.js"></script>
@@ -1779,9 +1860,13 @@
    <script src="genre-background-system.js"></script> 
    <script src="call-number-receipt-print.js"></script>
     <script src="tax-exclusive-pricing-system.js"></script>
+    <script src="product-tax-rate-bulk-change-system.js"></script>
+    <script src="register-price-tax-included-label-system.js"></script>
     <script src="home-blocks-hash-navigation.js"></script>
     <script src="home-automation-blocks-sync.js"></script>
     <script src="home-automation-blocks.js"></script>
+    <script src="home-automation-blocks-archive-staff-call-only-system.js"></script>
+    <script src="home-automation-blocks-longpress-delete-system.js"></script>
     <script src="auto-home-block-on-use.js"></script>
     <script src="screen-hash-navigation.js"></script>
     <script src="screen-title-system.js"></script>
@@ -1803,11 +1888,13 @@
     <script src="clerk-font-size-system.js"></script>
     <script src="dark-mode-system.js"></script>
     <script src="migration-anchor-nav-system.js"></script>
+    <script src="migration-screen-button-position-fix.js"></script>
     <script src="hold-sale-system.js"></script>
     <script src="gdrive-sync-indicator.js"></script>
     <script src="backup-extra-settings-sync.js"></script>
     <script src="json-export-import-system.js"></script>
 <script src="json-export-import-block-position-fix.js"></script>
+<script src="ably-key-loaded-voice-notify.js"></script>
     <script src="update-notification-system.js"></script>
     <script src="post-update-gdrive-resync.js"></script>
     <script src="faq-help-system.js"></script>

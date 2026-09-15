@@ -16,13 +16,34 @@
 // google-drive-backup.js / index.html は直接編集せず、
 // backupToGoogleDriveNow() をフックしてタイムスタンプを記録し、
 // DOM注入で表示部分を追加する（他の追加機能ファイルと同じ方式）。
+//
+// 【追加：長時間同期が止まっている場合の赤字警告】
+// google-drive-backup.js の ensureGoogleDriveToken() は、自動実行時に
+// アクセストークンが切れていても再認証を試みず静かに諦める設計になって
+// いる（客用ディスプレイに同意画面が一瞬映るのを防ぐための意図的な仕様）。
+// そのため、誰も設定画面を触らない日は、トークン取得から約1時間ほどで
+// 自動バックアップが実質止まってしまう可能性がある。
+// この「止まっていること自体に気づけない」問題への軽い対策として、
+// 「最終同期：〇分前」が一定時間（GDRIVE_SYNC_STALE_THRESHOLD_MS）以上
+// 更新されていない場合、表示を赤字・赤枠に切り替えて警告する。
+// 同期ロジック自体は一切変更しない（表示だけの改善）。
 // ==========================================
 
 const GDRIVE_LAST_SYNC_KEY = 'pos_gdrive_last_sync_at';
 
+// 「最終同期」からこの時間以上経過していたら、赤字で警告する
+const GDRIVE_SYNC_STALE_THRESHOLD_MS = 2 * 60 * 60 * 1000; // 2時間
+
 function getGDriveLastSyncAt() {
     const v = localStorage.getItem(GDRIVE_LAST_SYNC_KEY);
     return v ? parseInt(v, 10) : null;
+}
+
+// 連携済みなのに一度も同期記録が無い場合も、念のため警告対象に含める
+function isGDriveSyncStale() {
+    const ts = getGDriveLastSyncAt();
+    if (!ts) return true;
+    return (Date.now() - ts) > GDRIVE_SYNC_STALE_THRESHOLD_MS;
 }
 
 function setGDriveLastSyncAtNow() {
@@ -56,7 +77,16 @@ function refreshGDriveSyncIndicatorUI() {
         return;
     }
     wrap.style.display = 'flex';
-    if (label) label.innerText = `最終同期：${formatGDriveSyncAgo(getGDriveLastSyncAt())}`;
+
+    const stale = isGDriveSyncStale();
+    wrap.classList.toggle('gdrive-sync-indicator-stale', stale);
+
+    if (label) {
+        const agoText = formatGDriveSyncAgo(getGDriveLastSyncAt());
+        label.innerText = stale
+            ? `⚠️ 最終同期：${agoText}（同期が止まっている可能性があります）`
+            : `最終同期：${agoText}`;
+    }
 }
 
 async function manualGDriveSyncNow() {
@@ -123,6 +153,13 @@ function ensureGDriveSyncIndicatorStyle() {
             content:''; display:inline-block; width:12px; height:12px;
             border:2px solid rgba(255,255,255,0.5); border-top-color:#fff; border-radius:50%;
             animation: gdriveSyncSpin 0.7s linear infinite;
+        }
+        #gdrive-sync-indicator-block.gdrive-sync-indicator-stale {
+            background:#ffebee !important;
+            border-color:#e53935 !important;
+        }
+        #gdrive-sync-indicator-block.gdrive-sync-indicator-stale #gdrive-sync-status-label {
+            color:#c62828 !important;
         }
     `;
     document.head.appendChild(style);
