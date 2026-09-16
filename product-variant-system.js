@@ -8,38 +8,72 @@
 // これらを別々の商品として商品管理に登録すると、商品一覧・レジのボタンが
 // 埋まってしまい、レジ担当者が探しにくくなる。
 //
-// 【この機能】
-// 商品本体（pos_products）のデータ構造・保存ロジック（master-mgmt.js等、
-// 商品追加/編集の実体）には一切手を加えず、バリエーション情報を
-// 完全に別の保存領域（pos_product_variants、JANコードをキーにした
-// オブジェクト）として管理する。
+// 【今回の変更（大幅リニューアル）】
+// これまでは「バリエーション＝選択肢1グループのみ・価格は絶対価格で
+// 上書き」という仕組みだったが、以下の3点に対応するよう作り直した。
+//   ① 質問を複数追加できるようにした（例：①サイズを選んでください
+//      ②トッピングを選んでください、のように独立した質問をいくつでも
+//      追加できる）。
+//   ② 選択肢の価格入力を「絶対価格を直接入力」ではなく「基本価格に対して
+//      ＋／－を選んで差額（円）を入力」する方式に変更した
+//      （例：中盛＝＋50円、小盛＝－50円、普通＝差額なし）。
+//   ③ 質問ごとに「複数選択できる（チェックボックス形式）」を設定できる
+//      ようにした。複数選択した場合は、選ばれた選択肢すべての差額が
+//      合計される。
+//
+// データ構造（pos_product_variants、JANコードをキーにしたオブジェクト）：
 //   pos_product_variants = {
 //     "<JANコード>": {
-//       groupLabel: "サイズ",   // 任意のラベル（例：サイズ／キャラ／色）
-//       options: [
-//         { label: "S", price: null },   // priceがnull/空なら商品本体の価格を使う
-//         { label: "M", price: null },
-//         { label: "L", price: 1100 }    // 個別に価格を上書きすることも可能
+//       questions: [
+//         {
+//           label: "サイズ",     // 質問名
+//           multi: false,        // true=複数選択（チェックボックス）
+//           options: [
+//             { label: "普通", sign: "+", amount: 0 },
+//             { label: "中盛", sign: "+", amount: 50 },
+//             { label: "小盛", sign: "-", amount: 50 }
+//           ]
+//         },
+//         {
+//           label: "トッピング",
+//           multi: true,
+//           options: [ { label: "チーズ", sign: "+", amount: 100 }, ... ]
+//         }
 //       ]
 //     }
 //   }
+//
+// 【旧データの互換性】
+// 以前の形式 { groupLabel, options:[{label, price}] }（絶対価格・単一
+// グループ）で保存済みのデータは、読み込み時（getProductVariants）に
+// その場で新形式へ変換して扱う。保存データ自体は書き換えないので、
+// このファイルを入れ替えただけで既存の設定が消えることはない
+// （管理画面で開いて保存し直した時点で、新形式として上書き保存される）。
+// 絶対価格が設定されていた選択肢は、価格計算時（computeVariantOptionPrice）
+// にそのまま最優先で使われる。管理画面の編集欄を開いた時は、その時点の
+// 商品の基本価格との差額に変換して＋／－表示するので、そのまま保存すれば
+// 新形式（差額方式）に統一される。
 //
 // 【レジ画面での挙動】
 // generateCustomButtons()（register.js）をフックし、描画された商品ボタンの
 // うち「バリエーション設定済み」の商品には🎨バッジを付け、クリック時の
 // 挙動を「バリエーション選択ポップアップを開く」ように上書きする。
-// 選択すると、選ばれた選択肢の名前を商品名に合成した「仮の商品オブジェクト」
-// （例: 名前="Tシャツ（Mサイズ）"）を作り、既存の checkAndAddToCart() に
-// そのまま渡す（年齢確認・詐欺注意などの既存ロジックをそのまま活かすため）。
+// ポップアップでは、質問ごとに選択肢（単一選択＝1つだけ選べる／複数選択＝
+// チェックボックス）を選び、合計金額を見ながら「🛒 カートに追加」を押すと、
+// 選ばれた選択肢の名前をすべて商品名に合成した「仮の商品オブジェクト」
+// （例: 名前="Tシャツ（Mサイズ・チーズ）"、価格＝基本価格＋選ばれた
+// 差額の合計）を作り、既存の checkAndAddToCart() にそのまま渡す
+// （年齢確認・詐欺注意などの既存ロジックをそのまま活かすため）。
 // 商品名にバリエーションが含まれる状態でカートに入るため、
 // 既存のレシート・履歴・XLSX出力・税区分集計は無改修のまま
-// 「Tシャツ（Mサイズ）」単位の内訳として残る。
+// 「Tシャツ（Mサイズ・チーズ）」単位の内訳として残る。
 //
 // 【商品管理画面での挙動】
 // product-screenのtop-barに「🎨 バリエーション設定」ボタンを追加する
 // （product-export-system.jsのボタン自動注入と同じ方式）。
-// 押すと、登録済み商品をブロック一覧から選び、グループ名と選択肢
-// （ラベル・任意の価格上書き）を設定できるモーダルが開く。
+// 押すと、登録済み商品をブロック一覧から選び、質問（グループ）を
+// 好きな数だけ追加し、それぞれに選択肢（ラベル・＋／－・差額）と
+// 「複数選択できる」チェックボックスを設定できるモーダルが開く。
 //
 // register.js / ui.js / master-mgmt.js / index.html は直接編集せず、
 // 他の追加機能ファイルと同じ「フック/DOM注入方式」で実現する。
@@ -58,27 +92,86 @@ function getAllProductVariants() {
     }
 }
 
+// 旧形式 { groupLabel, options:[{label, price}] } を
+// 新形式 { questions:[{label, multi, options:[...]}] } に、その場で変換する。
+// 保存データそのものは書き換えない（読み込み時の変換のみ）。
+function normalizeVariantConfig(raw) {
+    if (!raw) return null;
+
+    if (Array.isArray(raw.questions)) {
+        // すでに新形式
+        return raw.questions.length > 0 ? raw : null;
+    }
+
+    // 旧形式（単一グループ・絶対価格）からの変換
+    if (Array.isArray(raw.options) && raw.options.length > 0) {
+        return {
+            questions: [{
+                label: raw.groupLabel || '',
+                multi: false,
+                options: raw.options.map(o => ({
+                    label: o.label,
+                    // 絶対価格（旧仕様）はそのまま保持し、価格計算時に最優先で使う
+                    price: (o.price === null || o.price === undefined || o.price === '') ? null : Number(o.price),
+                    sign: '+',
+                    amount: 0
+                }))
+            }]
+        };
+    }
+
+    return null;
+}
+
 function getProductVariants(jan) {
     if (!jan) return null;
     const all = getAllProductVariants();
-    return all[jan] || null;
+    return normalizeVariantConfig(all[jan] || null);
+}
+
+// 選択肢1つぶんの最終価格を計算する。
+// ・price（絶対価格。旧仕様からの互換用）が設定されていれば最優先で使う
+// ・そうでなければ、基本価格に sign(+/-) と amount(差額・円) を適用する
+function computeVariantOptionPrice(basePrice, opt) {
+    const base = Number(basePrice) || 0;
+    if (opt && opt.price !== null && opt.price !== undefined && opt.price !== '') {
+        return Number(opt.price);
+    }
+    const amount = Number(opt && opt.amount) || 0;
+    const sign = (opt && opt.sign === '-') ? -1 : 1;
+    return base + sign * amount;
+}
+
+// 「＋¥50」「－¥50」のような差額表示文字列を作る（差額0なら空文字）
+function formatVariantPriceDiff(diff) {
+    if (!diff) return '';
+    return diff > 0 ? `+¥${diff.toLocaleString()}` : `-¥${Math.abs(diff).toLocaleString()}`;
 }
 
 // options が空になった場合は設定自体を削除する（「設定済み」バッジの誤表示を防ぐため）
 function saveProductVariantsFor(jan, config) {
     if (!jan) return;
     const all = getAllProductVariants();
-    if (!config || !Array.isArray(config.options) || config.options.length === 0) {
+
+    const cleanedQuestions = (config && Array.isArray(config.questions) ? config.questions : [])
+        .map((q, idx) => ({
+            // 質問名が空欄でも設定自体は保存できるよう、フォールバック名を付ける
+            label: (q.label || '').trim() || `選択肢${idx + 1}`,
+            multi: !!q.multi,
+            options: (Array.isArray(q.options) ? q.options : [])
+                .map(o => ({
+                    label: (o.label || '').trim(),
+                    sign: o.sign === '-' ? '-' : '+',
+                    amount: Number(o.amount) || 0
+                }))
+                .filter(o => o.label !== '')
+        }))
+        .filter(q => q.options.length > 0);
+
+    if (cleanedQuestions.length === 0) {
         delete all[jan];
     } else {
-        all[jan] = {
-            groupLabel: (config.groupLabel || '').trim(),
-            options: config.options.map(o => ({
-                label: (o.label || '').trim(),
-                price: (o.price === '' || o.price === null || o.price === undefined) ? null : Number(o.price)
-            })).filter(o => o.label !== '')
-        };
-        if (all[jan].options.length === 0) delete all[jan];
+        all[jan] = { questions: cleanedQuestions };
     }
     localStorage.setItem(PRODUCT_VARIANTS_KEY, JSON.stringify(all));
 }
@@ -92,6 +185,24 @@ function getProductListForVariantsSafe() {
     } catch (e) {
         return [];
     }
+}
+
+/* =========================================================
+   選択内容（questions配列 × 選択済みラベルの配列）から、
+   合計価格・選ばれた選択肢名の一覧を計算する共通処理
+   ========================================================= */
+function computeVariantSelectionsSummary(basePrice, questions, selections) {
+    const labels = [];
+    let total = Number(basePrice) || 0;
+    (questions || []).forEach((q, qIdx) => {
+        (selections[qIdx] || []).forEach(label => {
+            const opt = (q.options || []).find(o => o.label === label);
+            if (!opt) return;
+            labels.push(label);
+            total += computeVariantOptionPrice(basePrice, opt) - (Number(basePrice) || 0);
+        });
+    });
+    return { labels, total };
 }
 
 /* =========================================================
@@ -133,7 +244,7 @@ function applyVariantButtonOverrides() {
     buttons.forEach((btn, idx) => {
         const prod = orderedProducts[idx];
         const variantConfig = getProductVariants(prod.jan);
-        if (!variantConfig || !variantConfig.options || variantConfig.options.length === 0) return;
+        if (!variantConfig || !variantConfig.questions || variantConfig.questions.length === 0) return;
 
         if (!btn.querySelector('.prod-variant-badge')) {
             const badge = document.createElement('span');
@@ -169,6 +280,13 @@ function applyVariantButtonOverrides() {
 })();
 
 /* ---------- バリエーション選択ポップアップ（レジ担当者用） ---------- */
+// 開いている間の選択状態と対象商品・設定を、モーダルの外（このスコープ）で保持する。
+// モーダル自体は一度だけ作り、確定ボタン等のイベントリスナーも一度だけ登録するため
+// （毎回開くたびにリスナーを追加すると多重発火してしまう）、現在の対象は
+// variantPickerContext を通じて参照する。
+let variantPickerDraftSelections = [];
+let variantPickerContext = null;
+
 function ensureVariantPickerModal() {
     let modal = document.getElementById('variant-picker-modal');
     if (modal) return modal;
@@ -181,12 +299,16 @@ function ensureVariantPickerModal() {
     ].join(';');
 
     modal.innerHTML = `
-        <div style="background:#fff; width:min(480px, 92vw); max-height:80vh; border-radius:10px; padding:18px; display:flex; flex-direction:column;">
+        <div style="background:#fff; width:min(520px, 92vw); max-height:85vh; border-radius:10px; padding:18px; display:flex; flex-direction:column;">
             <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; gap:10px;">
                 <h3 id="variant-picker-title" style="margin:0; font-size:16px;">🎨 バリエーションを選択</h3>
                 <button type="button" id="variant-picker-close" style="padding:6px 14px; border:1px solid #ccc; border-radius:6px; background:#fff; cursor:pointer; white-space:nowrap;">閉じる ✕</button>
             </div>
-            <div id="variant-picker-body" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(120px, 1fr)); gap:10px; overflow-y:auto;"></div>
+            <div id="variant-picker-body" style="overflow-y:auto; display:flex; flex-direction:column; gap:14px; flex:1;"></div>
+            <div style="display:flex; align-items:center; justify-content:space-between; margin-top:14px; padding-top:12px; border-top:1px solid #eee;">
+                <div id="variant-picker-total" style="font-size:15px; font-weight:bold;"></div>
+                <button type="button" id="variant-picker-confirm" style="padding:10px 20px; border:none; color:#fff; background:#7c4dff; border-radius:8px; cursor:pointer; font-weight:bold;">🛒 カートに追加</button>
+            </div>
         </div>
     `;
     document.body.appendChild(modal);
@@ -194,52 +316,105 @@ function ensureVariantPickerModal() {
     modal.querySelector('#variant-picker-close').addEventListener('click', closeVariantPickerModal);
     modal.addEventListener('click', (e) => { if (e.target === modal) closeVariantPickerModal(); });
 
+    modal.querySelector('#variant-picker-confirm').addEventListener('click', () => {
+        if (!variantPickerContext) return;
+        const { prod, variantConfig } = variantPickerContext;
+        const { labels, total } = computeVariantSelectionsSummary(prod.price, variantConfig.questions, variantPickerDraftSelections);
+
+        if (typeof playSound === 'function') playSound('click');
+        const virtualProd = Object.assign({}, prod, {
+            name: labels.length > 0 ? `${prod.name}（${labels.join('・')}）` : prod.name,
+            price: total
+        });
+        closeVariantPickerModal();
+        if (typeof checkAndAddToCart === 'function') checkAndAddToCart(virtualProd);
+    });
+
     return modal;
 }
 
 function closeVariantPickerModal() {
     const modal = document.getElementById('variant-picker-modal');
     if (modal) modal.style.display = 'none';
+    variantPickerContext = null;
     if (typeof focusJanInput === 'function') focusJanInput();
+}
+
+function renderVariantPickerBody() {
+    const modal = document.getElementById('variant-picker-modal');
+    if (!modal || !variantPickerContext) return;
+    const { prod, variantConfig } = variantPickerContext;
+    const body = modal.querySelector('#variant-picker-body');
+    body.innerHTML = '';
+
+    variantConfig.questions.forEach((q, qIdx) => {
+        if (!q.options || q.options.length === 0) return;
+
+        const section = document.createElement('div');
+        const safeQLabel = (typeof escapeHtml === 'function') ? escapeHtml(q.label || 'バリエーション') : (q.label || 'バリエーション');
+        const multiNote = q.multi ? '<small style="color:#888; font-weight:normal;">（複数選択可）</small>' : '';
+        const heading = document.createElement('div');
+        heading.style.cssText = 'font-weight:bold; margin-bottom:6px;';
+        heading.innerHTML = `${safeQLabel}を選んでください${multiNote}`;
+        section.appendChild(heading);
+
+        const grid = document.createElement('div');
+        grid.style.cssText = 'display:grid; grid-template-columns:repeat(auto-fill, minmax(110px, 1fr)); gap:8px;';
+
+        const selectedSet = variantPickerDraftSelections[qIdx] || [];
+        q.options.forEach(opt => {
+            const price = computeVariantOptionPrice(prod.price, opt);
+            const diff = price - (Number(prod.price) || 0);
+            const diffLabel = formatVariantPriceDiff(diff);
+            const selected = selectedSet.includes(opt.label);
+            const safeLabel = (typeof escapeHtml === 'function') ? escapeHtml(opt.label) : opt.label;
+
+            const card = document.createElement('button');
+            card.type = 'button';
+            card.style.cssText = [
+                'padding:12px 6px', `border:2px solid ${selected ? '#7c4dff' : '#ddd'}`, 'border-radius:10px',
+                `background:${selected ? '#ede7f6' : '#fafafa'}`, 'cursor:pointer', 'font-size:13px',
+                'font-weight:bold', 'text-align:center', 'transition:background 120ms, border-color 120ms'
+            ].join(';');
+            card.innerHTML = `${safeLabel}${diffLabel ? `<br><small style="font-weight:normal; color:#666;">${diffLabel}</small>` : ''}`;
+
+            card.addEventListener('click', () => {
+                if (typeof playSound === 'function') playSound('click');
+                if (q.multi) {
+                    const cur = variantPickerDraftSelections[qIdx] || (variantPickerDraftSelections[qIdx] = []);
+                    const pos = cur.indexOf(opt.label);
+                    if (pos === -1) cur.push(opt.label); else cur.splice(pos, 1);
+                } else {
+                    variantPickerDraftSelections[qIdx] = [opt.label];
+                }
+                renderVariantPickerBody();
+            });
+
+            grid.appendChild(card);
+        });
+
+        section.appendChild(grid);
+        body.appendChild(section);
+    });
+
+    const { total } = computeVariantSelectionsSummary(prod.price, variantConfig.questions, variantPickerDraftSelections);
+    modal.querySelector('#variant-picker-total').innerText = `合計 ¥${total.toLocaleString()}`;
 }
 
 function openVariantPickerModal(prod, variantConfig) {
     const modal = ensureVariantPickerModal();
+    variantPickerContext = { prod, variantConfig };
+
+    // 単一選択の質問は先頭の選択肢を初期選択、複数選択の質問は未選択で開始する
+    variantPickerDraftSelections = variantConfig.questions.map(q =>
+        q.multi ? [] : (q.options && q.options[0] ? [q.options[0].label] : [])
+    );
+
     const title = modal.querySelector('#variant-picker-title');
-    const body = modal.querySelector('#variant-picker-body');
     const safeName = (typeof escapeHtml === 'function') ? escapeHtml(prod.name) : prod.name;
-    const safeGroupLabel = (typeof escapeHtml === 'function') ? escapeHtml(variantConfig.groupLabel || '') : (variantConfig.groupLabel || '');
+    title.innerHTML = `🎨 ${safeName}`;
 
-    title.innerHTML = `🎨 ${safeName}<br><small style="font-weight:normal;">${safeGroupLabel || 'バリエーション'}を選んでください</small>`;
-    body.innerHTML = '';
-
-    variantConfig.options.forEach(opt => {
-        const price = (opt.price !== null && opt.price !== undefined) ? Number(opt.price) : prod.price;
-        const safeLabel = (typeof escapeHtml === 'function') ? escapeHtml(opt.label) : opt.label;
-
-        const card = document.createElement('button');
-        card.type = 'button';
-        card.style.cssText = [
-            'padding:16px 8px', 'border:2px solid #ddd', 'border-radius:10px', 'background:#fafafa',
-            'cursor:pointer', 'font-size:14px', 'font-weight:bold', 'text-align:center',
-            'transition:background 120ms, border-color 120ms'
-        ].join(';');
-        card.innerHTML = `${safeLabel}<br><small style="font-weight:normal; color:#666;">¥${price.toLocaleString()}</small>`;
-        card.addEventListener('mouseenter', () => { card.style.background = '#ede7f6'; card.style.borderColor = '#7c4dff'; });
-        card.addEventListener('mouseleave', () => { card.style.background = '#fafafa'; card.style.borderColor = '#ddd'; });
-
-        card.addEventListener('click', () => {
-            const virtualProd = Object.assign({}, prod, {
-                name: `${prod.name}（${opt.label}）`,
-                price: price
-            });
-            closeVariantPickerModal();
-            if (typeof checkAndAddToCart === 'function') checkAndAddToCart(virtualProd);
-        });
-
-        body.appendChild(card);
-    });
-
+    renderVariantPickerBody();
     modal.style.display = 'flex';
 }
 
@@ -289,7 +464,7 @@ function ensureProductVariantAdminModal() {
     ].join(';');
 
     modal.innerHTML = `
-        <div style="background:#fff; width:min(720px, 92vw); max-height:85vh; border-radius:10px; padding:16px; display:flex; flex-direction:column;">
+        <div style="background:#fff; width:min(760px, 94vw); max-height:88vh; border-radius:10px; padding:16px; display:flex; flex-direction:column;">
             <div id="pv-admin-list-view">
                 <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; gap:10px;">
                     <h3 style="margin:0; white-space:nowrap;">🎨 バリエーション設定：商品を選択</h3>
@@ -305,12 +480,9 @@ function ensureProductVariantAdminModal() {
                     <button type="button" id="pv-admin-back" style="padding:6px 14px; border:1px solid #ccc; border-radius:6px; background:#fff; cursor:pointer; white-space:nowrap;">← 商品一覧に戻る</button>
                     <h3 id="pv-admin-editor-title" style="margin:0; flex:1; text-align:right;"></h3>
                 </div>
-                <div style="margin-bottom:12px;">
-                    <label style="font-weight:bold; display:block; margin-bottom:4px;">グループ名（例：サイズ／キャラ／色）</label>
-                    <input type="text" id="pv-admin-group-label" placeholder="例: サイズ" style="width:100%; box-sizing:border-box; padding:8px; border:1px solid #ccc; border-radius:6px;">
-                </div>
-                <div id="pv-admin-options-list" style="display:flex; flex-direction:column; gap:8px; margin-bottom:10px; overflow-y:auto; max-height:40vh;"></div>
-                <button type="button" id="pv-admin-add-option" style="align-self:flex-start; padding:6px 12px; border:1px dashed #7c4dff; color:#7c4dff; background:#fff; border-radius:6px; cursor:pointer; margin-bottom:14px;">＋ 選択肢を追加</button>
+                <div style="font-size:12px; color:#888; margin-bottom:10px;">質問（サイズ・トッピングなど）をいくつでも追加できます。価格は基本価格からの差額（＋／－）で設定します。</div>
+                <div id="pv-admin-questions-list" style="display:flex; flex-direction:column; gap:10px; margin-bottom:10px; overflow-y:auto; max-height:52vh; padding-right:4px;"></div>
+                <button type="button" id="pv-admin-add-question" style="align-self:flex-start; padding:8px 14px; border:2px dashed #7c4dff; color:#7c4dff; background:#f8f6ff; border-radius:6px; cursor:pointer; margin-bottom:14px; font-weight:bold;">＋ 質問を追加（例：サイズ／トッピングなど）</button>
                 <div style="display:flex; gap:10px; justify-content:flex-end;">
                     <button type="button" id="pv-admin-delete" style="padding:8px 16px; border:1px solid #e53935; color:#e53935; background:#fff; border-radius:6px; cursor:pointer;">バリエーションを削除</button>
                     <button type="button" id="pv-admin-save" style="padding:8px 20px; border:none; color:#fff; background:#7c4dff; border-radius:6px; cursor:pointer; font-weight:bold;">保存</button>
@@ -324,7 +496,7 @@ function ensureProductVariantAdminModal() {
     modal.addEventListener('click', (e) => { if (e.target === modal) closeProductVariantAdminModal(); });
     modal.querySelector('#pv-admin-search').addEventListener('input', (e) => renderProductVariantAdminList(e.target.value));
     modal.querySelector('#pv-admin-back').addEventListener('click', showProductVariantAdminListView);
-    modal.querySelector('#pv-admin-add-option').addEventListener('click', () => addProductVariantOptionRow());
+    modal.querySelector('#pv-admin-add-question').addEventListener('click', () => addProductVariantQuestionBlock(null));
     modal.querySelector('#pv-admin-save').addEventListener('click', saveProductVariantAdminEditor);
     modal.querySelector('#pv-admin-delete').addEventListener('click', deleteProductVariantAdminEditor);
 
@@ -406,57 +578,133 @@ function renderProductVariantAdminList(query) {
 }
 
 let productVariantEditingJan = null;
+// 編集画面を開いた時点の商品の基本価格。旧形式（絶対価格）の選択肢を
+// ＋／－差額表示に変換するために使う。
+let productVariantEditingBasePrice = 0;
+let pvQuestionAutoId = 0;
 
 function openProductVariantEditor(prod) {
     productVariantEditingJan = prod.jan;
+    productVariantEditingBasePrice = Number(prod.price) || 0;
     document.getElementById('pv-admin-list-view').style.display = 'none';
     document.getElementById('pv-admin-editor-view').style.display = 'block';
 
-    const safeName = (typeof escapeHtml === 'function') ? escapeHtml(prod.name) : prod.name;
     document.getElementById('pv-admin-editor-title').innerText = `対象商品：${prod.name}`;
 
     const existing = getProductVariants(prod.jan);
-    document.getElementById('pv-admin-group-label').value = existing ? (existing.groupLabel || '') : '';
 
-    const list = document.getElementById('pv-admin-options-list');
+    const list = document.getElementById('pv-admin-questions-list');
     list.innerHTML = '';
 
-    const initialOptions = (existing && existing.options && existing.options.length > 0)
-        ? existing.options
-        : [{ label: '', price: null }, { label: '', price: null }];
-
-    initialOptions.forEach(opt => addProductVariantOptionRow(opt.label, opt.price));
+    if (existing && existing.questions && existing.questions.length > 0) {
+        existing.questions.forEach(q => addProductVariantQuestionBlock(q));
+    } else {
+        addProductVariantQuestionBlock(null);
+    }
 
     document.getElementById('pv-admin-delete').style.display = existing ? 'inline-block' : 'none';
 }
 
-function addProductVariantOptionRow(label = '', price = null) {
-    const list = document.getElementById('pv-admin-options-list');
-    if (!list) return;
+// 質問1つぶんのブロック（質問名・複数選択チェック・選択肢欄・質問削除ボタン）を作る。
+// 戻り値のブロック要素を、bulk-add-system.js が「まとめて追加」ボタンの
+// 差し込み先として使う（フック方式で拡張できるよう、必ず要素を返す）。
+function addProductVariantQuestionBlock(question) {
+    const container = document.getElementById('pv-admin-questions-list');
+    if (!container) return null;
+
+    const qid = 'pvq' + (++pvQuestionAutoId);
+    const block = document.createElement('div');
+    block.className = 'pv-admin-question-block';
+    block.dataset.qid = qid;
+    block.style.cssText = 'border:1px solid #e0dcf5; border-radius:10px; padding:12px; background:#faf9ff;';
+
+    const safeLabel = (question && question.label) ? ((typeof escapeHtml === 'function') ? escapeHtml(question.label) : question.label) : '';
+    const isMulti = !!(question && question.multi);
+
+    block.innerHTML = `
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+            <input type="text" class="pv-q-label" placeholder="質問名（例：サイズを選んでください）" value="${safeLabel}" style="flex:1; padding:8px; border:1px solid #ccc; border-radius:6px; font-weight:bold;">
+            <button type="button" class="pv-q-remove" title="この質問を削除" style="padding:6px 10px; border:1px solid #e53935; color:#e53935; background:#fff; border-radius:6px; cursor:pointer; white-space:nowrap;">この質問を削除 ✕</button>
+        </div>
+        <label style="display:flex; align-items:center; gap:6px; font-size:13px; color:#555; margin-bottom:10px; cursor:pointer;">
+            <input type="checkbox" class="pv-q-multi" ${isMulti ? 'checked' : ''}> 複数選択できるようにする（チェックボックス形式）
+        </label>
+        <div class="pv-q-options-list" style="display:flex; flex-direction:column; gap:6px; margin-bottom:8px;"></div>
+        <button type="button" class="pv-q-add-option" style="padding:6px 12px; border:1px dashed #7c4dff; color:#7c4dff; background:#fff; border-radius:6px; cursor:pointer;">＋ 選択肢を追加</button>
+    `;
+
+    block.querySelector('.pv-q-remove').addEventListener('click', () => block.remove());
+
+    const optionsList = block.querySelector('.pv-q-options-list');
+    block.querySelector('.pv-q-add-option').addEventListener('click', () => addProductVariantOptionRow(optionsList));
+
+    container.appendChild(block);
+
+    const initialOptions = (question && Array.isArray(question.options) && question.options.length > 0)
+        ? question.options
+        : [{ label: '', sign: '+', amount: 0 }, { label: '', sign: '+', amount: 0 }];
+
+    initialOptions.forEach(opt => addProductVariantOptionRow(optionsList, opt));
+
+    return block;
+}
+
+// 選択肢1行ぶんの入力欄（選択肢名・＋／－切替ボタン・差額入力・行削除ボタン）を作る。
+// opt.price（旧仕様の絶対価格）が入っている場合は、その場で
+// productVariantEditingBasePrice との差額に変換して表示する。
+function addProductVariantOptionRow(optionsListEl, opt) {
+    if (!optionsListEl) return;
+    opt = opt || {};
+
+    let sign = opt.sign === '-' ? '-' : '+';
+    let amount = Number(opt.amount) || 0;
+    if (opt.price !== null && opt.price !== undefined && opt.price !== '') {
+        const diff = Number(opt.price) - (Number(productVariantEditingBasePrice) || 0);
+        sign = diff < 0 ? '-' : '+';
+        amount = Math.abs(diff);
+    }
 
     const row = document.createElement('div');
     row.className = 'pv-admin-option-row';
-    row.style.cssText = 'display:flex; gap:8px; align-items:center;';
+    row.style.cssText = 'display:flex; gap:6px; align-items:center;';
+    const safeLabel = (typeof escapeHtml === 'function') ? escapeHtml(opt.label || '') : (opt.label || '');
     row.innerHTML = `
-        <input type="text" class="pv-opt-label" placeholder="選択肢名（例: M）" value="${(typeof escapeHtml === 'function') ? escapeHtml(label) : label}" style="flex:1; padding:8px; border:1px solid #ccc; border-radius:6px;">
-        <input type="number" class="pv-opt-price" placeholder="価格（空欄で基本価格）" value="${price !== null && price !== undefined ? price : ''}" style="width:170px; padding:8px; border:1px solid #ccc; border-radius:6px;">
+        <input type="text" class="pv-opt-label" placeholder="選択肢名（例: 中盛）" value="${safeLabel}" style="flex:1; padding:8px; border:1px solid #ccc; border-radius:6px;">
+        <button type="button" class="pv-opt-sign" data-sign="${sign}" style="width:42px; padding:8px 0; border:none; color:#fff; background:${sign === '-' ? '#e53935' : '#43a047'}; border-radius:6px; cursor:pointer; font-weight:bold; font-size:16px;">${sign}</button>
+        <input type="number" class="pv-opt-amount" min="0" placeholder="差額（円）" value="${amount || ''}" style="width:110px; padding:8px; border:1px solid #ccc; border-radius:6px;">
         <button type="button" class="pv-opt-remove" style="padding:8px 10px; border:1px solid #e53935; color:#e53935; background:#fff; border-radius:6px; cursor:pointer;">✕</button>
     `;
+
+    const signBtn = row.querySelector('.pv-opt-sign');
+    signBtn.addEventListener('click', () => {
+        const next = signBtn.dataset.sign === '-' ? '+' : '-';
+        signBtn.dataset.sign = next;
+        signBtn.innerText = next;
+        signBtn.style.background = next === '-' ? '#e53935' : '#43a047';
+    });
     row.querySelector('.pv-opt-remove').addEventListener('click', () => row.remove());
-    list.appendChild(row);
+
+    optionsListEl.appendChild(row);
 }
 
 function saveProductVariantAdminEditor() {
     if (!productVariantEditingJan) return;
 
-    const groupLabel = document.getElementById('pv-admin-group-label').value;
-    const rows = Array.from(document.querySelectorAll('#pv-admin-options-list .pv-admin-option-row'));
-    const options = rows.map(row => ({
-        label: row.querySelector('.pv-opt-label').value,
-        price: row.querySelector('.pv-opt-price').value
-    })).filter(o => (o.label || '').trim() !== '');
+    const blocks = Array.from(document.querySelectorAll('#pv-admin-questions-list .pv-admin-question-block'));
+    const questions = blocks.map(block => {
+        const label = block.querySelector('.pv-q-label').value;
+        const multi = block.querySelector('.pv-q-multi').checked;
+        const rows = Array.from(block.querySelectorAll('.pv-q-options-list .pv-admin-option-row'));
+        const options = rows.map(row => ({
+            label: row.querySelector('.pv-opt-label').value,
+            sign: row.querySelector('.pv-opt-sign').dataset.sign,
+            amount: row.querySelector('.pv-opt-amount').value
+        }));
+        return { label, multi, options };
+    });
 
-    if (options.length === 0) {
+    const hasAnyOption = questions.some(q => q.options.some(o => (o.label || '').trim() !== ''));
+    if (!hasAnyOption) {
         if (typeof playSound === 'function') playSound('error');
         if (typeof showCustomConfirm === 'function') {
             showCustomConfirm('選択肢を1つ以上入力してください。', 'せんたくし を ひとつ いじょう にゅうりょく し て ください。', () => {}, false);
@@ -464,7 +712,7 @@ function saveProductVariantAdminEditor() {
         return;
     }
 
-    saveProductVariantsFor(productVariantEditingJan, { groupLabel, options });
+    saveProductVariantsFor(productVariantEditingJan, { questions });
     if (typeof playSound === 'function') playSound('success');
     showProductVariantAdminListView();
 }
