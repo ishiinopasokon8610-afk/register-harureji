@@ -27,7 +27,7 @@
 // ==========================================
 
 // ★リリースのたびに、この値を書き換えてください★
-const APP_VERSION = 'v3.0.6';
+const APP_VERSION = 'v3.0.7';
 
 // このファイル自身のURL（script要素のsrcから逆算する。
 // index.html側でファイル名を変更・移動していても追従できるようにするため）
@@ -96,8 +96,29 @@ function showUpdateAvailableNotice(latestVersion) {
     `;
     document.body.appendChild(notice);
 
-    notice.querySelector('#app-update-reload-btn').addEventListener('click', () => {
-        location.reload();
+    notice.querySelector('#app-update-reload-btn').addEventListener('click', async () => {
+        // 【不具合修正】location.reload()だけだと、Service Workerや
+        // ブラウザのキャッシュに残っている「古いファイル」がそのまま
+        // 再度読み込まれてしまい、バージョンが変わらないまま
+        // 「新しいバージョンがあります」が繰り返し表示され続ける
+        // という現象が起きていた。
+        // リロード前にCache Storageを空にし、Service Workerの登録も
+        // 解除しておくことで、次の読み込みが確実にネットワークから
+        // 最新ファイルを取得するようにする。
+        try {
+            if ('caches' in window) {
+                const keys = await caches.keys();
+                await Promise.all(keys.map((k) => caches.delete(k)));
+            }
+            if ('serviceWorker' in navigator) {
+                const regs = await navigator.serviceWorker.getRegistrations();
+                await Promise.all(regs.map((r) => r.unregister()));
+            }
+        } catch (err) {
+            console.warn('キャッシュ削除に失敗しました（そのままリロードします）:', err);
+        } finally {
+            location.reload();
+        }
     });
     notice.querySelector('#app-update-dismiss-btn').addEventListener('click', () => {
         sessionStorage.setItem(UPDATE_CHECK_DISMISSED_KEY, latestVersion);
