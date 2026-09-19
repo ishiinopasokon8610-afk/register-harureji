@@ -55,6 +55,41 @@
 //   動的に読み取って同一オリジンのスクリプトも全てプリキャッシュする
 //   ように変更（shop-id-system.js。詳細は下のinstallハンドラのコメント参照）。
 // ==========================================
+// ==========================================
+// 【今回の更新内容（変更点まとめ）】
+// ・不具合修正: 「pushした直後だと、アップデートされていない状態が出る」
+//   原因の1つは、GitHub Pagesが返すファイルにCache-Control: max-age=600
+//   （＝ブラウザが10分間は再確認せず手元のコピーを使ってよい）が付くこと。
+//   install時のプリキャッシュ（cache.addAll / cache.add）も、アプリの殻の
+//   ネットワーク優先（fetch(req)）も、この「ブラウザ標準のHTTPキャッシュ」を
+//   経由していたため、直近10分以内に一度取得したファイルは、サーバーに
+//   新しい版があっても「古い版」がそのまま新しいCACHE_NAMEのキャッシュへ
+//   入ってしまっていた。そのうえ scriptはキャッシュ優先なので、一度古い版が
+//   入るとCACHE_VERSIONを次に上げるまで古いまま固定されてしまう。
+//   → プリキャッシュは cache:'reload'（HTTPキャッシュを使わず必ずサーバーから
+//   取得）、アプリの殻のネットワーク優先は cache:'no-cache'（毎回サーバーに
+//   確認）に変更した。
+// ・改善: ネットワークから取れた応答が正常（res.ok）な時だけ殻のキャッシュを
+//   更新する（エラー応答で正しいキャッシュを上書きしないため）。
+//   オフライン時、殻のURLがキャッシュと完全一致しなくても
+//   ./index.html を返せるようにした。
+// ==========================================
+// ==========================================
+// 【今回の更新内容（変更点まとめ）】
+// ・不具合修正: Googleドライブ連携済みの端末で、アプリを開き直すたびに
+//   「データの取り込みが完了しました」の通知が毎回出てしまう点を修正した
+//   （google-drive-auto-restore-dedup-fix.js）。起動時の自動復元
+//   （autoRestoreFromGoogleDriveOnLoad）の実行中だけ、Driveバックアップの
+//   保存時刻（savedAt）が前回自動取り込みした時と同じであれば、取り込み処理
+//   （＝完了通知も含む）自体をスキップする。手動の「📥 Driveから復元」や
+//   JSONファイルからの復元は、これまで通り毎回きちんと取り込む。
+// ・このファイルは index.html に <script> タグを追加するだけで、上のinstall時の
+//   動的プリキャッシュ（<script src>の自動読み取り）の対象に自動で入る。
+//   sw.js にファイル名を書き足す必要はない。ただし、配布する時は
+//   CACHE_VERSION（このファイル）と APP_VERSION（update-notification-system.js）
+//   の2つを、手動で一緒に上げること（CACHE_VERSIONが同じままだと、
+//   キャッシュ優先のスクリプトが古いまま入れ替わらない）。
+// ==========================================
 const CACHE_VERSION = 'v4';
 const CACHE_NAME = `register-cache-${CACHE_VERSION}`;
 const ASSETS = [
@@ -62,6 +97,12 @@ const ASSETS = [
   './index.html',
   './manifest.json'
 ];
+
+// ブラウザ標準のHTTPキャッシュ（GitHub Pagesは最大10分）を使わず、必ず
+// サーバーから最新を取得するためのリクエストを作る（プリキャッシュ用）
+function freshRequest(url) {
+  return new Request(url, { cache: 'reload' });
+}
 
 // アプリの殻（ナビゲーション本体）とみなすリクエストかどうか
 function isAppShellRequest(request) {
@@ -75,7 +116,7 @@ self.addEventListener('install', (e) => {
   e.waitUntil(
     (async () => {
       const cache = await caches.open(CACHE_NAME);
-      await cache.addAll(ASSETS);
+      await cache.addAll(ASSETS.map(freshRequest));
 
       // 【今回追加：追加機能スクリプトのプリキャッシュ】
       // これまで ASSETS には index.html／manifest.json しか入っておらず、
@@ -101,7 +142,7 @@ self.addEventListener('install', (e) => {
 
         await Promise.all(
           scriptSrcs.map((src) =>
-            cache.add(src).catch((err) => {
+            cache.add(freshRequest(src)).catch((err) => {
               console.warn(`[sw] プリキャッシュに失敗しました（このファイルだけスキップ）: ${src}`, err);
             })
           )
@@ -141,11 +182,17 @@ self.addEventListener('fetch', (e) => {
   if (isAppShellRequest(req)) {
     // ① アプリの殻：ネットワーク優先。取得できたらキャッシュも更新する。
     e.respondWith(
-      fetch(req).then((networkRes) => {
-        const clone = networkRes.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put(req, clone));
+      // cache:'no-cache' ＝ HTTPキャッシュにコピーがあっても、必ずサーバーに
+      // 「更新されていないか」を確認してから使う（max-age=600の間の古い殻を防ぐ）
+      fetch(req, { cache: 'no-cache' }).then((networkRes) => {
+        if (networkRes.ok) {
+          const clone = networkRes.clone();
+          e.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.put(req, clone)));
+        }
         return networkRes;
-      }).catch(() => caches.match(req))
+      }).catch(() =>
+        caches.match(req).then((cached) => cached || caches.match('./index.html'))
+      )
     );
     return;
   }

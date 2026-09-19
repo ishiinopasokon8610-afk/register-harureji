@@ -27,7 +27,7 @@
 // ==========================================
 
 // ★リリースのたびに、この値を書き換えてください★
-const APP_VERSION = 'v3.0.7.5';
+const APP_VERSION = 'v3.0.8';
 
 // このファイル自身のURL（script要素のsrcから逆算する。
 // index.html側でファイル名を変更・移動していても追従できるようにするため）
@@ -42,6 +42,49 @@ function getSelfScriptUrl() {
 
 const UPDATE_CHECK_DISMISSED_KEY = 'pos_update_notice_dismissed_version';
 const UPDATE_CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5分ごと
+const UPDATE_CHECK_MIN_GAP_MS = 30 * 1000; // タブに戻った時の再チェックは、前回から最低30秒あける
+let lastAppUpdateCheckAt = 0;
+
+// 【不具合修正】latest !== APP_VERSION（「違えば通知」）だと、push直後の
+// CDN反映の途中で、まだ古いファイルを返す経路に当たった場合に、
+// すでに新しい版を使っている端末へ「新しいバージョンがあります（古い版の番号）」と
+// 逆向きの通知を出してしまう。数字として比べ、サーバー側の方が
+// 「新しい」時だけ通知する（v3.0.9 < v3.0.10 も正しく比べられる）。
+function isNewerAppVersion(latest, current) {
+    const toNums = (v) => (String(v).match(/\d+/g) || []).map(Number);
+    const a = toNums(latest);
+    const b = toNums(current);
+    // 数字で比べられない形式の場合は、従来どおり「違えば通知」にする
+    if (a.length === 0 || b.length === 0) return latest !== current;
+    const len = Math.max(a.length, b.length);
+    for (let i = 0; i < len; i++) {
+        const x = a[i] || 0;
+        const y = b[i] || 0;
+        if (x > y) return true;
+        if (x < y) return false;
+    }
+    return false;
+}
+
+// 【不具合修正】リロード直前に、今ページが使っているindex.html／JS／CSSを
+// 「HTTPキャッシュを使わず」取り直しておく。GitHub Pagesのファイルには
+// Cache-Control: max-age=600が付くため、直近10分以内に取得したファイルが
+// あると、location.reload()しても（Chromeは再読み込み時にメインのHTML以外を
+// 再確認しないため）古いファイルがそのまま使われ、バージョンが変わらない
+// 現象が起きていた。cache:'reload'で取得するとHTTPキャッシュ自体が最新に
+// 上書きされるので、そのあとのリロードで確実に新しい版が使われる。
+async function refreshAppAssetsBypassingHttpCache() {
+    const urls = new Set();
+    urls.add(location.origin + location.pathname);
+    document.querySelectorAll('script[src], link[rel="stylesheet"][href]').forEach((el) => {
+        const u = el.src || el.href;
+        if (u && u.startsWith(location.origin)) urls.add(u);
+    });
+    const all = Promise.all([...urls].map((u) => fetch(u, { cache: 'reload' }).catch(() => null)));
+    // 通信が遅くても、リロードが延々と始まらないよう最大8秒で切り上げる
+    const timeout = new Promise((resolve) => setTimeout(resolve, 8000));
+    await Promise.race([all, timeout]);
+}
 
 /* =========================================================
    ① バージョン表示（画面右下）
@@ -96,7 +139,11 @@ function showUpdateAvailableNotice(latestVersion) {
     `;
     document.body.appendChild(notice);
 
-    notice.querySelector('#app-update-reload-btn').addEventListener('click', async () => {
+    notice.querySelector('#app-update-reload-btn').addEventListener('click', async (ev) => {
+        // 連打防止＋「押した」ことが分かるように表示を変える
+        const reloadBtn = ev.currentTarget;
+        reloadBtn.disabled = true;
+        reloadBtn.textContent = '更新中…';
         // 【不具合修正】location.reload()だけだと、Service Workerや
         // ブラウザのキャッシュに残っている「古いファイル」がそのまま
         // 再度読み込まれてしまい、バージョンが変わらないまま
@@ -114,6 +161,9 @@ function showUpdateAvailableNotice(latestVersion) {
                 const regs = await navigator.serviceWorker.getRegistrations();
                 await Promise.all(regs.map((r) => r.unregister()));
             }
+            // ※必ず上のキャッシュ削除より「後」に行うこと。先に行うと、まだ生きている
+            //   古いService Workerが、Cache Storageの古いコピーをそのまま返してしまう。
+            await refreshAppAssetsBypassingHttpCache();
         } catch (err) {
             console.warn('キャッシュ削除に失敗しました（そのままリロードします）:', err);
         } finally {
@@ -133,6 +183,7 @@ function showUpdateAvailableNotice(latestVersion) {
 async function checkForAppUpdate() {
     const url = getSelfScriptUrl();
     if (!url) return; // 直接<script>で読み込まれていない環境（想定外）では何もしない
+    lastAppUpdateCheckAt = Date.now();
 
     try {
         const bustUrl = url + (url.includes('?') ? '&' : '?') + '_=' + Date.now();
@@ -143,7 +194,7 @@ async function checkForAppUpdate() {
         if (!match) return;
 
         const latestVersion = match[1];
-        if (latestVersion && latestVersion !== APP_VERSION) {
+        if (latestVersion && isNewerAppVersion(latestVersion, APP_VERSION)) {
             showUpdateAvailableNotice(latestVersion);
         }
     } catch (err) {
@@ -157,4 +208,13 @@ document.addEventListener('DOMContentLoaded', () => {
     // 起動直後はまだ読み込み中の可能性があるため少し待ってから初回チェック
     setTimeout(checkForAppUpdate, 10000);
     setInterval(checkForAppUpdate, UPDATE_CHECK_INTERVAL_MS);
+
+    // 【追加】タブ／アプリを開き直した（画面に戻ってきた）時にもすぐ確認する。
+    // タブレット等ではバックグラウンド中にsetIntervalが止まることがあり、
+    // 「push後、しばらく開いていなかった端末に戻ったら古いまま」を減らすため。
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState !== 'visible') return;
+        if (Date.now() - lastAppUpdateCheckAt < UPDATE_CHECK_MIN_GAP_MS) return;
+        checkForAppUpdate();
+    });
 });

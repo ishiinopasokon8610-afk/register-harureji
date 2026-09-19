@@ -47,6 +47,14 @@
 
     if (!('serviceWorker' in navigator)) return;
 
+    // 【文言を修正】controllerchange が起きた時点でわかるのは「裏側のキャッシュが
+    // 新しい版に入れ替わった」ことだけで、いま開いている画面のJSは古いまま
+    // （リロードするまで新しい版にはならない）。
+    // 以前の「アップデートが入りました」だと、画面右下のバージョン表示がまだ古い
+    // ままなのに「更新済み」と読めてしまい、「更新されていない」と見えていたため、
+    // 実際の状態どおり「取得済み・リロードで反映」と分かる文言にした。
+    const UPDATE_APPLIED_TOAST_MESSAGE = '🔄 新しいバージョンを取得しました（リロードで反映されます）';
+
     // このファイルの実行時点ですでにController（＝以前からのService Worker）が
     // いたかどうか。いなければ「今回が初回起動」とみなし、その後の
     // controllerchangeは通知しない。
@@ -61,7 +69,7 @@
         // notifications-system.js等、アプリ側に既存のトースト表示関数
         // （showToast）があれば、見た目を揃えるためそちらを優先して使う。
         if (typeof window.showToast === 'function') {
-            window.showToast('🔄 アップデートが入りました');
+            window.showToast(UPDATE_APPLIED_TOAST_MESSAGE);
             return;
         }
 
@@ -69,7 +77,7 @@
         // （それも無ければ document.body に直接出す）。
         const host = document.getElementById('toast-container') || document.body;
         const toast = document.createElement('div');
-        toast.textContent = '🔄 アップデートが入りました';
+        toast.textContent = UPDATE_APPLIED_TOAST_MESSAGE;
         toast.style.cssText = [
             'position:fixed', 'left:50%', 'bottom:60px', 'transform:translateX(-50%)',
             'z-index:100000', 'background:#263238', 'color:#fff',
