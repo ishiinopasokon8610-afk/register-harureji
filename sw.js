@@ -90,7 +90,7 @@
 //   の2つを、手動で一緒に上げること（CACHE_VERSIONが同じままだと、
 //   キャッシュ優先のスクリプトが古いまま入れ替わらない）。
 // ==========================================
-const CACHE_VERSION = 'v4';
+const CACHE_VERSION = 'v5';
 const CACHE_NAME = `register-cache-${CACHE_VERSION}`;
 const ASSETS = [
   './',
