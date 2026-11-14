@@ -3,8 +3,12 @@
 // 分析画面（analytics-system.js）への追加パッチ
 // ------------------------------------------
 // ①「本日」タブでは「一番売れた日」＝今日の日付であり無意味なため非表示にする
-// ② 売れた日の天気が分かるよう、天気アイコンを表示する（Open-Meteoの
-//    無料・APIキー不要の過去天気API archive-api.open-meteo.com を使用）
+// ② 売れた日の天気が分かるよう、天気アイコンを表示する（Visual Crossing
+//    Weather の Timeline API を使用。APIキー不要・営利利用OK。
+//    ※以前使っていた Open-Meteo の無料APIは「非営利利用のみ」のため置き換えた）
+//    ★利用条件：天気を表示する画面の近くに「Weather data provided by
+//      Visual Crossing Weather」というクレジット表示（リンク付き）が必須
+//      （このファイルが自動で表示する。削除しないこと）
 // ③「週間」タブの日別内訳は、売上が無い日も含めて必ず直近7日分を表示する
 //
 // analytics-system.js は直接編集せず、
@@ -56,18 +60,99 @@ function getAnalyticsLocation() {
     if (!cached) requestAnalyticsLocationUpdate();
 })();
 
-const WEATHER_CODE_ICON_MAP = {
-    0: '☀️', 1: '🌤️', 2: '⛅', 3: '☁️',
-    45: '🌫️', 48: '🌫️',
-    51: '🌦️', 53: '🌦️', 55: '🌦️',
-    56: '🌧️', 57: '🌧️',
-    61: '🌧️', 63: '🌧️', 65: '🌧️',
-    66: '🌧️', 67: '🌧️',
-    71: '🌨️', 73: '🌨️', 75: '🌨️', 77: '🌨️',
-    80: '🌦️', 81: '🌧️', 82: '⛈️',
-    85: '🌨️', 86: '🌨️',
-    95: '⛈️', 96: '⛈️', 99: '⛈️'
-};
+// Visual Crossing の icon ID → 絵文字（Open-Meteo時代と同じ絵文字セット）
+function weatherIconFromVcIcon(icon) {
+    const id = String(icon || '').toLowerCase();
+    if (!id) return '';
+    if (id.includes('thunder')) return '⛈️';
+    if (id.includes('snow')) return '🌨️';
+    if (id.includes('showers')) return '🌦️';
+    if (id.includes('rain')) return '🌧️';
+    if (id.includes('fog')) return '🌫️';
+    if (id.includes('partly-cloudy')) return '⛅';
+    if (id.includes('cloudy')) return '☁️';
+    if (id.includes('clear')) return '☀️';
+    if (id.includes('wind')) return '💨';
+    return '';
+}
+
+/* =========================================================
+   Visual Crossing Timeline API（APIキー不要・営利利用OK）
+   ------------------------------------------
+   ・無料のキー無しアクセスは「端末のIPアドレス」ごとに利用量が管理される
+     （フェアユース）。月間表示などで何十件も同時に取りに行かないよう、
+     同時に走らせる通信は2件までに絞り、同じ日付は1回だけ取りに行く。
+   ・429（混み合い）が返ったら、その時は何もキャッシュせず空表示にして
+     次回また取り直す（エラー結果を「その日の天気」として保存しない）。
+   ========================================================= */
+const VC_TIMELINE_BASE = 'https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/';
+const VC_MAX_CONCURRENT = 2;
+let vcActiveCount = 0;
+const vcWaitQueue = [];
+const vcInflight = {}; // 同じURLの同時リクエストを1つにまとめる
+
+function vcAcquireSlot() {
+    if (vcActiveCount < VC_MAX_CONCURRENT) {
+        vcActiveCount++;
+        return Promise.resolve();
+    }
+    return new Promise(resolve => vcWaitQueue.push(resolve));
+}
+function vcReleaseSlot() {
+    const next = vcWaitQueue.shift();
+    if (next) next(); // 枠をそのまま次の待ち行列へ渡す
+    else vcActiveCount--;
+}
+
+// dateSegment: 'YYYY-MM-DD' または 'today'。戻り値：{ icon, tempMax, tempMin } か、失敗時は null
+async function fetchVcDailyWeather(dateSegment) {
+    const { lat, lon } = getAnalyticsLocation();
+    const url = `${VC_TIMELINE_BASE}${lat},${lon}/${dateSegment}?unitGroup=metric&include=days&elements=datetime,tempmax,tempmin,icon&lang=en&contentType=json`;
+
+    if (vcInflight[url]) return vcInflight[url];
+
+    const task = (async () => {
+        await vcAcquireSlot();
+        try {
+            const res = await fetch(url);
+            if (!res.ok) {
+                console.warn(`天気情報の取得に失敗しました（HTTP ${res.status}）`);
+                return null;
+            }
+            const data = await res.json();
+            const day = data && Array.isArray(data.days) ? data.days[0] : null;
+            if (!day) return null;
+            const tMax = day.tempmax;
+            const tMin = day.tempmin;
+            return {
+                icon: weatherIconFromVcIcon(day.icon),
+                tempMax: (typeof tMax === 'number' && !isNaN(tMax)) ? Math.round(tMax) : null,
+                tempMin: (typeof tMin === 'number' && !isNaN(tMin)) ? Math.round(tMin) : null
+            };
+        } catch (e) {
+            console.warn('天気情報の取得に失敗しました:', e);
+            return null;
+        } finally {
+            vcReleaseSlot();
+            delete vcInflight[url];
+        }
+    })();
+    vcInflight[url] = task;
+    return task;
+}
+
+// 「Weather data provided by Visual Crossing Weather」クレジット（利用条件で必須）
+const VC_ATTRIBUTION_HTML = 'Weather data provided by <a href="https://www.visualcrossing.com/" target="_blank" rel="noopener noreferrer" style="color:inherit; text-decoration:underline;">Visual Crossing Weather</a>';
+const VC_ATTRIBUTION_STYLE = 'font-size:10px; color:#9e9e9e; margin-top:4px;';
+
+function ensureWeatherAttribution(parentEl) {
+    if (!parentEl || parentEl.querySelector(':scope > .analytics-weather-attribution')) return;
+    const el = document.createElement('div');
+    el.className = 'analytics-weather-attribution';
+    el.style.cssText = VC_ATTRIBUTION_STYLE;
+    el.innerHTML = VC_ATTRIBUTION_HTML;
+    parentEl.appendChild(el);
+}
 
 function getAnalyticsWeatherCache() {
     try { return JSON.parse(localStorage.getItem('pos_analytics_weather_cache') || '{}'); }
@@ -89,28 +174,17 @@ async function fetchWeatherInfoForDate(dateKey) {
         return cached;
     }
 
-    try {
-        const { lat, lon } = getAnalyticsLocation();
-        const url = `https://archive-api.open-meteo.com/v1/archive?latitude=${lat}&longitude=${lon}&start_date=${dateKey}&end_date=${dateKey}&daily=weathercode,temperature_2m_max,temperature_2m_min&timezone=Asia%2FTokyo`;
-        const res = await fetch(url);
-        const data = await res.json();
-        const daily = data && data.daily;
-        const code = (daily && Array.isArray(daily.weathercode)) ? daily.weathercode[0] : null;
-        const tMax = (daily && Array.isArray(daily.temperature_2m_max)) ? daily.temperature_2m_max[0] : null;
-        const tMin = (daily && Array.isArray(daily.temperature_2m_min)) ? daily.temperature_2m_min[0] : null;
-        const icon = (code !== null && code !== undefined && WEATHER_CODE_ICON_MAP[code]) ? WEATHER_CODE_ICON_MAP[code] : '';
-        const info = {
-            icon,
-            tempMax: (typeof tMax === 'number' && !isNaN(tMax)) ? Math.round(tMax) : null,
-            tempMin: (typeof tMin === 'number' && !isNaN(tMin)) ? Math.round(tMin) : null
-        };
-        cache[dateKey] = info;
-        saveAnalyticsWeatherCache(cache);
-        return info;
-    } catch (e) {
-        console.warn('天気情報の取得に失敗しました:', e);
+    const info = await fetchVcDailyWeather(dateKey);
+    // 取得失敗（null）や、中身が空の結果は保存しない（次回また取り直せるように）
+    if (!info || (!info.icon && info.tempMax === null && info.tempMin === null)) {
         return { icon: '', tempMax: null, tempMin: null };
     }
+    // 複数日を同時に取得すると、取得前に読んだキャッシュで上書きして他の日の分を
+    // 消してしまうため、保存の直前に読み直してから書き足す
+    const latestCache = getAnalyticsWeatherCache();
+    latestCache[dateKey] = info;
+    saveAnalyticsWeatherCache(latestCache);
+    return info;
 }
 
 // 天気アイコン＋最高/最低気温を、表示用の1つの文字列にまとめる（例: "☀️ 30℃/22℃"）
@@ -279,6 +353,7 @@ function postProcessAnalyticsDayCard() {
         mainEl.appendChild(badge);
     }
     badge.innerText = '…';
+    ensureWeatherAttribution(dayCard);
     fetchWeatherInfoForDate(bestDay.dateKey).then(info => { badge.innerText = formatWeatherBadgeText(info); });
 }
 
@@ -294,8 +369,7 @@ function getTodayDateKeyForAnalytics() {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-// archive-api.open-meteo.com（過去天気）は当日分がまだ確定しておらず取得できないことが多いため、
-// 本日分だけは Open-Meteo の予報API（api.open-meteo.com）から取得する。
+// 本日分は、確定前の天気（予報込み）として Visual Crossing の 'today' から取得する。
 // 天気は当日中に変わることがあるため、キャッシュは3時間だけ再利用し、それ以降は取り直す。
 async function fetchTodayWeatherInfo() {
     const dateKey = getTodayDateKeyForAnalytics();
@@ -305,29 +379,17 @@ async function fetchTodayWeatherInfo() {
         return cached;
     }
 
-    try {
-        const { lat, lon } = getAnalyticsLocation();
-        const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&daily=weathercode,temperature_2m_max,temperature_2m_min&timezone=Asia%2FTokyo&forecast_days=1`;
-        const res = await fetch(url);
-        const data = await res.json();
-        const daily = data && data.daily;
-        const code = (daily && Array.isArray(daily.weathercode)) ? daily.weathercode[0] : null;
-        const tMax = (daily && Array.isArray(daily.temperature_2m_max)) ? daily.temperature_2m_max[0] : null;
-        const tMin = (daily && Array.isArray(daily.temperature_2m_min)) ? daily.temperature_2m_min[0] : null;
-        const icon = (code !== null && code !== undefined && WEATHER_CODE_ICON_MAP[code]) ? WEATHER_CODE_ICON_MAP[code] : '';
-        const info = {
-            icon,
-            tempMax: (typeof tMax === 'number' && !isNaN(tMax)) ? Math.round(tMax) : null,
-            tempMin: (typeof tMin === 'number' && !isNaN(tMin)) ? Math.round(tMin) : null,
-            fetchedAt: Date.now()
-        };
-        cache[dateKey] = info;
-        saveAnalyticsWeatherCache(cache);
-        return info;
-    } catch (e) {
-        console.warn('本日の天気情報の取得に失敗しました:', e);
+    const got = await fetchVcDailyWeather('today');
+    if (!got || (!got.icon && got.tempMax === null && got.tempMin === null)) {
+        // 失敗時は、古い（3時間より前の）キャッシュがあればそれを使い、無ければ空表示
+        if (cached && typeof cached === 'object') return cached;
         return { icon: '', tempMax: null, tempMin: null };
     }
+    const info = Object.assign({}, got, { fetchedAt: Date.now() });
+    const latestCache = getAnalyticsWeatherCache();
+    latestCache[dateKey] = info;
+    saveAnalyticsWeatherCache(latestCache);
+    return info;
 }
 
 // dateISO（無ければdate）から「時」を取り出し、時間帯ごとの売上合計・件数を集計する
@@ -384,6 +446,7 @@ function renderHourlySalesChart(container) {
             ${barsHtml}
         </div>
         <div class="analytics-card-sub">合計 ${totalCount}件（下の数字は時刻・24時間表記）</div>
+        <div class="analytics-weather-attribution" style="${VC_ATTRIBUTION_STYLE}">${VC_ATTRIBUTION_HTML}</div>
     `;
 
     if (isNewCard) {
@@ -424,6 +487,7 @@ function addWeatherToDailyBreakdownModal() {
     const body = document.getElementById('analytics-barchart-body');
     if (!body) return;
 
+    ensureWeatherAttribution(body);
     const spans = body.querySelectorAll('span');
     breakdown.labels.forEach(label => {
         const key = breakdown.dateKeys[label];
