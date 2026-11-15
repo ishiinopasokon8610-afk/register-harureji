@@ -1,0 +1,39 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "pos_sync": {
+      "$code": {
+        ".validate": "$code.matches(/^[0-9a-f]{32}$/)",
+        ".read": true,
+        ".write": true,
+        "meta": {
+          ".validate": "newData.hasChildren(['createdAt'])"
+        },
+        "events": {
+          ".indexOn": [
+            "t"
+          ],
+          "$eventId": {
+            ".validate": "newData.hasChildren(['n','t','d']) && newData.child('d').isString() && newData.child('d').val().length < 12000000"
+          }
+        },
+        "live": {
+          ".indexOn": [
+            "t"
+          ],
+          "$eventId": {
+            ".validate": "newData.hasChildren(['n','t','d']) && newData.child('d').isString() && newData.child('d').val().length < 12000000"
+          }
+        }
+      }
+    },
+    "pos_backup": {
+      "$code": {
+        ".validate": "$code.matches(/^[0-9a-f]{32}$/)",
+        ".read": true,
+        ".write": true
+      }
+    }
+  }
+}
