@@ -29,6 +29,19 @@
 //     それ以外のイベントは、Ably と同じく自分にも返す（年齢確認などが自分の端末で動くため）。
 //   ・データ用コードが未設定の端末は、送信も受信もしない。
 //
+// 【今回の更新：同期の遅延対策】
+//   ① 送信：これまでは1件ごとに「サーバーが受け取った」返事を待ってから次を送っていた。
+//      そのため、通信1往復分×件数だけ後ろの送信が遅れた（カート更新が連続すると特に遅れる）。
+//      → 暗号化だけ順番に行い、書き込みは待たずに続けて出す（Firebaseは順番通りに届ける）。
+//   ② update-cart（カートの内容）は、送信待ちの間に新しいものが来たら古いものを捨てて
+//      最新の1件だけ送る（古いカート状態を送っても意味がないため）。
+//   ③ 受信：これまでは「その場限り(live)」のカート表示・年齢確認が、大きなデータ
+//      （商品一覧・画像入りの設定など）の復号待ちの後ろに並んでいた。
+//      → 受信の処理待ち行列を events と live で分け、live が詰まらないようにした。
+//   ④ 計測：送信してから受信されるまでの時間（遅延）・データの大きさを記録し、
+//      遅いとき（3秒以上）はコンソールに警告を出す。原因調査用に
+//      PosSync.getStats() で直近の状況を見られる。
+//
 // 【このファイルが公開するもの】
 //   window.PosSync … データ用コードの発行・受け取り・状態確認など（sync-code-ui-system.js が使う）
 //
@@ -51,7 +64,8 @@
     // 「その場限り」のイベント（liveに作る。戻ってきた端末に再生しない）
     const LIVE_EVENTS = new Set([
         'update-cart', 'age-check-event', 'fraud-warning-event',
-        'checkout-image-event', 'checkout-image-hide-event'
+        'checkout-image-event', 'checkout-image-hide-event',
+        'sync-request', 'sync-full-sent'   // 「全部送って」の依頼と返信（古い依頼を後から再生しないため）
     ]);
     // 自分には返さないイベント
     const NO_ECHO_EVENTS = new Set(['update-cart']);
@@ -65,8 +79,18 @@
         code: '', hash: '', key: null, db: null, refs: null,
         status: 'nocode', ready: false, online: false, infoBound: false,
         seen: new Set(), lastSeen: 0, lastSeenId: '', attachLastId: '', offset: 0,
-        queue: Promise.resolve(), pubQueue: Promise.resolve(), gen: 0, saveTimer: null
+        queue: Promise.resolve(), queueLive: Promise.resolve(), pubQueue: Promise.resolve(),
+        cartPending: null, cartScheduled: false, gen: 0, saveTimer: null
     };
+
+    // 遅延などの計測（原因調査用）
+    const stats = { lags: [], sent: 0, received: 0, droppedCarts: 0, lastSendMs: 0, bigSends: [] };
+    function recordLag(name, lagMs) {
+        stats.received++;
+        stats.lags.push({ name, lagMs, at: Date.now() });
+        if (stats.lags.length > 50) stats.lags.shift();
+        if (lagMs > 3000) console.warn(`[sync] 受信が遅れました（${name}）: 送信から約${Math.round(lagMs / 1000)}秒`);
+    }
 
     const enc = new TextEncoder();
     const dec = new TextDecoder();
@@ -271,6 +295,7 @@
         }
         if (gen !== st.gen) return;
         if (durable) bump(v.t, id);
+        if (!own && typeof v.t === 'number') recordLag(v.n, serverNow() - v.t);
         deliver({ name: v.n, data, id, timestamp: v.t, clientId: v.s, own });
     }
 
@@ -286,7 +311,11 @@
         if (durable && id === st.attachLastId) return; // 前回までに処理済みの最後の1件
         const v = snap.val();
         if (!v || typeof v.d !== 'string' || !v.n) return;
-        st.queue = st.queue.then(() => processEvent(id, v, durable, gen)).catch(() => {});
+        if (durable) {
+            st.queue = st.queue.then(() => processEvent(id, v, durable, gen)).catch(() => {});
+        } else {
+            st.queueLive = st.queueLive.then(() => processEvent(id, v, durable, gen)).catch(() => {});
+        }
     }
 
     function onListenError(err) {
@@ -325,19 +354,51 @@
     /* =========================================================
        送信
        ========================================================= */
+    // 暗号化（順番どおりに1件ずつ）→ 書き込み（返事は待たず、続けて出す）
     async function writeEvent(name, data, gen) {
+        const t0 = Date.now();
         const d = await encryptJson(data === undefined ? null : data);
         if (d.length > MAX_PAYLOAD_CHARS) throw new Error('PAYLOAD_TOO_LARGE');
         if (gen !== st.gen || !st.refs) return false;
+        if (d.length > 500000) {
+            stats.bigSends.push({ name, chars: d.length, at: Date.now() });
+            if (stats.bigSends.length > 20) stats.bigSends.shift();
+            console.warn(`[sync] 大きなデータを送っています（${name}: 約${Math.round(d.length / 1000)}KB）。他端末の受信が遅くなる原因になります`);
+        }
         const live = LIVE_EVENTS.has(name);
         const ref = st.refs.base.child(live ? 'live' : 'events').push();
-        await ref.set({ n: name, t: firebase.database.ServerValue.TIMESTAMP, s: DEVICE_TAG, d });
+        // set() は呼んだ順にサーバーへ送られる。返事（Promise）は待たない。
+        ref.set({ n: name, t: firebase.database.ServerValue.TIMESTAMP, s: DEVICE_TAG, d }).then(() => {
+            stats.lastSendMs = Date.now() - t0;
+        }).catch((e) => {
+            console.warn(`[sync] 送信に失敗しました（${name}）:`, e && e.message ? e.message : e);
+        });
+        stats.sent++;
         return true;
     }
 
     function enqueueWrite(name, data) {
         const gen = st.gen;
-        // 送る順番を守るため、1件ずつ順に書き込む（暗号化の時間差で順番が入れ替わらないように）
+
+        // カート更新は、送信待ちの間に来た古いものを捨て、最新の1件だけ送る
+        if (name === 'update-cart') {
+            if (st.cartPending) stats.droppedCarts++;
+            st.cartPending = { data };
+            if (st.cartScheduled) return st.pubQueue;
+            st.cartScheduled = true;
+            st.pubQueue = st.pubQueue.then(() => {
+                st.cartScheduled = false;
+                const p = st.cartPending;
+                st.cartPending = null;
+                return p ? writeEvent('update-cart', p.data, gen) : false;
+            }).catch((e) => {
+                console.warn('[sync] 送信に失敗しました（update-cart）:', e && e.message ? e.message : e);
+                return false;
+            });
+            return st.pubQueue;
+        }
+
+        // 送る順番を守るため、暗号化は1件ずつ順に行う（暗号化の時間差で順番が入れ替わらないように）
         st.pubQueue = st.pubQueue.then(() => writeEvent(name, data, gen)).catch((e) => {
             console.warn(`[sync] 送信に失敗しました（${name}）:`, e && e.message ? e.message : e);
             return false;
@@ -349,6 +410,11 @@
         if (!name) return Promise.resolve(false);
         if (!st.code) return Promise.resolve(false); // データ用コード未設定：送らない
         if (!st.ready) {
+            if (name === 'update-cart') {
+                // 準備前に溜めるカート更新は最新の1件だけ残す
+                const i = pending.findIndex(p => p.name === 'update-cart');
+                if (i >= 0) pending.splice(i, 1);
+            }
             if (pending.length < 300) pending.push({ name, data });
             return Promise.resolve(false);
         }
@@ -587,6 +653,20 @@
         encryptJson,
         decryptJson,
         // 二重保存（バックアップ）が、同じコードの保存場所を使うためのもの
+        // 遅延の調査用：コンソールで PosSync.getStats() を実行して確認する
+        getStats() {
+            const lags = stats.lags.map(x => x.lagMs);
+            const avg = lags.length ? Math.round(lags.reduce((a, b) => a + b, 0) / lags.length) : 0;
+            const max = lags.length ? Math.max.apply(null, lags) : 0;
+            return {
+                status: st.status, online: st.online,
+                sent: stats.sent, received: stats.received, droppedCarts: stats.droppedCarts,
+                recentLagAvgMs: avg, recentLagMaxMs: max,
+                recent: stats.lags.slice(-10),
+                lastSendAckMs: stats.lastSendMs,
+                bigSends: stats.bigSends.slice(-5)
+            };
+        },
         getBaseRef() { return st.refs ? st.refs.base : null; },
         getPathHash() { return st.hash; }
     };

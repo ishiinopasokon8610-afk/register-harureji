@@ -3,7 +3,7 @@
 // 会員・顧客データ（pos_customers）の複数端末リアルタイム同期
 // ------------------------------------------
 // これまで商品マスタ・お会計履歴・タイムカード・自動化バーコード・
-// レシートメッセージ・商品連動クーポンはAbly経由で他端末と同期されていたが、
+// レシートメッセージ・商品連動クーポンはリアルタイム同期（現在はFirebase経由）されていたが、
 // 会員・顧客データ（pos_customers）だけは同期対象になっておらず、
 // ある端末で新規会員登録やポイント変更をしても他端末には反映されなかった。
 //
@@ -92,12 +92,16 @@ function mergeCustomerLists(localList, remoteList, deletedList) {
     return Array.from(map.values());
 }
 
-function broadcastCustomersSync() {
+// delta を渡すと「変わった会員・新しい退会記録だけ」、渡さないと全部を送る
+// （受信側は元から統合方式なので、どちらも同じ受信処理で扱える）
+function broadcastCustomersSync(delta) {
     if (typeof channel === 'undefined' || !channel || typeof customers === 'undefined') return;
     try {
+        const isDelta = delta && typeof delta === 'object' && Array.isArray(delta.customers);
         channel.publish('customers-sync', {
-            customers: customers,
-            deletedCustomers: getDeletedCustomersFromStorage(),
+            customers: isDelta ? JSON.parse(JSON.stringify(delta.customers)) : customers,
+            deletedCustomers: isDelta ? (delta.deletedCustomers || []) : getDeletedCustomersFromStorage(),
+            partial: !!isDelta,
             senderId: (typeof SYNC_DEVICE_ID !== 'undefined') ? SYNC_DEVICE_ID : null,
             time: Date.now()
         });
@@ -124,6 +128,8 @@ setInterval(() => {
 
     // 追加・変更された会員に updatedAt を付与する
     // （updatedAt自体は比較対象から除外し、中身が変わった会員だけを対象にする）
+    const changedCustomers = [];
+    const newDeletedCustomers = [];
     customers.forEach(c => {
         if (!c || !c.barcode) return;
         const prev = lastKnownCustomersMap ? lastKnownCustomersMap.get(c.barcode) : null;
@@ -131,6 +137,7 @@ setInterval(() => {
         const curCompare = JSON.stringify({ ...c, updatedAt: undefined });
         if (!prev || prevCompare !== curCompare) {
             c.updatedAt = now;
+            changedCustomers.push(c);
         }
     });
 
@@ -140,6 +147,7 @@ setInterval(() => {
         lastKnownCustomersMap.forEach((prevC, barcode) => {
             if (!currentBarcodes.has(barcode)) {
                 recordDeletedCustomer(barcode, now);
+                newDeletedCustomers.push({ barcode: barcode, deletedAt: now });
             }
         });
     }
@@ -147,7 +155,10 @@ setInterval(() => {
     localStorage.setItem('pos_customers', JSON.stringify(customers));
     lastSyncedCustomersSnapshot = JSON.stringify(customers);
     lastKnownCustomersMap = getCustomersMapByBarcode(customers);
-    broadcastCustomersSync();
+    // 変わった会員・新しい退会記録だけを送る
+    if (changedCustomers.length > 0 || newDeletedCustomers.length > 0) {
+        broadcastCustomersSync({ customers: changedCustomers, deletedCustomers: newDeletedCustomers });
+    }
 }, 2000);
 
 // 他端末からの会員データ同期を受信する

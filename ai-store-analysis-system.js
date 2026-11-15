@@ -746,7 +746,9 @@ wrap.appendChild(box);
 drawAiAnalysisLineChart(canvas, c);
 });
 }
-const AI_ANALYSIS_NOTIFICATION_ICON_URL = 'https:' + '//raw.githubusercontent' + '.com/ishiinopasokon8610-afk/image-list/main/images/%E3%83%AD%E3%82%B4%E3%82%92%E8%A8%AD%E5%AE%9A%E3%81%99%E3%82%8B%E3%81%A8%E3%81%93%E3%81%93%E3%81%AB%E8%A1%A8%E7%A4%BA%E3%81%95%E3%82%8C%E3%81%BE%E3%81%99%E3%80%82.png';
+// 【不具合修正】以前は「ロゴを設定するとここに表示されます」という仮の画像を指していたため、
+// 通知にレジのアイコンが出なかった。index.html の favicon と同じレジのアイコンにする。
+const AI_ANALYSIS_NOTIFICATION_ICON_URL = 'https:' + '//raw.githubusercontent' + '.com/ishiinopasokon8610-afk/image-list/main/images/register-icon.png';
 const AI_ANALYSIS_NOTIFICATION_BODY_MAX_LEN = 120;
 function buildAiAnalysisNotificationBody(answerText) {
 const plain = String(answerText || '').replace(/\s+/g, ' ').trim();
@@ -812,8 +814,95 @@ return Array.isArray(list) ? list : [];
 return [];
 }
 }
+/* ---------------------------------------------------------
+   【不具合修正】保存履歴が、リロードのあとに画面へ出ないことがあった。
+   これまでは localStorage（1か所）だけに保存し、カードを作る時に1回だけ描画していた。
+   そのため、設定の同期・復元などで localStorage の中身が入れ替わる／消えると、
+   履歴が空のまま表示され、開き直しても戻らなかった。
+   → ① 保存のたびに IndexedDB にも控え（ミラー）を残す
+     ② 起動時・分析画面を開くたびに、localStorage と控えを突き合わせて、
+        足りない分を localStorage に戻す（削除したものは両方から消えるので復活しない）
+     ③ 分析画面を開くたびに、履歴の一覧を描き直す
+     ④ 保存に失敗（容量いっぱい等）した時は、黙って失敗せずに知らせる
+   --------------------------------------------------------- */
+const AI_HISTORY_IDB_NAME = 'haru_pos_ai_history_db';
+const AI_HISTORY_IDB_STORE = 'kv';
+const AI_HISTORY_IDB_KEY = 'saved_history';
+
+function openAiHistoryIdb() {
+return new Promise((resolve, reject) => {
+try {
+const req = indexedDB.open(AI_HISTORY_IDB_NAME, 1);
+req.onupgradeneeded = () => {
+if (!req.result.objectStoreNames.contains(AI_HISTORY_IDB_STORE)) req.result.createObjectStore(AI_HISTORY_IDB_STORE);
+};
+req.onsuccess = () => resolve(req.result);
+req.onerror = () => reject(req.error);
+} catch (e) {
+reject(e);
+}
+});
+}
+async function writeAiHistoryMirror(list) {
+try {
+const db = await openAiHistoryIdb();
+await new Promise((resolve, reject) => {
+const tx = db.transaction(AI_HISTORY_IDB_STORE, 'readwrite');
+tx.objectStore(AI_HISTORY_IDB_STORE).put({ list: list, savedAt: Date.now() }, AI_HISTORY_IDB_KEY);
+tx.oncomplete = resolve;
+tx.onerror = () => reject(tx.error);
+});
+db.close();
+} catch (e) {
+console.warn('[ai-analysis] 履歴の控え（IndexedDB）を保存できませんでした:', e);
+}
+}
+async function readAiHistoryMirror() {
+try {
+const db = await openAiHistoryIdb();
+const rec = await new Promise((resolve, reject) => {
+const req = db.transaction(AI_HISTORY_IDB_STORE, 'readonly').objectStore(AI_HISTORY_IDB_STORE).get(AI_HISTORY_IDB_KEY);
+req.onsuccess = () => resolve(req.result);
+req.onerror = () => reject(req.error);
+});
+db.close();
+return rec && Array.isArray(rec.list) ? rec.list : [];
+} catch (e) {
+return [];
+}
+}
+// localStorage と控えを突き合わせ、足りない分を localStorage に戻す。戻したら true
+async function restoreAiAnalysisSavedHistoryFromMirror() {
+const mirror = await readAiHistoryMirror();
+if (mirror.length === 0) return false;
+const local = getAiAnalysisSavedHistory();
+const ids = new Set(local.map(h => h && h.id));
+const missing = mirror.filter(h => h && h.id && !ids.has(h.id));
+if (missing.length === 0) return false;
+const merged = local.concat(missing).sort((a, b) => String(a.savedAt || '').localeCompare(String(b.savedAt || '')));
+try {
+localStorage.setItem(AI_ANALYSIS_SAVED_HISTORY_KEY, JSON.stringify(merged));
+} catch (e) {
+return false;
+}
+return true;
+}
+async function refreshAiAnalysisSavedHistoryView() {
+try {
+await restoreAiAnalysisSavedHistoryFromMirror();
+} catch (e) { /* 無視 */ }
+renderAiAnalysisSavedHistory();
+}
 function persistAiAnalysisSavedHistory(list) {
+try {
 localStorage.setItem(AI_ANALYSIS_SAVED_HISTORY_KEY, JSON.stringify(list));
+} catch (e) {
+console.warn('[ai-analysis] 履歴をlocalStorageに保存できませんでした:', e);
+if (typeof showCustomConfirm === 'function') {
+showCustomConfirm('保存できませんでした（端末の保存容量がいっぱいの可能性があります）。不要な画像やデータを整理してからお試しください。', 'ほぞん できま せん でし た', () => {}, false);
+}
+}
+writeAiHistoryMirror(list);
 if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
 }
 function formatAiAnalysisSavedAt(iso) {
@@ -1096,9 +1185,20 @@ return;
 const original = window.showScreen;
 window.showScreen = function (screenId, ...rest) {
 const result = original.apply(this, [screenId, ...rest]);
-if (screenId === 'analytics-screen') ensureAiAnalysisCard();
+if (screenId === 'analytics-screen') {
+ensureAiAnalysisCard();
+refreshAiAnalysisSavedHistoryView();
+}
 return result;
 };
 }
 tryHook();
+})();
+// 起動時にも、控えとの突き合わせを1回行う（localStorageが入れ替わっていても戻す）
+(function restoreAiAnalysisSavedHistoryOnStartup() {
+function run() {
+refreshAiAnalysisSavedHistoryView();
+}
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => setTimeout(run, 500));
+else setTimeout(run, 500);
 })();

@@ -6,7 +6,20 @@
 // リアルタイムに同期する。
 //
 // master-mgmt.js / register.js は直接編集せず、
-// 定期的にデータの変化を検知して自動的にAbly経由で送信する方式をとる
+// 定期的にデータの変化を検知して自動的にFirebase経由で送信する方式をとる
+//
+// 【今回の改良：差分送信】
+// これまでは、商品・会計履歴（最大3000件）・タイムカードを、何か1件変わるたびに
+// 「全部まるごと」暗号化して送っていた。会計のたびに履歴まるごと（数MB）が全端末へ
+// 届き、受け取る側も復号・統合を毎回行うため、同期が遅くなっていた。
+// → 変わった分（追加・変更された商品／取引／打刻と、新しい削除記録）だけを送る。
+//   受信側は元から「統合（マージ）」方式なので、受信処理は変更不要。
+// → ただし差分だけだと、後から参加した端末は過去分を受け取れない。
+//   そこで「全部送って」と頼む仕組み（sync-request）を追加した。
+//   ・データ用コードを受け取った直後
+//   ・前回の依頼から12時間以上たった状態で起動した時
+//   に自動で依頼し、すでに動いている端末のうち1台が全データを返す。
+//   手動で行いたい時は、コンソールで requestFullSync() を実行する。
 // （商品の保存箇所が複数あり、1箇所のフックだけでは拾いきれないため）。
 // ==========================================
 
@@ -15,6 +28,8 @@ const SYNC_DEVICE_ID = 'dev_' + Date.now().toString(36) + '_' + Math.random().to
 let lastSyncedProductsSnapshot = null;
 let lastSyncedHistorySnapshot = null;
 let lastKnownHistoryKeys = null;
+let lastKnownHistoryMap = null;   // 取引キー → 中身(JSON文字列)。変更検出用
+let lastKnownTimecardMap = null;  // 打刻キー → 中身(JSON文字列)。変更検出用
 let lastSyncedTimecardSnapshot = null;
 
 // 商品マスタの「前回ポーリング時点でのスナップショット」（jan→商品データの複製）。
@@ -207,12 +222,20 @@ function mergeTimecardLists(localList, remoteList) {
 //    この位置には以前、和集合のみの単純な旧実装があったが、削除記録を
 //    考慮していなかったため上に置き換えた（重複定義になるため削除）。
 
-function broadcastProductsSync() {
+// 差分送信用：渡された内容を複製する（送信待ちの間に元データが変わっても影響しないように）
+function cloneForSync(v) {
+    return JSON.parse(JSON.stringify(v));
+}
+
+// delta を渡すと「変わった分だけ」、渡さないと「全部」を送る
+function broadcastProductsSync(delta) {
     if (typeof channel === 'undefined' || !channel || typeof products === 'undefined') return;
     try {
+        const isDelta = delta && typeof delta === 'object' && Array.isArray(delta.products);
         channel.publish('products-sync', {
-            products: products,
-            deletedProducts: getDeletedProductsFromStorage(),
+            products: isDelta ? cloneForSync(delta.products) : products,
+            deletedProducts: isDelta ? (delta.deletedProducts || []) : getDeletedProductsFromStorage(),
+            partial: !!isDelta,
             senderId: SYNC_DEVICE_ID,
             time: Date.now()
         });
@@ -221,12 +244,14 @@ function broadcastProductsSync() {
     }
 }
 
-function broadcastHistorySync() {
+function broadcastHistorySync(delta) {
     if (typeof channel === 'undefined' || !channel) return;
     try {
+        const isDelta = delta && typeof delta === 'object' && Array.isArray(delta.history);
         channel.publish('history-sync', {
-            history: getHistoryFromStorage(),
-            deletedHistory: getDeletedHistoryFromStorage(),
+            history: isDelta ? cloneForSync(delta.history) : getHistoryFromStorage(),
+            deletedHistory: isDelta ? (delta.deletedHistory || []) : getDeletedHistoryFromStorage(),
+            partial: !!isDelta,
             senderId: SYNC_DEVICE_ID,
             time: Date.now()
         });
@@ -235,13 +260,76 @@ function broadcastHistorySync() {
     }
 }
 
-function broadcastTimecardSync() {
+function broadcastTimecardSync(delta) {
     if (typeof channel === 'undefined' || !channel) return;
     try {
-        channel.publish('timecard-sync', { timecards: getTimecardFromStorage(), senderId: SYNC_DEVICE_ID, time: Date.now() });
+        const isDelta = delta && typeof delta === 'object' && Array.isArray(delta.timecards);
+        channel.publish('timecard-sync', {
+            timecards: isDelta ? cloneForSync(delta.timecards) : getTimecardFromStorage(),
+            partial: !!isDelta,
+            senderId: SYNC_DEVICE_ID,
+            time: Date.now()
+        });
     } catch (err) {
         console.warn('タイムカードの同期送信に失敗しました:', err);
     }
+}
+
+function historyMapOf(list) {
+    const m = new Map();
+    (list || []).forEach(it => { if (it) m.set(keyOfHistory(it), JSON.stringify(it)); });
+    return m;
+}
+
+function timecardKeyOf(item) { return item.id || `${item.date}_${item.clerkName}`; }
+
+function timecardMapOf(list) {
+    const m = new Map();
+    (list || []).forEach(it => { if (it) m.set(timecardKeyOf(it), JSON.stringify(it)); });
+    return m;
+}
+
+/* =========================================================
+   全データの送信と、「全部送って」の依頼・返信
+   ========================================================= */
+function broadcastAllSyncNow() {
+    broadcastProductsSync();
+    broadcastHistorySync();
+    broadcastTimecardSync();
+    if (typeof broadcastCustomersSync === 'function') broadcastCustomersSync();
+}
+
+const FULL_SYNC_STAMP_KEY = 'pos_sync_last_full_request_at'; // pos_sync_ で始まるので、バックアップ・設定同期の対象外
+const FULL_SYNC_AUTO_INTERVAL_MS = 12 * 60 * 60 * 1000;
+const pendingFullSyncReplies = new Map(); // requestId → 返信待ちタイマー
+let lastFullSyncRequestAt = 0;
+
+function requestFullSync() {
+    if (typeof channel === 'undefined' || !channel) return;
+    if (window.PosSync && typeof window.PosSync.getCode === 'function' && !window.PosSync.getCode()) return;
+    if (Date.now() - lastFullSyncRequestAt < 5000) return; // 立て続けの依頼は1回にまとめる
+    lastFullSyncRequestAt = Date.now();
+    try { localStorage.setItem(FULL_SYNC_STAMP_KEY, String(Date.now())); } catch (e) { /* 無視 */ }
+    channel.publish('sync-request', {
+        requestId: SYNC_DEVICE_ID + '_' + Date.now(),
+        senderId: SYNC_DEVICE_ID
+    });
+}
+window.requestFullSync = requestFullSync;
+
+function maybeAutoRequestFullSync() {
+    let last = 0;
+    try { last = Number(localStorage.getItem(FULL_SYNC_STAMP_KEY)) || 0; } catch (e) { /* 無視 */ }
+    if (Date.now() - last > FULL_SYNC_AUTO_INTERVAL_MS) requestFullSync();
+}
+
+window.addEventListener('pos-sync-ready', maybeAutoRequestFullSync);
+window.addEventListener('pos-sync-code-changed', (e) => {
+    // データ用コードを「受け取った」直後は、必ず全データを依頼する
+    if (e && e.detail && e.detail.received) setTimeout(requestFullSync, 500);
+});
+if (window.PosSync && typeof window.PosSync.isReady === 'function' && window.PosSync.isReady()) {
+    maybeAutoRequestFullSync(); // このファイルの読み込みより前に準備が終わっていた場合の保険
 }
 
 // 2秒ごとに、商品・会計履歴がローカルで変化していないかチェックし、
@@ -258,6 +346,8 @@ setInterval(() => {
 
             // 追加・変更された商品に updatedAt を付与する
             // （updatedAt自体は比較対象から除外し、中身が変わった商品だけを対象にする）
+            const changedProducts = [];
+            const newDeletedProducts = [];
             products.forEach(p => {
                 if (!p || !p.jan) return;
                 const prev = lastKnownProductsList ? lastKnownProductsList.get(p.jan) : null;
@@ -265,6 +355,7 @@ setInterval(() => {
                 const curCompare = JSON.stringify({ ...p, updatedAt: undefined });
                 if (!prev || prevCompare !== curCompare) {
                     p.updatedAt = now;
+                    changedProducts.push(p);
                 }
             });
 
@@ -274,6 +365,7 @@ setInterval(() => {
                 lastKnownProductsList.forEach((prevP, jan) => {
                     if (!currentJans.has(jan)) {
                         recordDeletedProduct(jan, now);
+                        newDeletedProducts.push({ jan: jan, deletedAt: now });
                     }
                 });
             }
@@ -281,18 +373,32 @@ setInterval(() => {
             localStorage.setItem('pos_products', JSON.stringify(products));
             lastSyncedProductsSnapshot = JSON.stringify(products);
             lastKnownProductsList = getProductsMapByJan(products);
-            broadcastProductsSync();
+            // 変わった商品・新しい削除記録だけを送る（並び替えだけ等で変化が無ければ送らない）
+            if (changedProducts.length > 0 || newDeletedProducts.length > 0) {
+                broadcastProductsSync({ products: changedProducts, deletedProducts: newDeletedProducts });
+            }
         }
     }
 
     const currentHistorySnapshot = localStorage.getItem('pos_history') || '[]';
     if (lastSyncedHistorySnapshot === null) {
         lastSyncedHistorySnapshot = currentHistorySnapshot;
-        lastKnownHistoryKeys = new Set(getHistoryFromStorage().map(keyOfHistory));
+        const initialHistory = getHistoryFromStorage();
+        lastKnownHistoryKeys = new Set(initialHistory.map(keyOfHistory));
+        lastKnownHistoryMap = historyMapOf(initialHistory);
     } else if (currentHistorySnapshot !== lastSyncedHistorySnapshot) {
         const nowHistory = Date.now();
         const currentHistoryList = getHistoryFromStorage();
         const currentKeys = new Set(currentHistoryList.map(keyOfHistory));
+        const currentHistoryMap = historyMapOf(currentHistoryList);
+
+        // 追加・中身が変わった取引だけを送る
+        const changedHistory = currentHistoryList.filter(it => {
+            if (!it) return false;
+            const k = keyOfHistory(it);
+            return !lastKnownHistoryMap || lastKnownHistoryMap.get(k) !== currentHistoryMap.get(k);
+        });
+        const newDeletedHistory = [];
 
         // 前回は存在したのに今回消えている取引 → 返金・履歴削除されたとみなし、tombstoneを記録
         // （これにより、他端末からの同期で消したはずの履歴が復活するのを防ぐ）
@@ -300,21 +406,33 @@ setInterval(() => {
             lastKnownHistoryKeys.forEach(key => {
                 if (!currentKeys.has(key)) {
                     recordDeletedHistory(key, nowHistory);
+                    newDeletedHistory.push({ key: key, deletedAt: nowHistory });
                 }
             });
         }
 
         lastSyncedHistorySnapshot = currentHistorySnapshot;
         lastKnownHistoryKeys = currentKeys;
-        broadcastHistorySync();
+        lastKnownHistoryMap = currentHistoryMap;
+        if (changedHistory.length > 0 || newDeletedHistory.length > 0) {
+            broadcastHistorySync({ history: changedHistory, deletedHistory: newDeletedHistory });
+        }
     }
 
     const currentTimecardSnapshot = localStorage.getItem('pos_timecard') || '[]';
     if (lastSyncedTimecardSnapshot === null) {
         lastSyncedTimecardSnapshot = currentTimecardSnapshot;
+        lastKnownTimecardMap = timecardMapOf(getTimecardFromStorage());
     } else if (currentTimecardSnapshot !== lastSyncedTimecardSnapshot) {
         lastSyncedTimecardSnapshot = currentTimecardSnapshot;
-        broadcastTimecardSync();
+        const currentTimecards = getTimecardFromStorage();
+        const currentTimecardMap = timecardMapOf(currentTimecards);
+        const changedTimecards = currentTimecards.filter(it => {
+            if (!it) return false;
+            return !lastKnownTimecardMap || lastKnownTimecardMap.get(timecardKeyOf(it)) !== currentTimecardMap.get(timecardKeyOf(it));
+        });
+        lastKnownTimecardMap = currentTimecardMap;
+        if (changedTimecards.length > 0) broadcastTimecardSync({ timecards: changedTimecards });
     }
 }, 2000);
 
@@ -361,6 +479,7 @@ setInterval(() => {
             localStorage.setItem('pos_deleted_history', JSON.stringify(mergedDeleted));
             lastSyncedHistorySnapshot = JSON.stringify(merged);
             lastKnownHistoryKeys = new Set(merged.map(keyOfHistory));
+            lastKnownHistoryMap = historyMapOf(merged);
             if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
 
             const historyScreen = document.getElementById('history-screen');
@@ -381,12 +500,34 @@ setInterval(() => {
             const merged = mergeTimecardLists(localTimecards, msg.data.timecards);
             localStorage.setItem('pos_timecard', JSON.stringify(merged));
             lastSyncedTimecardSnapshot = JSON.stringify(merged);
+            lastKnownTimecardMap = timecardMapOf(merged);
             if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
 
             const timecardScreen = document.getElementById('timecard-screen');
             if (timecardScreen && timecardScreen.classList.contains('active') && typeof renderTimecardTable === 'function') {
                 renderTimecardTable();
             }
+        });
+
+        // 他の端末から「全部送って」と頼まれたら、少し待ってから全データを送る。
+        // 複数台が同時に返すと無駄なので、ランダムに待ち、先に誰かが返した（sync-full-sent）
+        // のを見たら自分の返信はやめる。
+        channel.subscribe('sync-request', (msg) => {
+            const d = msg && msg.data;
+            if (!d || !d.requestId || d.senderId === SYNC_DEVICE_ID) return;
+            if (pendingFullSyncReplies.has(d.requestId)) return;
+            const timer = setTimeout(() => {
+                pendingFullSyncReplies.delete(d.requestId);
+                broadcastAllSyncNow();
+                try { channel.publish('sync-full-sent', { requestId: d.requestId, senderId: SYNC_DEVICE_ID }); } catch (e) { /* 無視 */ }
+            }, 300 + Math.random() * 2200);
+            pendingFullSyncReplies.set(d.requestId, timer);
+        });
+        channel.subscribe('sync-full-sent', (msg) => {
+            const d = msg && msg.data;
+            if (!d || d.senderId === SYNC_DEVICE_ID) return;
+            const timer = pendingFullSyncReplies.get(d.requestId);
+            if (timer) { clearTimeout(timer); pendingFullSyncReplies.delete(d.requestId); }
         });
     } else {
         setTimeout(waitForChannelAndSubscribeSync, 500);
