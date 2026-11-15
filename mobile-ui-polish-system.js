@@ -60,6 +60,78 @@ html, body { overflow-x: hidden; }
     }
 }
 
+/* ---- 横にはみ出して、画面が左右にずれる／ボタンが画面の外に出るのを防ぐ ----
+   （スクリーンショットで確認：自動化バーコード画面の「📦 商品一覧」ボタンが画面の右外へ
+     はみ出し、レシートのメッセージ画面の日付欄・「追加」ボタンも右へはみ出していた） */
+#discount-screen,
+#migration-screen,
+#edit-disc-modal {
+    max-width: 100vw;
+    overflow-x: hidden !important;
+}
+#discount-screen input:not([type="checkbox"]):not([type="radio"]),
+#discount-screen select,
+#discount-screen textarea,
+#migration-screen input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+#migration-screen select,
+#migration-screen textarea,
+#edit-disc-modal input:not([type="checkbox"]):not([type="radio"]),
+#edit-disc-modal select,
+#edit-disc-modal textarea {
+    max-width: 100%;
+    box-sizing: border-box;
+    min-width: 0;
+}
+/* JSが横並び(display:flex)で組み立てた行は、幅が足りない時に折り返す */
+#migration-screen [style*="display:flex"],
+#migration-screen [style*="display: flex"] {
+    flex-wrap: wrap !important;
+}
+#migration-screen [style*="display:flex"] > *,
+#migration-screen [style*="display: flex"] > * {
+    min-width: 0;
+    max-width: 100%;
+}
+
+/* ---- 自動化バーコード：「自動追加する商品」の行（検索欄・📦商品一覧・数量・追加）をスマホで縦に並べ、小さくする ---- */
+@media (max-width: 820px) {
+    #discount-screen .discount-product-picker,
+    #edit-disc-modal .discount-product-picker {
+        display: flex !important;
+        flex-direction: column !important;
+        flex-wrap: nowrap !important;
+        align-items: stretch !important;
+        gap: 8px !important;
+        margin-left: 0 !important;
+        width: 100% !important;
+        max-width: 100% !important;
+        box-sizing: border-box !important;
+    }
+    #discount-screen .discount-product-picker > *,
+    #edit-disc-modal .discount-product-picker > * {
+        width: 100% !important;
+        max-width: 100% !important;
+        min-width: 0 !important;
+        flex: none !important;
+        margin-left: 0 !important;
+        margin-right: 0 !important;
+        box-sizing: border-box !important;
+    }
+    /* 「📦 商品一覧」「＋ この商品を追加」などのボタンが大きすぎるので、小さめにする */
+    #discount-screen .discount-product-picker button,
+    #edit-disc-modal .discount-product-picker button {
+        min-height: 38px !important;
+        padding: 8px 12px !important;
+        font-size: 14px !important;
+        line-height: 1.3 !important;
+    }
+    #discount-screen .discount-form-card,
+    #discount-screen .discount-form-section {
+        max-width: 100%;
+        box-sizing: border-box;
+    }
+}
+
 /* ---- ① 横向きのスマホ（高さが低い画面） ---- */
 @media (orientation: landscape) and (max-height: 520px) {
     .top-bar {

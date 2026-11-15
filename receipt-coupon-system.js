@@ -37,10 +37,33 @@ let receiptCoupons = JSON.parse(localStorage.getItem(RECEIPT_COUPONS_KEY) || '[]
 let couponStagedProducts = []; // 登録フォームで「仮組み」している対象商品リスト
 let editingCouponId = null;    // nullなら新規登録、文字列ならそのidを編集中
 
-function saveReceiptCoupons() {
+// skipBroadcast=true の時は、この端末への保存だけ行い、他端末への送信は後回しにする
+// （画像をURLにするアップロードが終わってから、URLだけを送るため）
+function saveReceiptCoupons(skipBroadcast) {
     localStorage.setItem(RECEIPT_COUPONS_KEY, JSON.stringify(receiptCoupons));
     if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
-    broadcastReceiptCoupons();
+    if (!skipBroadcast) broadcastReceiptCoupons();
+}
+
+// 【2026-11 追加】クーポン画像は、重い画像データそのものではなく「URL」で他端末へ同期する。
+// 画像データはこの端末にだけ残し、Google Driveに1回だけアップロードしてURLを作る。
+// （Driveに未連携などでURLが作れない時は、これまで通り画像データそのものを送る）
+function couponDriveFilename(id) {
+    return 'haru-pos-coupon-' + String(id).replace(/[^A-Za-z0-9_-]/g, '_') + '.jpg';
+}
+
+async function uploadCouponImageToCloud(couponId) {
+    const target = receiptCoupons.find(c => c.id === couponId);
+    if (!target || !target.couponImage) { saveReceiptCoupons(); return; }
+    const dataUrl = target.couponImage;
+    let url = '';
+    if (typeof uploadDataUrlToCloudImage === 'function') {
+        url = await uploadDataUrlToCloudImage(dataUrl, couponDriveFilename(couponId));
+    }
+    // アップロード待ちの間に別の端末の同期で一覧が入れ替わっていても、idで探し直す
+    const current = receiptCoupons.find(c => c.id === couponId);
+    if (url && current && current.couponImage === dataUrl) current.couponImageUrl = url;
+    saveReceiptCoupons(); // 保存して、他端末へ送信（URLがあればURLだけが送られる）
 }
 
 // 有効期間チェック（YYYY-MM-DD形式。どちらか未設定なら期限なし扱い）
@@ -62,7 +85,8 @@ function broadcastReceiptCoupons() {
     if (typeof channel !== 'undefined' && channel) {
         try {
             channel.publish('receipt-coupon-sync', {
-                coupons: receiptCoupons,
+                // URLがあるクーポンは、画像データを外してURLだけを送る（軽くする）
+                coupons: receiptCoupons.map(c => c.couponImageUrl ? Object.assign({}, c, { couponImage: '' }) : c),
                 senderId: (typeof SYNC_DEVICE_ID !== 'undefined') ? SYNC_DEVICE_ID : null,
                 time: Date.now()
             });
@@ -76,7 +100,17 @@ function broadcastReceiptCoupons() {
     if (typeof channel !== 'undefined' && channel) {
         channel.subscribe('receipt-coupon-sync', (msg) => {
             if (msg && msg.data && Array.isArray(msg.data.coupons)) {
-                receiptCoupons = msg.data.coupons;
+                // 届いたクーポンには画像データが無く、URLだけのことがある。
+                // この端末に同じURLの画像データが残っていれば、それを引き継ぐ（自分が送った分のエコー対策）
+                const localById = {};
+                receiptCoupons.forEach(c => { localById[c.id] = c; });
+                receiptCoupons = msg.data.coupons.map(c => {
+                    const local = localById[c.id];
+                    if (!c.couponImage && c.couponImageUrl && local && local.couponImage && local.couponImageUrl === c.couponImageUrl) {
+                        return Object.assign({}, c, { couponImage: local.couponImage });
+                    }
+                    return c;
+                });
                 localStorage.setItem(RECEIPT_COUPONS_KEY, JSON.stringify(receiptCoupons));
                 // クーポン管理パネルが開いている場合は表示も更新する
                 if (document.getElementById('receipt-coupon-settings-container')) {
@@ -151,8 +185,12 @@ function renderReceiptFooterCoupons() {
     matched.forEach(c => {
         html += `<div style="border-top: 1px dashed #d81b60; margin: 10px 0 8px 0; padding-top: 8px; text-align:center;">`;
         html += `<div style="font-weight:bold; color:#d81b60; font-size:12px; margin-bottom:4px;">🎫 クーポン</div>`;
-        if (c.couponImage) {
-            html += `<img src="${c.couponImage}" style="max-width:100%; max-height:160px; margin-bottom:6px;">`;
+        let imgSrc = (typeof receiptImageSrcFor === 'function')
+            ? receiptImageSrcFor(c.couponImage, c.couponImageUrl)
+            : (c.couponImage || c.couponImageUrl || '');
+        if (imgSrc && imgSrc.indexOf('data:image/') !== 0 && imgSrc.indexOf('https://') !== 0) imgSrc = '';
+        if (imgSrc) {
+            html += `<img src="${imgSrc}" style="max-width:100%; max-height:160px; margin-bottom:6px;">`;
         }
         if (c.couponText) {
             const safeText = (typeof escapeHtml === 'function') ? escapeHtml(c.couponText) : c.couponText;
@@ -306,7 +344,7 @@ function renderReceiptCouponSettingsPanel() {
             if (textInput) textInput.value = editing.couponText || '';
             if (fromInput) fromInput.value = editing.validFrom || '';
             if (toInput) toInput.value = editing.validTo || '';
-            renderCouponImagePreview(editing.couponImage || '');
+            renderCouponImagePreview(editing.couponImage || editing.couponImageUrl || '');
         }
     }
 }
@@ -378,7 +416,10 @@ function saveReceiptCouponForm() {
     const toInput = document.getElementById('coupon-valid-to-input');
     const name = nameInput ? nameInput.value.trim() : '';
     const couponText = textInput ? textInput.value.trim() : '';
-    const couponImage = imagePreviewEl ? (imagePreviewEl.dataset.value || '') : '';
+    // プレビューの値は、新しく選んだ画像(dataURL)か、他端末から届いたURLのどちらか
+    const imageValue = imagePreviewEl ? (imagePreviewEl.dataset.value || '') : '';
+    const couponImage = imageValue.indexOf('data:') === 0 ? imageValue : '';
+    const couponImageUrl = (imageValue && !couponImage) ? imageValue : '';
     const validFrom = fromInput && fromInput.value ? fromInput.value : null;
     const validTo = toInput && toInput.value ? toInput.value : null;
 
@@ -392,36 +433,50 @@ function saveReceiptCouponForm() {
         if (typeof showCustomConfirm === 'function') showCustomConfirm('対象商品を1つ以上追加してください。', 'たいしょう しょうひん を ついか し て ください', () => {}, true);
         return;
     }
-    if (!couponText && !couponImage) {
+    if (!couponText && !imageValue) {
         if (typeof playSound === 'function') playSound('error');
         if (typeof showCustomConfirm === 'function') showCustomConfirm('クーポンの文字か画像、どちらか一方は入力してください。', 'ないよう を にゅうりょく し て ください', () => {}, true);
         return;
     }
 
+    let uploadTargetId = null; // 画像のURL化（Driveアップロード）が必要なクーポンのid
     if (editingCouponId) {
         const target = receiptCoupons.find(c => c.id === editingCouponId);
         if (target) {
+            const imageChanged = !!couponImage && couponImage !== target.couponImage;
             target.name = name;
             target.triggerProducts = couponStagedProducts.slice();
             target.couponText = couponText;
             target.couponImage = couponImage;
+            // 画像が新しくなったらURLは作り直す。変わっていなければ今のURLを使い続ける
+            target.couponImageUrl = imageChanged ? '' : (couponImage ? (target.couponImageUrl || '') : couponImageUrl);
             target.validFrom = validFrom;
             target.validTo = validTo;
+            if (couponImage && !target.couponImageUrl) uploadTargetId = target.id;
         }
     } else {
+        const newId = `coupon_${Date.now()}_${Math.random().toString(36).slice(2)}`;
         receiptCoupons.push({
-            id: `coupon_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+            id: newId,
             name,
             enabled: true,
             triggerProducts: couponStagedProducts.slice(),
             couponText,
             couponImage,
+            couponImageUrl,
             validFrom,
             validTo
         });
+        if (couponImage) uploadTargetId = newId;
     }
 
-    saveReceiptCoupons();
+    if (uploadTargetId) {
+        // まずこの端末に保存だけして、画像をURLにしてから他端末へ送る
+        saveReceiptCoupons(true);
+        uploadCouponImageToCloud(uploadTargetId);
+    } else {
+        saveReceiptCoupons();
+    }
     editingCouponId = null;
     couponStagedProducts = [];
 
@@ -462,6 +517,11 @@ function deleteReceiptCoupon(id) {
     if (typeof showCustomConfirm === 'function') {
         showCustomConfirm('このクーポンを削除しますか？', 'さくじょ し ます か？', (res) => {
             if (!res) return;
+            const removing = receiptCoupons.find(c => c.id === id);
+            // Drive上の画像も、連携済みなら静かに削除する（失敗しても無視）
+            if (removing && removing.couponImageUrl && typeof deleteGoogleDriveFileByName === 'function') {
+                deleteGoogleDriveFileByName(couponDriveFilename(id), false);
+            }
             receiptCoupons = receiptCoupons.filter(c => c.id !== id);
             if (editingCouponId === id) { editingCouponId = null; couponStagedProducts = []; }
             saveReceiptCoupons();

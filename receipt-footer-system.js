@@ -30,6 +30,12 @@ const RECEIPT_FOOTER_TEXT_KEY = 'pos_receipt_footer_text';
 const RECEIPT_FOOTER_IMAGE_KEY = 'pos_receipt_footer_image'; // dataURL(base64)
 const RECEIPT_FOOTER_FROM_KEY = 'pos_receipt_footer_valid_from'; // YYYY-MM-DD（空なら無期限）
 const RECEIPT_FOOTER_TO_KEY = 'pos_receipt_footer_valid_to';
+// 【2026-11 追加】画像は、重いデータそのものではなく「URL」で他端末へ同期する。
+// （画像データはこの端末にだけ残し、他端末にはGoogle Drive上のURLだけを送る）
+const RECEIPT_FOOTER_IMAGE_URL_KEY = 'pos_receipt_footer_image_url';
+const RECEIPT_FOOTER_DRIVE_FILENAME = 'haru-pos-receipt-footer.jpg';
+// 他端末でURLから取得した画像の控え（pos_sync_ で始まるのでバックアップ・同期の対象外）
+const RECEIPT_IMAGE_CACHE_KEY = 'pos_sync_receipt_image_cache';
 
 function getReceiptFooterText() {
     return localStorage.getItem(RECEIPT_FOOTER_TEXT_KEY) || '';
@@ -47,6 +53,67 @@ function setReceiptFooterImage(dataUrl) {
         localStorage.removeItem(RECEIPT_FOOTER_IMAGE_KEY);
     }
 }
+function getReceiptFooterImageUrl() {
+    return localStorage.getItem(RECEIPT_FOOTER_IMAGE_URL_KEY) || '';
+}
+function setReceiptFooterImageUrl(url) {
+    if (url) {
+        localStorage.setItem(RECEIPT_FOOTER_IMAGE_URL_KEY, url);
+    } else {
+        localStorage.removeItem(RECEIPT_FOOTER_IMAGE_URL_KEY);
+    }
+}
+
+// <img src> に入れてよい値か（自分で作った dataURL か https のURLだけ）
+function receiptImageIsSafeSrc(src) {
+    return typeof src === 'string' && (src.indexOf('data:image/') === 0 || src.indexOf('https://') === 0);
+}
+
+// レシートに表示する画像の取得元を決める（receipt-coupon-system.js からも使う）
+//  1) この端末に画像データがあれば、それを使う
+//  2) 無ければURLを使う。ただしレシートを画像(PNG)保存するとき、他サイトの画像は
+//     写らないことがあるため、裏で一度だけ画像データを取得して控えておき、
+//     取得できた後はその控えを使う（取得できない場合はURLのまま表示する）
+const receiptImageCacheInFlight = {};
+const receiptImageCacheFailed = {};
+function receiptImageSrcFor(localData, url) {
+    if (localData) return localData;
+    if (!url) return '';
+    let map = {};
+    try { map = JSON.parse(localStorage.getItem(RECEIPT_IMAGE_CACHE_KEY) || '{}') || {}; } catch (e) { map = {}; }
+    if (map[url]) return map[url];
+    fetchReceiptImageToCache(url);
+    return url;
+}
+async function fetchReceiptImageToCache(url) {
+    if (receiptImageCacheInFlight[url] || receiptImageCacheFailed[url]) return;
+    receiptImageCacheInFlight[url] = true;
+    try {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const blob = await res.blob();
+        const data = await new Promise((resolve, reject) => {
+            const r = new FileReader();
+            r.onload = () => resolve(r.result);
+            r.onerror = () => reject(new Error('読み込み失敗'));
+            r.readAsDataURL(blob);
+        });
+        if (String(data).indexOf('data:image/') !== 0) throw new Error('画像ではありません');
+        let map = {};
+        try { map = JSON.parse(localStorage.getItem(RECEIPT_IMAGE_CACHE_KEY) || '{}') || {}; } catch (e) { map = {}; }
+        const keys = Object.keys(map);
+        while (keys.length >= 8) delete map[keys.shift()]; // 古い控えから捨てる
+        map[url] = data;
+        localStorage.setItem(RECEIPT_IMAGE_CACHE_KEY, JSON.stringify(map));
+        if (typeof renderReceiptFooterCustomContent === 'function') renderReceiptFooterCustomContent();
+        if (typeof renderReceiptFooterCoupons === 'function') renderReceiptFooterCoupons();
+    } catch (e) {
+        receiptImageCacheFailed[url] = true; // 取得できない（他サイトの制限など）場合はURL表示のまま
+    } finally {
+        delete receiptImageCacheInFlight[url];
+    }
+}
+
 function getReceiptFooterValidFrom() {
     return localStorage.getItem(RECEIPT_FOOTER_FROM_KEY) || '';
 }
@@ -126,7 +193,8 @@ function renderReceiptFooterCustomContent() {
     if (!el) return;
 
     const text = getReceiptFooterText();
-    const image = getReceiptFooterImage();
+    let image = receiptImageSrcFor(getReceiptFooterImage(), getReceiptFooterImageUrl());
+    if (!receiptImageIsSafeSrc(image)) image = '';
 
     if ((!text && !image) || !isReceiptFooterInValidPeriod()) {
         el.innerHTML = '';
@@ -211,7 +279,8 @@ function renderReceiptFooterSettingsPanel() {
     if (!container) return;
 
     const text = getReceiptFooterText();
-    const image = getReceiptFooterImage();
+    let image = getReceiptFooterImage() || getReceiptFooterImageUrl();
+    if (!receiptImageIsSafeSrc(image)) image = '';
     const validFrom = getReceiptFooterValidFrom();
     const validTo = getReceiptFooterValidTo();
 
@@ -252,11 +321,25 @@ async function handleReceiptFooterImageUpload(event) {
     try {
         const dataUrl = await footerResizeImageToDataUrl(file);
         setReceiptFooterImage(dataUrl);
+        setReceiptFooterImageUrl(''); // 新しい画像になったので、古いURLは使わない
         if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
-        broadcastReceiptFooterSettings();
         if (typeof playSound === 'function') playSound('success');
         renderReceiptFooterSettingsPanel();
         renderReceiptFooterCustomContent();
+
+        // 他端末へは、重い画像データではなくURLだけを送る。
+        // Google Driveに画像を1回だけアップロードしてURLを作り、そのURLを同期する。
+        // （Driveに未連携などでURLが作れない時は、これまで通り画像データそのものを送る）
+        let url = '';
+        if (typeof uploadDataUrlToCloudImage === 'function') {
+            url = await uploadDataUrlToCloudImage(dataUrl, RECEIPT_FOOTER_DRIVE_FILENAME);
+        }
+        // アップロード待ちの間に別の画像へ差し替えられていた場合は、古い方のURLを採用しない
+        if (url && getReceiptFooterImage() === dataUrl) {
+            setReceiptFooterImageUrl(url);
+            if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
+        }
+        broadcastReceiptFooterSettings();
     } catch (e) {
         console.warn(e);
         if (typeof playSound === 'function') playSound('error');
@@ -265,6 +348,9 @@ async function handleReceiptFooterImageUpload(event) {
 
 function clearReceiptFooterImage() {
     setReceiptFooterImage(null);
+    setReceiptFooterImageUrl('');
+    // Drive上の画像も、連携済みなら静かに削除する（失敗しても無視）
+    if (typeof deleteGoogleDriveFileByName === 'function') deleteGoogleDriveFileByName(RECEIPT_FOOTER_DRIVE_FILENAME, false);
     if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
     broadcastReceiptFooterSettings();
     if (typeof playSound === 'function') playSound('click');
@@ -300,9 +386,12 @@ function saveReceiptFooterSettings() {
 function broadcastReceiptFooterSettings() {
     if (typeof channel !== 'undefined' && channel) {
         try {
+            // URLがあればURLだけを送る（軽い）。無い時だけ画像データそのものを送る。
+            const imageUrl = getReceiptFooterImageUrl();
             channel.publish('receipt-footer-sync', {
                 text: getReceiptFooterText(),
-                image: getReceiptFooterImage(),
+                image: imageUrl ? '' : getReceiptFooterImage(),
+                imageUrl: imageUrl,
                 validFrom: getReceiptFooterValidFrom(),
                 validTo: getReceiptFooterValidTo(),
                 senderId: (typeof SYNC_DEVICE_ID !== 'undefined') ? SYNC_DEVICE_ID : null,
@@ -319,7 +408,21 @@ function broadcastReceiptFooterSettings() {
         channel.subscribe('receipt-footer-sync', (msg) => {
             if (!msg || !msg.data) return;
             setReceiptFooterText(msg.data.text || '');
-            setReceiptFooterImage(msg.data.image || null);
+            const incomingUrl = msg.data.imageUrl || '';
+            const incomingImage = msg.data.image || '';
+            if (incomingImage) {
+                // 画像データそのものが届いた場合（Drive未連携の端末から送られた時）
+                setReceiptFooterImage(incomingImage);
+                setReceiptFooterImageUrl('');
+            } else if (incomingUrl) {
+                // URLだけが届いた場合。URLが今と同じ（自分が送った分のエコー、または文字だけの変更）なら、
+                // この端末に残っている画像データは消さない。違うURLなら新しい画像なので、URLに切り替える
+                if (incomingUrl !== getReceiptFooterImageUrl()) setReceiptFooterImage(null);
+                setReceiptFooterImageUrl(incomingUrl);
+            } else {
+                setReceiptFooterImage(null);
+                setReceiptFooterImageUrl('');
+            }
             setReceiptFooterValidPeriod(msg.data.validFrom || '', msg.data.validTo || '');
             if (document.getElementById('receipt-footer-settings-container')) {
                 renderReceiptFooterSettingsPanel();

@@ -30,9 +30,15 @@
     },
     "pos_backup": {
       "$code": {
-        ".validate": "$code.matches(/^[0-9a-f]{32}$/)",
+        ".validate": "$code.matches(/^[0-9a-f]{32}$/) && newData.hasChildren(['d','h','at'])",
         ".read": true,
-        ".write": true
+        ".write": true,
+        "d": {
+          ".validate": "newData.isString() && newData.val().length < 12000000"
+        },
+        "h": {
+          ".validate": "newData.isString() && newData.val().length < 100"
+        }
       }
     }
   }

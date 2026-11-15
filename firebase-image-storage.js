@@ -125,6 +125,33 @@ async function uploadImageToGoogleDrive(file, filename) {
     }
 }
 
+/**
+ * 画像データ（dataURL）をGoogle Driveへアップロードし、「URLだけ」を返す。
+ * 他端末へ同期するときに、重い画像データ（base64）そのものを送らず、
+ * 数十文字のURLだけを送るために使う（レシートのメッセージ画像・クーポン画像など）。
+ *  - 同じファイル名なら上書きされるため、URLの末尾に毎回違う「&v=」を付けて、
+ *    他端末で古い画像がキャッシュ表示され続けるのを防ぐ。
+ *  - Google Driveに未連携などで失敗した場合は空文字を返す（呼び出し側は、
+ *    これまで通り画像データそのものを送る方法に切り替える）。
+ * @param {string} dataUrl - data:image/... 形式の文字列
+ * @param {string} filename - Drive上で使う固定ファイル名
+ * @returns {Promise<string>} 画像のURL（失敗時は空文字）
+ */
+async function uploadDataUrlToCloudImage(dataUrl, filename) {
+    try {
+        if (!dataUrl || String(dataUrl).indexOf('data:') !== 0) return '';
+        if (typeof ensureGoogleDriveToken !== 'function' || typeof gDriveApiFetch !== 'function') return '';
+        const blob = await (await fetch(dataUrl)).blob();
+        const file = new File([blob], filename, { type: blob.type || 'image/jpeg' });
+        const result = await uploadImageToGoogleDrive(file, filename);
+        if (!result || !result.url) return '';
+        return result.url + '&v=' + Date.now().toString(36);
+    } catch (error) {
+        console.warn('画像のURL化（Google Drive）に失敗しました:', error);
+        return '';
+    }
+}
+
 // 指定した名前のファイルをGoogle Driveから削除する
 async function deleteGoogleDriveFileByName(filename, interactive) {
     try {
@@ -166,10 +193,13 @@ async function uploadShopLogo(event) {
         // Google Driveへのアップロード（連携済みなら他端末にも反映される）
         const result = await uploadImageToGoogleDrive(file, GDRIVE_LOGO_FILENAME);
         if (result) {
-            setShopLogoUrl(result.url);
-            localStorage.setItem('pos_shop_logo_url_cloud', result.url);
+            // 同じファイル名で上書きされるため、URLの末尾に毎回違う「&v=」を付けて、
+            // 他端末で古いロゴがキャッシュ表示され続けるのを防ぐ
+            const versionedUrl = result.url + '&v=' + Date.now().toString(36);
+            setShopLogoUrl(versionedUrl);
+            localStorage.setItem('pos_shop_logo_url_cloud', versionedUrl);
             if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
-            console.log('✅ ロゴをGoogle Driveに保存完了:', result.url);
+            console.log('✅ ロゴをGoogle Driveに保存完了:', versionedUrl);
         }
     };
     reader.readAsDataURL(file);
@@ -291,7 +321,10 @@ async function loadShopLogoFromCloud() {
         const fileId = await findGoogleDriveFileIdByName(GDRIVE_LOGO_FILENAME);
         if (!fileId) return null;
 
-        const url = getGoogleDriveImageViewUrl(fileId);
+        // すでに同じファイルを指すURL（&v=付き）が保存されていれば、それを使い続ける
+        // （キャッシュ対策の「&v=」を、起動のたびに消してしまわないため）
+        const storedUrl = localStorage.getItem('pos_shop_logo_url_cloud') || '';
+        const url = (storedUrl && driveUrlFileId(storedUrl) === fileId) ? storedUrl : getGoogleDriveImageViewUrl(fileId);
         setShopLogoUrl(url);
         localStorage.setItem('pos_shop_logo_url_cloud', url);
 
@@ -364,6 +397,39 @@ async function syncImagesToCloud() {
     }
 }
 
+// Google DriveのURL（...uc?export=view&id=XXXX&v=...）からファイルIDを取り出す
+function driveUrlFileId(url) {
+    const m = String(url || '').match(/[?&]id=([^&]+)/);
+    return m ? m[1] : '';
+}
+
+/**
+ * 他端末から同期されたロゴのURL（pos_shop_logo_url_cloud）を、ホーム画面・レシートに反映する。
+ * 【2026-11】ロゴの画像データ（pos_shop_logo_local）は重いため、他端末へは同期せず、
+ * 小さなURLだけを同期する方式に変えた（extra-settings-sync.js側で画像データを同期対象から外した）。
+ * @param {boolean} isRemoteChange - 他端末での変更を受け取った時はtrue（この端末の古い画像データは捨てる）
+ */
+function applyShopLogoFromSyncedUrl(isRemoteChange) {
+    const url = localStorage.getItem('pos_shop_logo_url_cloud') || '';
+    if (isRemoteChange) {
+        localStorage.removeItem('pos_shop_logo_local');
+    } else if (localStorage.getItem('pos_shop_logo_local')) {
+        return; // この端末に自分の画像データがあるなら、それを優先する
+    }
+    let src = '';
+    if (url && url.indexOf('https://') === 0) {
+        src = url;
+    } else if (isRemoteChange) {
+        // 他端末でロゴが削除された
+        src = 'https://illust8.com/wp-content/uploads/2022/04/cash-register_16279.png';
+    }
+    if (!src) return;
+    const logoImg = document.getElementById('home-shop-logo');
+    const receiptLogo = document.getElementById('receipt-preview-logo');
+    if (logoImg) logoImg.src = src;
+    if (receiptLogo) receiptLogo.src = src;
+}
+
 /**
  * 初期化: アプリ起動時に画像を読み込む
  */
@@ -375,6 +441,9 @@ async function initImageStorage() {
     if (logoLocal) {
         const logoImg = document.getElementById('home-shop-logo');
         if (logoImg) logoImg.src = logoLocal;
+    } else {
+        // この端末に画像データが無い場合は、他端末から同期されたURLで表示する
+        applyShopLogoFromSyncedUrl(false);
     }
 
     if (checkoutLocal) {

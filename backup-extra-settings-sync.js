@@ -81,6 +81,7 @@ const EXTRA_BACKUP_EXCLUDED_KEYS = [
     'pos_ai_webllm_model_id',      // この端末で選んでいるAIモデル（端末の性能に依存するため）
     'pos_last_inactivity_nudge',   // 通知の再送間隔を内部管理するタイムスタンプ（設定でも業務データでもない）
     'pos_is_customer_display',     // この端末を「客用ディスプレイ」にする設定（端末ごとの役割）
+    'pos_is_customer_display_device', // 2026-11追記：実際に使われているキー名はこちら（上の名前だけでは一致せず、Drive経由で他端末へ移っていた）
     'pos_shop_id',                 // 2026-09追記：店舗ごとに意図的に別の値を持たせる合言葉のため、
                                     // バックアップ経由で他店舗・他端末の値を上書きしてしまう事故になり得る
                                     // （shop-id-system.js。extra-settings-ably-sync.jsの除外リストと同じ理由）
@@ -94,8 +95,17 @@ const EXTRA_BACKUP_EXCLUDED_PREFIXES = [
     'pos_sync_'                    // 同期処理そのものが内部管理に使う、この端末のスナップショット等
 ];
 
+// 【2026-11追加】「客用ディスプレイ」に関するキーは、名前のつけ方が違っていても
+// 必ず除外する（キー名の完全一致だけに頼ると、名前が少し違うだけで他端末へ移ってしまい、
+// 全端末が客用ディスプレイ扱いになる事故になるため）
+const EXTRA_BACKUP_EXCLUDED_PATTERNS = [
+    /customer[_-]?display/i,
+    /customerdisplay/i
+];
+
 function isExcludedFromExtraBackup(key) {
     if (EXTRA_BACKUP_EXCLUDED_KEYS.includes(key)) return true;
+    if (EXTRA_BACKUP_EXCLUDED_PATTERNS.some(re => re.test(key))) return true;
     return EXTRA_BACKUP_EXCLUDED_PREFIXES.some(prefix => key.startsWith(prefix));
 }
 

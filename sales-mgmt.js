@@ -2,7 +2,30 @@
 // ハイテク音声レジスター - 売上管理・精算機能
 // ==========================================
 
+// 【今回の修正】業務の開始・終了（チェックアウト）が、他の端末に伝わっていなかった。
+// 原因：送受信に使っていた ablyChannel は、Ablyをやめた時点で存在しなくなっており、
+// どちらも「何もしない」状態になっていた。現在の同期の窓口である channel
+// （firebase-sync-system.js）に切り替えた。
+//   ・業務終了：他の端末も「本日の業務を終了しました」の画面になる
+//     （PNGレシートの自動保存は、終了操作をした端末だけが行う）
+//   ・業務開始：他の端末も開始状態に戻り、釣銭準備金も同じ金額になる
+//   ・過不足の記録（pos_last_close_diff）も、終了した端末のものが他の端末に入る
+// あわせて、pos_business_closed / pos_start_cash などの保存値は
+// extra-settings-sync.js でも同期されるので、通信が途切れていた端末も、後から追いつく。
 let isBusinessClosed = false;
+
+// 業務の開始・終了を、他の端末へ知らせる
+function broadcastBusinessStatus(payload) {
+    if (typeof channel === 'undefined' || !channel) return;
+    try {
+        channel.publish('business-status', Object.assign({
+            time: Date.now(),
+            senderId: (typeof SYNC_DEVICE_ID !== 'undefined') ? SYNC_DEVICE_ID : null
+        }, payload));
+    } catch (e) {
+        console.warn('業務状態の同期送信に失敗しました:', e);
+    }
+}
 let calculatedSystemTotal = 0; 
 let cashlessTotal = 0;         
 
@@ -71,9 +94,7 @@ function confirmStartBusiness() {
         overlay.style.display = 'none';
     }
 
-    if (typeof ablyChannel !== 'undefined' && ablyChannel) {
-        ablyChannel.publish('business-status', { status: 'open', time: Date.now() }).catch(() => {});
-    }
+    broadcastBusinessStatus({ status: 'open', startCash: totalStartCash });
 
     if (typeof playSound === 'function') playSound('success');
     document.getElementById('business-start-modal').style.display = 'none';
@@ -254,14 +275,13 @@ function performCloseBusiness(diff) {
     isBusinessClosed = true;
     checkBusinessStatus();
 
-    // Ably経由で「本日の業務を終了しました」というメッセージとステータスを送信
-    if (typeof ablyChannel !== 'undefined' && ablyChannel) {
-        ablyChannel.publish('business-status', {
-            status: 'closed',
-            message: '本日の業務を終了しました',
-            time: Date.now()
-        }).catch(() => {});
-    }
+    // 他の端末へ「本日の業務を終了しました」を知らせる（他の端末も終了状態になる）
+    broadcastBusinessStatus({
+        status: 'closed',
+        message: '本日の業務を終了しました',
+        diff: diff,
+        closedBy: (typeof activeClerkName !== 'undefined' && activeClerkName) ? activeClerkName : null
+    });
 
     // 本日の精算・売上内容のレシートをPNG画像として自動保存する
     const salesMgmtScreen = document.getElementById('sales-mgmt-screen');
@@ -298,24 +318,42 @@ function checkBusinessStatus() {
 document.addEventListener('DOMContentLoaded', () => {
     checkBusinessStatus();
 
-    const setupAblySync = () => {
-        if (typeof ablyChannel !== 'undefined' && ablyChannel) {
-            ablyChannel.subscribe('business-status', (message) => {
-                if (message.data.status === 'closed') {
+    // 他の端末からの「業務開始／終了」を受け取る
+    const setupBusinessStatusSync = () => {
+        if (typeof channel !== 'undefined' && channel) {
+            channel.subscribe('business-status', (message) => {
+                const d = message && message.data;
+                if (!d) return;
+                // 自分が送ったものは、すでに処理済みなので無視する
+                if (d.senderId && typeof SYNC_DEVICE_ID !== 'undefined' && d.senderId === SYNC_DEVICE_ID) return;
+
+                if (d.status === 'closed') {
                     localStorage.setItem('pos_business_closed', 'true');
+                    if (typeof d.diff === 'number' && d.diff !== 0) {
+                        localStorage.setItem('pos_last_close_diff', JSON.stringify({
+                            diff: d.diff,
+                            closedAt: d.time || Date.now(),
+                            approvedBy: d.closedBy || null
+                        }));
+                    } else if (d.diff === 0) {
+                        localStorage.removeItem('pos_last_close_diff');
+                    }
                     isBusinessClosed = true;
                     checkBusinessStatus();
-                } else if (message.data.status === 'open') {
+                } else if (d.status === 'open') {
+                    if (d.startCash !== undefined && d.startCash !== null) {
+                        localStorage.setItem('pos_start_cash', String(d.startCash));
+                    }
                     localStorage.removeItem('pos_business_closed');
                     isBusinessClosed = false;
                     checkBusinessStatus();
                 }
             });
         } else {
-            setTimeout(setupAblySync, 1000);
+            setTimeout(setupBusinessStatusSync, 1000);
         }
     };
-    setupAblySync();
+    setupBusinessStatusSync();
 
     window.addEventListener('storage', (e) => {
         if (e.key === 'pos_business_closed') {

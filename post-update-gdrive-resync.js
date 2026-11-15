@@ -22,18 +22,9 @@
 // （Google Drive未連携・客用ディスプレイ端末の場合は、
 //   auto-google-drive-sync.js側の判定により何も起きない）
 //
-// 【今回の強化：APIキー（Ably）も一緒に取り直す】
-// これまではGoogle Driveのデータだけを取り直していたが、
-// index.html側が持つAbly用APIキー（Firestoreの pos_realtime_settings
-// から読み込む方式）も、ページを開きっぱなしのまま長時間経ってから
-// アップデートが反映されたようなケースでは、念のため最新の値に
-// 取り直しておきたい。index.htmlが用意している
-// window.getPosApiKeyAsync()（＝loadPosApiKeyFromFirestoreの公開版）を
-// 使って再取得し、window.POS_ABLY_API_KEY を更新したうえで、
-// 他ファイルが待ち受けている 'pos-ably-key-ready' イベントを
-// 改めて発火させる。こちらもindex.html / auto-google-drive-sync.jsを
-// 直接編集せず、既存の公開関数・イベントを読み取って利用するだけの
-// 独立したファイルとして実装する。
+// 【今回の変更】
+// 以前は、AblyのAPIキーも一緒に取り直していたが、同期をFirebaseに切り替えて
+// APIキー自体が不要になったため、その処理を削除した。
 // ==========================================
 
 const LAST_SEEN_APP_VERSION_KEY = 'pos_last_seen_app_version';
@@ -41,21 +32,6 @@ const LAST_SEEN_APP_VERSION_KEY = 'pos_last_seen_app_version';
 function getDisplayedAppVersion() {
     const badge = document.getElementById('app-version-badge');
     return badge ? badge.innerText.trim() : null;
-}
-
-async function resyncPosApiKeyAfterUpdate() {
-    if (typeof window.getPosApiKeyAsync !== 'function') return; // index.html側が未準備
-
-    try {
-        const key = await window.getPosApiKeyAsync();
-        if (key) {
-            window.POS_ABLY_API_KEY = key;
-            window.dispatchEvent(new CustomEvent('pos-ably-key-ready', { detail: { apiKey: key } }));
-            console.info('アップデートを検知したため、Ably用APIキーを最新の状態に取り直しました。');
-        }
-    } catch (e) {
-        console.warn('アップデート後のAPIキー再取得に失敗しました:', e);
-    }
 }
 
 function checkVersionChangeAndResyncGoogleDrive() {
@@ -73,7 +49,6 @@ function checkVersionChangeAndResyncGoogleDrive() {
             autoRestoreFromGoogleDriveOnLoad();
         }
 
-        resyncPosApiKeyAfterUpdate();
     }
 
     localStorage.setItem(LAST_SEEN_APP_VERSION_KEY, currentVersion);

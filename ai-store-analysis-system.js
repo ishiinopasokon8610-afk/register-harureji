@@ -747,8 +747,9 @@ drawAiAnalysisLineChart(canvas, c);
 });
 }
 // 【不具合修正】以前は「ロゴを設定するとここに表示されます」という仮の画像を指していたため、
-// 通知にレジのアイコンが出なかった。index.html の favicon と同じレジのアイコンにする。
-const AI_ANALYSIS_NOTIFICATION_ICON_URL = 'https:' + '//raw.githubusercontent' + '.com/ishiinopasokon8610-afk/image-list/main/images/register-icon.png';
+// 通知にレジのアイコンが出なかった。他の通知（notifications-system.js）と同じ
+// 標準のレジのアイコンを使う（アイコンを渡さなければ自動でそれが使われる）。
+const AI_ANALYSIS_NOTIFICATION_ICON_URL = undefined;
 const AI_ANALYSIS_NOTIFICATION_BODY_MAX_LEN = 120;
 function buildAiAnalysisNotificationBody(answerText) {
 const plain = String(answerText || '').replace(/\s+/g, ' ').trim();
@@ -904,6 +905,16 @@ showCustomConfirm('保存できませんでした（端末の保存容量がい�
 }
 writeAiHistoryMirror(list);
 if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
+// 他の端末へも、次の定期確認（2秒ごと）を待たずにすぐ送る
+if (typeof pollAndBroadcastSettingsChanges === 'function') {
+try { pollAndBroadcastSettingsChanges(); } catch (e) { /* 無視 */ }
+}
+}
+// 他の端末で保存・削除された履歴を受け取った時（extra-settings-sync.js から呼ばれる）：
+// 控えも新しい内容に更新し（古い控えで、削除した履歴が復活しないように）、画面を描き直す
+function onAiAnalysisSavedHistoryChangedRemotely() {
+writeAiHistoryMirror(getAiAnalysisSavedHistory());
+renderAiAnalysisSavedHistory();
 }
 function formatAiAnalysisSavedAt(iso) {
 try {
