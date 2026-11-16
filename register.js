@@ -1708,3 +1708,61 @@ document.addEventListener('keydown', (e) => {
         if (typeof clearCart === 'function') clearCart();
     }
 });
+/* =========================================================
+   領収書まわりのキー操作
+   ------------------------------------------
+   ・「領収書を発行しますか？」 … Enter＝はい ／ Backspace（Delete）＝いいえ
+   ・お会計レシート画面       … Enter＝画像(PNG)保存 ／ Backspace（Delete）＝閉じる
+   index.html 内にも同じ画面向けのキー処理があるが（こちらでは Enter が「いいえ」になっていた）、
+   window の「キャプチャ段階」で先に受け取り、ここで処理を終わらせて（stopImmediatePropagation）
+   そちらへは渡さない。他の確認ダイアログ（「領収書を発行しますか？」以外）には触れない。
+   ========================================================= */
+(function receiptKeyShortcuts() {
+    let receiptKeySaving = false; // 画像保存の最中に Enter をもう一度押しても、二重に保存しない
+
+    function isShown(el) {
+        if (!el) return false;
+        const st = window.getComputedStyle(el);
+        return st.display !== 'none' && st.visibility !== 'hidden';
+    }
+
+    window.addEventListener('keydown', function (e) {
+        // 時計ずれの警告画面（clock-check-system.js）が出ている間は、何もしない
+        if (typeof window.isClockSkewBlocking === 'function' && window.isClockSkewBlocking()) return;
+        if (e.ctrlKey || e.altKey || e.metaKey || e.isComposing) return;
+
+        const isYesKey = e.key === 'Enter';
+        const isNoKey = e.key === 'Backspace' || e.key === 'Delete';
+        if (!isYesKey && !isNoKey) return;
+
+        const confirmModal = document.getElementById('custom-confirm-modal');
+        const printModal = document.getElementById('receipt-print-modal');
+
+        // ① 「領収書を発行しますか？」
+        if (isShown(confirmModal)) {
+            const textEl = document.getElementById('custom-confirm-text');
+            const text = textEl ? (textEl.innerText || textEl.textContent || '') : '';
+            if (!text.includes('領収書を発行しますか？')) return; // 別の確認ダイアログは今まで通り
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            if (e.repeat) return; // 押しっぱなしで次の画面まで進んでしまわないように
+            if (typeof closeCustomConfirm === 'function') closeCustomConfirm(isYesKey);
+            return;
+        }
+
+        // ② お会計レシート画面
+        if (isShown(printModal)) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            if (e.repeat) return;
+            if (isYesKey) {
+                if (receiptKeySaving) return;
+                receiptKeySaving = true;
+                Promise.resolve(typeof saveReceiptAsImage === 'function' ? saveReceiptAsImage() : null)
+                    .finally(() => { receiptKeySaving = false; });
+            } else if (typeof closeReceiptPrintModal === 'function') {
+                closeReceiptPrintModal();
+            }
+        }
+    }, true);
+})();

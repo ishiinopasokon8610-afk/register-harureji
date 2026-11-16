@@ -1,5 +1,5 @@
 // ★リリースのたびに、この値を書き換えてください★
-const APP_VERSION = 'v3.0.14';
+const APP_VERSION = 'v3.0.15';
 
 // このファイル自身のURL（script要素のsrcから逆算する。
 // index.html側でファイル名を変更・移動していても追従できるようにするため）

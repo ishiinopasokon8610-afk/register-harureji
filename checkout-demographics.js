@@ -120,7 +120,6 @@ function showDemographicStep(onConfirm) {
     const modal = document.getElementById('checkout-demographic-modal');
     if (modal) modal.style.display = 'flex';
 
-    if (typeof speak === 'function') speak("せいべつ と ねんれいそう を おしえ て ください");
 }
 
 function closeDemographicModal() {

@@ -43,14 +43,15 @@
     // URLに毎回違う値を付けて、途中のキャッシュからも返らないようにする。
     // 端末の「実際の時刻」。Date.now() はページ内のスクリプトで書き換えられている可能性が
     // あるため、ブラウザ本体の時計（performance.timeOrigin + performance.now()）を使う。
+    // 【不具合修正】以前は performance.timeOrigin + performance.now() を「端末の時刻」にしていたが、
+    // これは「ページを開いた瞬間の時刻 ＋ 開いてからの経過時間」で計算した値であり、端末の時計そのものではない。
+    // そのため、①スリープ・画面ロックの間は経過時間が進まない、②ページを開いた後に端末の時計が
+    // 自動補正（ネットワーク時刻）されても反映されない、ことで、端末の時計は合っているのに
+    // 「ずれています」と誤って警告が出ていた。端末の時計（Date.now）をそのまま使う。
     function realNow() {
-        try {
-            if (typeof performance !== 'undefined' && performance.timeOrigin && typeof performance.now === 'function') {
-                return Math.round(performance.timeOrigin + performance.now());
-            }
-        } catch (e) { /* 下のDate.now()を使う */ }
         return Date.now();
     }
+
 
     async function fetchServerTime() {
         const t0 = realNow();
@@ -103,7 +104,16 @@
         }
 
         let t = null;
-        try { t = await fetchServerTime(); } catch (e) { t = null; }
+        try {
+            t = await fetchServerTime();
+            // 1回目でずれが大きかった時は、通信の一時的な誤差（古いキャッシュが返った等）の
+            // 可能性があるため、少し待って測り直し、2回目の結果で判定する。
+            if (t && Math.abs(t.deviceMs - t.serverMs) > TOLERANCE_MS) {
+                await new Promise(r => setTimeout(r, 1000));
+                const t2 = await fetchServerTime();
+                if (t2) t = t2;
+            }
+        } catch (e) { t = null; }
 
         if (t) {
             const diff = t.deviceMs - t.serverMs; // プラス＝端末が進んでいる
@@ -116,14 +126,6 @@
         }
 
         return problems.length ? { problems, detail } : { problems: [], detail: '' };
-    }
-
-    // 参考：ページ内の Date.now() が、ブラウザ本体の時計と大きく違っていないか（原因調査用。画面には出さない）
-    function warnIfDateOverridden() {
-        try {
-            const d = Math.abs(Date.now() - realNow());
-            if (d > TOLERANCE_MS) console.warn('[clock-check] ページ内の Date.now() が端末の実際の時刻と ' + fmtDiff(d) + ' ずれています。Date を書き換えているスクリプトがないか確認してください。');
-        } catch (e) { /* 無視 */ }
     }
 
     /* ---------- 警告画面 ---------- */
@@ -199,7 +201,6 @@
     /* ---------- 確認の実行・スケジュール ---------- */
     async function runCheck(manual) {
         if (checking) return;
-        warnIfDateOverridden();
         checking = true;
         const statusEl = overlayEl ? overlayEl.querySelector('#clock-skew-status') : null;
         if (manual && statusEl) statusEl.textContent = '確認しています…';
