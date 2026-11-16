@@ -1,0 +1,15 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // お会計完了画像など（データ用コードから作った暗号名のフォルダ）
+    match /pos_images/{code}/{file} {
+      // 画像のURLを知っている端末だけが読める（フォルダの一覧は見せない）
+      allow get: if true;
+      allow list: if false;
+      allow create, update: if code.matches('[0-9a-f]{32}')
+                            && request.resource.size < 3 * 1024 * 1024
+                            && request.resource.contentType.matches('image/.*');
+      allow delete: if code.matches('[0-9a-f]{32}');
+    }
+  }
+}

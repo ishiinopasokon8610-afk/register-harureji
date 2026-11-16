@@ -2,10 +2,10 @@
 // firebase-sync-system.js
 // ------------------------------------------
 // 【この機能】
-// Ably の代わりに Firebase Realtime Database で、端末どうしのリアルタイム同期を行う。
+// 従来の外部同期サービスの代わりに Firebase Realtime Database で、端末どうしのリアルタイム同期を行う。
 //
 // これまで sync-system.js / customer-sync-system.js / discount-system.js /
-// extra-settings-ably-sync.js / order-checkout-display.js / touch-panel-order-system.js
+// extra-settings-sync.js / order-checkout-display.js / touch-panel-order-system.js
 // などは、すべて「channel」というグローバル変数に対して
 //     channel.publish(イベント名, データ)
 //     channel.subscribe(イベント名, (msg) => { msg.data ... })
@@ -24,9 +24,9 @@
 //   受け取る側は、その場所を見張っていて、新しいデータが作られたら
 //   復号して、登録されている subscribe の処理に渡す。
 //
-// 【Ably との違い】
+// 【従来方式との違い】
 //   ・自分が送った update-cart は、自分には返さない（古い状態でカートが巻き戻るのを防ぐ）。
-//     それ以外のイベントは、Ably と同じく自分にも返す（年齢確認などが自分の端末で動くため）。
+//     それ以外のイベントは、従来と同じく自分にも返す（年齢確認などが自分の端末で動くため）。
 //   ・データ用コードが未設定の端末は、送信も受信もしない。
 //
 // 【今回の更新：同期の遅延対策】
@@ -325,7 +325,50 @@
         refreshStatus();
     }
 
+    /* ---------------------------------------------------------
+       同期中の端末の数
+       ---------------------------------------------------------
+       同じデータ用コードでつながっている端末が、pos_sync/{暗号名}/presence/ に
+       「いま接続中」の目印を1つずつ置く。通信が切れる（アプリを閉じる・電源が落ちる等）と、
+       Firebase側が自動で目印を消すので、残っている目印の数＝いま同期中の端末の数になる。
+       目印の中身は、置いた時刻だけ（個人情報・店のデータは入らない）。 */
+    function detachPresence() {
+        const p = st.presence;
+        st.presence = null;
+        if (!p) return;
+        try { p.connRef.off('value', p.onConn); } catch (e) { /* 無視 */ }
+        try { p.listRef.off('value', p.onList); } catch (e) { /* 無視 */ }
+        try { p.meRef.remove(); } catch (e) { /* 無視 */ }
+        st.deviceCount = 0;
+    }
+
+    function attachPresence(base, gen) {
+        detachPresence();
+        const db = st.db;
+        const listRef = base.child('presence');
+        const meRef = listRef.child(DEVICE_TAG);
+        const connRef = db.ref('.info/connected');
+        const onConn = (s) => {
+            if (!s.val() || gen !== st.gen) return;
+            // つながるたびに（再接続の時も）、切れたら消える設定をしてから目印を置く
+            meRef.onDisconnect().remove().then(() => {
+                meRef.set({ t: firebase.database.ServerValue.TIMESTAMP });
+            }).catch(() => {});
+        };
+        const onList = (s) => {
+            const n = s.numChildren();
+            if (n !== st.deviceCount) {
+                st.deviceCount = n;
+                dispatch('pos-sync-devices', { count: n });
+            }
+        };
+        connRef.on('value', onConn);
+        listRef.on('value', onList);
+        st.presence = { listRef, meRef, connRef, onConn, onList };
+    }
+
     function detach() {
+        detachPresence();
         const r = st.refs;
         st.refs = null;
         if (!r) return;
@@ -346,6 +389,7 @@
         const durableQ = base.child('events').orderByChild('t').startAt(st.lastSeen);
         const liveQ = base.child('live').orderByChild('t').startAt(serverNow() - 3000);
         st.refs = { base, durableQ, liveQ };
+        attachPresence(base, gen);
         durableQ.on('child_added', (s) => onChild(s, gen, true), onListenError);
         liveQ.on('child_added', (s) => onChild(s, gen, false), onListenError);
         if (first) { /* 初回は特別な処理なし（過去分はバックアップとの照合で受け取る） */ }
@@ -526,7 +570,7 @@
     }
 
     /* =========================================================
-       Ably の channel と同じ形の入れ物
+       従来の channel と同じ形の入れ物
        ========================================================= */
     function toNameList(a) {
         if (Array.isArray(a)) return a.filter(x => typeof x === 'string');
@@ -571,12 +615,11 @@
     // 作り直さずに同じ入れ物を使い続けるので、あとから subscribe した処理も、
     // データ用コードを変えた後も、そのまま使える。
     channel = shim;
-    window.ablyChannel = shim; // sales-mgmt.js（営業開始・終了の同期）が使う名前
 
     /* =========================================================
-       ui.js の initAbly() の置き換え
+       起動時の同期の準備（initRealtimeSync）
        ------------------------------------------
-       ui.js の initAbly() は、画面入力欄のAblyキーを読んで接続し、
+       以前は ui.js が、画面入力欄のAPIキーを読んで接続し、
        カート表示（update-cart）・年齢確認・詐欺注意の受信を登録していた。
        接続はこのファイルが行うので、受信の登録だけを同じ内容で行う。
        ========================================================= */
@@ -630,7 +673,7 @@
         });
     }
 
-    window.initAbly = function () { registerCoreSubscriptions(); };
+    window.initRealtimeSync = function () { registerCoreSubscriptions(); };
     registerCoreSubscriptions();
 
     /* =========================================================
@@ -667,6 +710,8 @@
                 bigSends: stats.bigSends.slice(-5)
             };
         },
+        // いま同期中の端末の数（この端末を含む）。0なら未接続
+        getDeviceCount() { return st.ready ? (st.deviceCount || 0) : 0; },
         getBaseRef() { return st.refs ? st.refs.base : null; },
         getPathHash() { return st.hash; }
     };

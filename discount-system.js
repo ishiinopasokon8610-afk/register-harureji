@@ -146,8 +146,8 @@ function getDiscountContentText(disc) {
     }
 
     if (disc.validFrom || disc.validTo) {
-        const from = disc.validFrom || '指定なし';
-        const to = disc.validTo || '指定なし';
+        const from = formatDiscountBoundary(disc.validFrom) || '指定なし';
+        const to = formatDiscountBoundary(disc.validTo) || '指定なし';
         parts.push(`📅 適用期間: ${from} 〜 ${to}`);
     }
 
@@ -238,12 +238,42 @@ function renderStagedProductRows(prefix) {
     }).join('');
 }
 
-// バーコードの適用期間チェック（YYYY-MM-DD形式。どちらか未設定なら期限なし扱い）
+// 【改良】適用期間は「日付＋時刻」（例: 2026-11-16T15:30）まで指定できる。
+// 以前の「日付だけ」（YYYY-MM-DD）の登録済みデータも、そのまま使える：
+//   ・開始が日付だけ → その日の 0:00 から
+//   ・終了が日付だけ → その日の 23:59:59 まで（従来どおり、終了日当日は使える）
+function parseDiscountBoundary(str, isEnd) {
+    if (!str) return null;
+    const s = String(str);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+        const t = new Date(s + (isEnd ? 'T23:59:59.999' : 'T00:00:00')).getTime();
+        return isNaN(t) ? null : t;
+    }
+    const t = new Date(s).getTime();
+    return isNaN(t) ? null : t;
+}
+
+// 画面に出す文字（2026-11-16T15:30 → 2026-11-16 15:30）
+function formatDiscountBoundary(str) {
+    return str ? String(str).replace('T', ' ') : '';
+}
+
+// 編集画面の入力欄（datetime-local）に入れる値。日付だけの古いデータは時刻を補う
+function toDatetimeLocalValue(str, isEnd) {
+    if (!str) return '';
+    const s = String(str);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s + (isEnd ? 'T23:59' : 'T00:00');
+    return s;
+}
+
+// バーコードの適用期間チェック（どちらか未設定なら、その側は期限なし扱い）
 function isDiscountBarcodeInValidPeriod(disc) {
     if (!disc.validFrom && !disc.validTo) return true;
-    const todayStr = new Date().toLocaleDateString('sv-SE'); // YYYY-MM-DD 形式
-    if (disc.validFrom && todayStr < disc.validFrom) return false;
-    if (disc.validTo && todayStr > disc.validTo) return false;
+    const now = Date.now();
+    const from = parseDiscountBoundary(disc.validFrom, false);
+    const to = parseDiscountBoundary(disc.validTo, true);
+    if (from !== null && now < from) return false;
+    if (to !== null && now > to) return false;
     return true;
 }
 
@@ -414,8 +444,8 @@ function editDiscountBarcode(index) {
 
     const dateFromInput = document.getElementById('edit-disc-date-from');
     const dateToInput = document.getElementById('edit-disc-date-to');
-    if (dateFromInput) dateFromInput.value = disc.validFrom || '';
-    if (dateToInput) dateToInput.value = disc.validTo || '';
+    if (dateFromInput) dateFromInput.value = toDatetimeLocalValue(disc.validFrom, false);
+    if (dateToInput) dateToInput.value = toDatetimeLocalValue(disc.validTo, true);
     const oneTimeCb = document.getElementById('edit-disc-one-time');
     if (oneTimeCb) oneTimeCb.checked = !!disc.oneTime;
 
@@ -516,7 +546,7 @@ function saveDiscounts() {
 }
 
 /* =========================================================
-   API（Ably）経由での複数端末同期
+   Firebase経由での複数端末同期
    このお店で使っている他の端末（スマホ・レジ端末など）にも
    登録した自動化バーコードをリアルタイムで反映する。
    ========================================================= */
@@ -643,8 +673,8 @@ function applyDiscountBarcode(disc) {
     if (!isDiscountBarcodeInValidPeriod(disc)) {
         if (typeof playSound === 'function') playSound('error');
         if (typeof showCustomConfirm === 'function') {
-            const from = disc.validFrom || '指定なし';
-            const to = disc.validTo || '指定なし';
+            const from = formatDiscountBoundary(disc.validFrom) || '指定なし';
+            const to = formatDiscountBoundary(disc.validTo) || '指定なし';
             showCustomConfirm(`このクーポンの適用期間外です（適用期間: ${from} 〜 ${to}）。`, "この くーぽん は てきよう きかんがい です。", () => { if (typeof focusJanInput === 'function') focusJanInput(); }, false);
         }
         return;

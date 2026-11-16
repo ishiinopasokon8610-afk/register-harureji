@@ -253,7 +253,7 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 window.addEventListener('load', () => { 
-    initAbly(); 
+    if (typeof initRealtimeSync === 'function') initRealtimeSync();
     loadHandleFromIndexedDB();
     if (window.location.hash === '#customer') {
         openCustomerScreen();

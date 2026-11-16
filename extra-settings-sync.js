@@ -1,9 +1,9 @@
 // ==========================================
-// extra-settings-sync.js（旧名: extra-settings-ably-sync.js）
+// extra-settings-sync.js
 // ------------------------------------------
 // 【今回の変更】
-//   ・ファイル名から「ably」を外した（同期はFirebase経由に変わったため）。
-//     中の関数名・定数名は、他のファイルが参照している可能性があるのでそのままにしている。
+//   ・同期がFirebase経由に変わったため、関数名・定数名・保存キー名から旧サービス名を外した。
+//     旧名の内部管理キー（更新時刻の記録）は、起動時に自動で削除する。
 //   ・不具合修正：「この端末を客用ディスプレイにする」の設定は、実際のキー名が
 //     pos_is_customer_display_device なのに、除外リストには pos_is_customer_display と
 //     書かれていて一致せず、他の端末へ同期されてしまっていた。実際のキー名を追加した。
@@ -14,18 +14,18 @@
 //     すぐ送信するようにした（ai-store-analysis-system.js側）。
 //
 // 【背景】
-// これまでAably経由でリアルタイム同期されていたのは、
+// これまでリアルタイム同期されていたのは、
 //   ・商品マスタ（pos_products）／お会計履歴（pos_history）／
 //     タイムカード（pos_timecard） … sync-system.js
 //   ・会員・顧客データ（pos_customers） … customer-sync-system.js
 //   ・自動化バーコード（pos_discounts） … discount-system.js側で対応済み
 // など「一部の決まったデータ」だけで、ホーム画面の背景・ロゴ（pos_home_bg／
 // pos_shop_logo）をはじめ、時給・税設定・保留中の会計・呼び出し番号の
-// カウンターなど、後から追加された数多くの設定はAably同期の対象外だった。
+// カウンターなど、後から追加された数多くの設定は同期の対象外だった。
 //
 // backup-extra-settings-sync.js がGoogle Driveバックアップで採用している
 // 「pos_ で始まるキーは、除外リストに無い限り自動で対象にする」という
-// 方針を、Aablyのリアルタイム同期にもそのまま適用する。これにより、
+// 方針を、リアルタイム同期にもそのまま適用する。これにより、
 // 今後 pos_ 接頭辞の新しい設定を追加しても、このファイルを一切変更せずに
 // 自動でリアルタイム同期の対象になる。
 //
@@ -41,9 +41,9 @@
 //      片方の変更が消える」不具合を別の形で再発させてしまうため。
 //
 // 【方式】
-// 各設定キーごとに「最終更新時刻」を pos_ably_settings_meta に保持し、
+// 各設定キーごとに「最終更新時刻」を pos_sync_settings_meta に保持し、
 // 2秒ごとのポーリングで値の変化（新規追加・変更・削除）を検知したら、
-// 変化したキーを1件ずつAablyへpublishする（1メッセージにまとめず、
+// 変化したキーを1件ずつ同期（Firebase）へ送る（1メッセージにまとめず、
 // キーごとに分けて送ることで、仮に1件のデータサイズが大きくて送信に
 // 失敗しても、他の変更まで巻き込まれないようにする）。
 // 受信側は、そのキーのローカルの最終更新時刻より新しい場合だけ採用する
@@ -51,7 +51,7 @@
 //
 // 【注意】
 // ホーム背景・ロゴのような画像（Base64）は、他の設定に比べてデータ量が
-// 大きくなりやすく、Aablyのプランによってはメッセージサイズの上限に
+// 大きくなりやすく、Firebaseの制限によってはメッセージサイズの上限に
 // 引っかかって送信に失敗する場合がある。その場合はコンソールに警告が
 // 出るだけで、他の同期・アプリ自体の動作は止まらない。その端末では
 // Google Driveバックアップ（backup-extra-settings-sync.js経由、
@@ -62,21 +62,20 @@
 // 追加する（フック方式）。
 // ==========================================
 
-const ABLY_SETTINGS_SYNC_PREFIX = 'pos_';
-const ABLY_SETTINGS_SYNC_META_KEY = 'pos_ably_settings_meta';
+const SETTINGS_SYNC_PREFIX = 'pos_';
+const SETTINGS_SYNC_META_KEY = 'pos_sync_settings_meta';
 
 // すでに専用の同期ロジック（配列をID単位でマージする方式）を持っているため、
 // ここでの単純な「新しい方を丸ごと採用」同期の対象外にするキー。
 // 新しくこの種の専用同期を追加した場合は、必ずここにも追記すること。
-const ABLY_SETTINGS_ALREADY_SYNCED_KEYS = [
+const SETTINGS_SYNC_ALREADY_SYNCED_KEYS = [
     'pos_products', 'pos_deleted_products',   // sync-system.js
     'pos_history', 'pos_deleted_history',     // sync-system.js
     'pos_timecard',                            // sync-system.js
     'pos_customers', 'pos_deleted_customers', // customer-sync-system.js
-    'pos_discounts',                            // discount-system.js（既にAably同期対応済み）
+    'pos_discounts',                            // discount-system.js（既に専用の同期に対応済み）
     'pos_receipt_footer_text', 'pos_receipt_footer_image',
     'pos_receipt_footer_valid_from', 'pos_receipt_footer_valid_to', // receipt-footer-system.js
-    'pos_receipt_footer_image_url',             // receipt-footer-system.js（2026-11追加：画像はURLで専用同期する）
     'pos_receipt_coupons',                      // receipt-coupon-system.js
     'pos_receipt_no_counter',                   // history-receipt-number-system.js（常に増加方向のみで同期する専用ロジックのため対象外）
     'pos_touch_panel_bg_url',                    // touch-panel-order-system.js（touch-panel-menu-setting-event）
@@ -90,7 +89,7 @@ const ABLY_SETTINGS_ALREADY_SYNCED_KEYS = [
 
 // この端末固有のため、他端末に同期すると逆に困る設定
 // （backup-extra-settings-sync.js の除外リストと同じ判断基準・同じキー）
-const ABLY_SETTINGS_EXCLUDED_KEYS = [
+const SETTINGS_SYNC_EXCLUDED_KEYS = [
     'pos_gdrive_connected',
     'pos_gdrive_last_sync_at',
     'pos_notif_enabled',
@@ -100,56 +99,64 @@ const ABLY_SETTINGS_EXCLUDED_KEYS = [
     'pos_last_inactivity_nudge',
     'pos_is_customer_display',
     'pos_is_customer_display_device', // 「この端末を客用ディスプレイにする」（実際に使われているキー名）
-    'pos_home_bg', // 2026-11追記：ホーム背景の画像データ（重い）。他端末へはURL（pos_home_bg_url）だけを同期する（home-bg-url-sync-system.js）
-    'pos_shop_logo_local', // 2026-11追記：ロゴの画像データ（重い）。他端末へはURL（pos_shop_logo_url_cloud）だけを同期する
-                           // （firebase-image-storage.js の applyShopLogoFromSyncedUrl）
     'pos_shop_id', // 2026-09追記：店舗ごとに意図的に別の値を持たせる設定のため、
                   // 自動同期すると他店舗の値で上書きされる事故になり得る（shop-id-system.js）
     'pos_sync_password' // 2026-09追記：pos_shop_idと同じ理由。同期用パスワード
                          // （sync-password-encryption-system.js）も店舗ごとに
                          // 意図的に別の値を持たせる設定のため対象外にする。
 ];
-const ABLY_SETTINGS_EXCLUDED_PREFIXES = [
+const SETTINGS_SYNC_EXCLUDED_PREFIXES = [
     'pos_gdrive_',
-    'pos_ably_',   // このファイル自身が内部管理に使うキー（pos_ably_settings_meta等）を含む
-    'pos_sync_',
+    'pos_sync_',   // このファイル自身が内部管理に使うキー（pos_sync_settings_meta）を含む
     'pos_touch_panel_img_',         // touch-panel-order-system.js（商品ごとの写真。touch-panel-menu-setting-eventで同期済み）
     'pos_touch_panel_desc_',        // touch-panel-order-system.js（商品ごとの説明文。同上）
     'pos_touch_panel_variations_'   // touch-panel-order-system.js（商品ごとのバリエーション。同上）
 ];
 
-function isAblySettingsSyncTarget(key) {
-    if (!key || !key.startsWith(ABLY_SETTINGS_SYNC_PREFIX)) return false;
-    if (ABLY_SETTINGS_ALREADY_SYNCED_KEYS.includes(key)) return false;
-    if (ABLY_SETTINGS_EXCLUDED_KEYS.includes(key)) return false;
-    if (ABLY_SETTINGS_EXCLUDED_PREFIXES.some(prefix => key.startsWith(prefix))) return false;
+function isSettingsSyncTarget(key) {
+    if (!key || !key.startsWith(SETTINGS_SYNC_PREFIX)) return false;
+    if (SETTINGS_SYNC_ALREADY_SYNCED_KEYS.includes(key)) return false;
+    if (SETTINGS_SYNC_EXCLUDED_KEYS.includes(key)) return false;
+    if (SETTINGS_SYNC_EXCLUDED_PREFIXES.some(prefix => key.startsWith(prefix))) return false;
     return true;
 }
 
-function collectAblySettingsSyncTargetKeys() {
+function collectSettingsSyncTargetKeys() {
     const keys = [];
     for (let i = 0; i < localStorage.length; i++) {
         const k = localStorage.key(i);
-        if (isAblySettingsSyncTarget(k)) keys.push(k);
+        if (isSettingsSyncTarget(k)) keys.push(k);
     }
     return keys;
 }
 
-function getAblySettingsMeta() {
+function getSettingsSyncMeta() {
     try {
-        return JSON.parse(localStorage.getItem(ABLY_SETTINGS_SYNC_META_KEY) || '{}');
+        return JSON.parse(localStorage.getItem(SETTINGS_SYNC_META_KEY) || '{}');
     } catch (e) {
         return {};
     }
 }
-function setAblySettingsMeta(meta) {
-    localStorage.setItem(ABLY_SETTINGS_SYNC_META_KEY, JSON.stringify(meta));
+// 旧名で保存されていた更新時刻の記録を削除する（残っていると、通常の設定として同期されてしまうため）
+(function removeLegacySettingsMetaKeys() {
+    try {
+        const legacy = [];
+        for (let i = 0; i < localStorage.length; i++) {
+            const k = localStorage.key(i);
+            if (k && /^pos_(?!sync_)[a-z]+_settings_meta$/.test(k)) legacy.push(k);
+        }
+        legacy.forEach(k => localStorage.removeItem(k));
+    } catch (e) { /* 無視 */ }
+})();
+
+function setSettingsSyncMeta(meta) {
+    localStorage.setItem(SETTINGS_SYNC_META_KEY, JSON.stringify(meta));
 }
 
 // 受信した設定を、開いている画面があればその場で反映する。
 // 個別の反映が必要な設定だけをここに追記する（無くても、次にその画面を
 // 開いた時にはlocalStorageから自然に読み込まれる）。
-function reapplyAblySyncedSetting(key) {
+function reapplySyncedSetting(key) {
     if (key === 'pos_home_bg' && typeof applyHomeBg === 'function') {
         applyHomeBg();
     } else if (key === 'pos_shop_logo' && typeof applyShopLogo === 'function') {
@@ -160,18 +167,46 @@ function reapplyAblySyncedSetting(key) {
         injectClerkWageCells();
     } else if (key === 'pos_call_number_counter' && typeof refreshCallNumberDisplay === 'function') {
         refreshCallNumberDisplay();
-    } else if (key === 'pos_home_bg_url' && typeof applyHomeBgFromSyncedUrl === 'function') {
-        applyHomeBgFromSyncedUrl();
-    } else if (key === 'pos_shop_logo_url_cloud' && typeof applyShopLogoFromSyncedUrl === 'function') {
-        // ロゴ：他端末で変更されたURLを、ホーム画面・レシートに反映する
-        applyShopLogoFromSyncedUrl(true);
+    } else if (key === 'pos_business_closed' && typeof checkBusinessStatus === 'function') {
+        // 他の端末で業務開始／終了された（通信が途切れていて business-status を受け取れなかった時の保険）
+        checkBusinessStatus();
     } else if (key === 'pos_ai_analysis_saved_history' && typeof onAiAnalysisSavedHistoryChangedRemotely === 'function') {
         // AI分析の保存履歴：受け取ったらすぐ画面を描き直す（リロード不要にする）
         onAiAnalysisSavedHistoryChangedRemotely();
     }
 }
 
-function broadcastAblySettingChange(key, value, updatedAt) {
+// 他の端末から設定を受け取った時、いま開いている画面を、すぐ最新の内容に描き直す。
+// 描き直す関数が存在する画面だけが対象（無ければ何もしない）。入力中のレジ画面は触らない。
+const SYNC_SCREEN_REFRESHERS = {
+    'product-screen': ['renderProducts'],
+    'customer-mgmt-screen': ['renderCustomers'],
+    'discount-screen': ['renderDiscounts'],
+    'history-screen': ['renderHistory'],
+    'timecard-screen': ['renderTimecardTable'],
+    'analytics-screen': ['renderAnalytics'],
+    'sales-mgmt-screen': ['calculateSystemTotals'],
+    'clerk-screen': ['renderClerks', 'renderClerkList', 'renderClerkTable']
+};
+let syncScreenRefreshTimer = null;
+function scheduleSyncedScreenRefresh(key) {
+    try { window.dispatchEvent(new CustomEvent('pos-setting-synced', { detail: { key: key } })); } catch (e) { /* 無視 */ }
+    if (syncScreenRefreshTimer) clearTimeout(syncScreenRefreshTimer);
+    syncScreenRefreshTimer = setTimeout(() => {
+        syncScreenRefreshTimer = null;
+        Object.keys(SYNC_SCREEN_REFRESHERS).forEach((screenId) => {
+            const el = document.getElementById(screenId);
+            if (!el || !el.classList.contains('active')) return;
+            SYNC_SCREEN_REFRESHERS[screenId].forEach((fnName) => {
+                if (typeof window[fnName] === 'function') {
+                    try { window[fnName](); } catch (e) { console.warn('[sync] 画面の更新に失敗:', fnName, e); }
+                }
+            });
+        });
+    }, 300);
+}
+
+function broadcastSettingChange(key, value, updatedAt) {
     if (typeof channel === 'undefined' || !channel) return;
     try {
         channel.publish('settings-sync', {
@@ -192,7 +227,7 @@ function broadcastAblySettingChange(key, value, updatedAt) {
 let lastKnownSettingsValues = null;
 
 function pollAndBroadcastSettingsChanges() {
-    const currentKeys = collectAblySettingsSyncTargetKeys();
+    const currentKeys = collectSettingsSyncTargetKeys();
     const currentMap = new Map();
     currentKeys.forEach(k => currentMap.set(k, localStorage.getItem(k)));
 
@@ -203,7 +238,7 @@ function pollAndBroadcastSettingsChanges() {
     }
 
     const now = Date.now();
-    const meta = getAblySettingsMeta();
+    const meta = getSettingsSyncMeta();
     let metaChanged = false;
 
     // 値が変わった／新しく増えたキー
@@ -212,7 +247,7 @@ function pollAndBroadcastSettingsChanges() {
         if (prevValue === undefined || prevValue !== value) {
             meta[key] = now;
             metaChanged = true;
-            broadcastAblySettingChange(key, value, now);
+            broadcastSettingChange(key, value, now);
         }
     });
 
@@ -221,12 +256,12 @@ function pollAndBroadcastSettingsChanges() {
         if (!currentMap.has(key)) {
             meta[key] = now;
             metaChanged = true;
-            broadcastAblySettingChange(key, null, now);
+            broadcastSettingChange(key, null, now);
         }
     });
 
     lastKnownSettingsValues = currentMap;
-    if (metaChanged) setAblySettingsMeta(meta);
+    if (metaChanged) setSettingsSyncMeta(meta);
 }
 
 setInterval(pollAndBroadcastSettingsChanges, 2000);
@@ -238,10 +273,10 @@ setInterval(pollAndBroadcastSettingsChanges, 2000);
             channel.subscribe('settings-sync', (msg) => {
                 if (!msg || !msg.data) return;
                 const { key, value, updatedAt, senderId } = msg.data;
-                if (!key || !isAblySettingsSyncTarget(key)) return; // 想定外のキーは無視（安全策）
+                if (!key || !isSettingsSyncTarget(key)) return; // 想定外のキーは無視（安全策）
                 if (senderId && typeof SYNC_DEVICE_ID !== 'undefined' && senderId === SYNC_DEVICE_ID) return;
 
-                const meta = getAblySettingsMeta();
+                const meta = getSettingsSyncMeta();
                 const localUpdatedAt = meta[key] || 0;
                 if (!updatedAt || updatedAt <= localUpdatedAt) return; // 新しい方だけ採用
 
@@ -253,9 +288,10 @@ setInterval(pollAndBroadcastSettingsChanges, 2000);
                     if (lastKnownSettingsValues) lastKnownSettingsValues.set(key, value);
                 }
                 meta[key] = updatedAt;
-                setAblySettingsMeta(meta);
+                setSettingsSyncMeta(meta);
 
-                reapplyAblySyncedSetting(key);
+                reapplySyncedSetting(key);
+                scheduleSyncedScreenRefresh(key);
                 if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
             });
         } else {

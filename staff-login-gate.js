@@ -61,6 +61,9 @@ window.clearStaffLoginNotice = clearStaffLoginNotice;
 function showStaffLoginGate(pendingScreenId) {
     staffLoginPendingScreen = pendingScreenId || 'home-screen';
 
+    // 端末の時計がずれている間は、ログイン画面より前に警告を出す（clock-check-system.js）
+    if (typeof window.isClockSkewBlocking === 'function' && window.isClockSkewBlocking()) return;
+
     const modal = getStaffLoginModalEl();
     if (!modal) return;
 
@@ -87,6 +90,7 @@ function closeStaffLoginGate() {
 
 // ログイン試行
 function attemptStaffLogin() {
+    if (typeof window.isClockSkewBlocking === 'function' && window.isClockSkewBlocking()) return;
     const input = document.getElementById('staff-login-barcode-input');
     const err = document.getElementById('staff-login-error');
     if (!input) return;

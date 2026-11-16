@@ -2,7 +2,7 @@
 // sync-code-ui-system.js
 // ------------------------------------------
 // 【この機能】
-// ホーム画面の「APIキー設定（Ably）」の入力欄（#api-settings-container）を、
+// ホーム画面の旧「APIキー設定」の入力欄（#api-settings-container）を、
 // 次の2つのボタンに置き換える。
 //   🆕 データ用コードを発行   … 16文字のコードを作る。このコードで他の端末とつながる。
 //   📥 データ用コードを受け取る … 他の端末で発行したコードを入力して、同じグループに入る。
@@ -196,7 +196,7 @@
 
         c.innerHTML = `
             <div style="font-weight:700;margin-bottom:6px;text-align:left;">🔗 データ用コード（他の端末とつなぐ）</div>
-            <div id="psync-status" style="font-size:13px;margin-bottom:8px;text-align:left;">${esc(STATUS_TEXT[status] || '')}</div>
+            <div id="psync-status" style="font-size:13px;margin-bottom:8px;text-align:left;">${esc(statusLine(status))}</div>
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
                 <span style="font-size:12px;color:#555;">この端末のコード：</span>
                 <span id="psync-code-text" style="font-family:monospace;font-size:16px;font-weight:700;letter-spacing:2px;">${code ? MASKED_CODE : '（未設定）'}</span>
@@ -229,9 +229,20 @@
         if (clearBtn) clearBtn.addEventListener('click', onClearClick);
     }
 
+    // 状態の文字＋「同期中の端末 N台」
+    function statusLine(status) {
+        let text = STATUS_TEXT[status] || '';
+        const ps = sync();
+        if (ps && ps.getCode() && ps.isReady() && typeof ps.getDeviceCount === 'function') {
+            const n = ps.getDeviceCount();
+            if (n > 0) text += (text ? '　／　' : '') + `📱 同期中の端末: ${n}台（この端末を含む）`;
+        }
+        return text;
+    }
+
     function refreshStatusOnly() {
         const el = document.getElementById('psync-status');
-        if (el && sync()) el.textContent = STATUS_TEXT[sync().getStatus()] || '';
+        if (el && sync()) el.textContent = statusLine(sync().getStatus());
     }
 
     /* =========================================================
@@ -489,6 +500,8 @@
         // 以前の「APIキー設定」の案内・入力欄は使わないので、中身ごと置き換える
         renderHomeBlock();
         window.addEventListener('pos-sync-status', refreshStatusOnly);
+        window.addEventListener('pos-sync-devices', refreshStatusOnly);
+        window.addEventListener('pos-sync-ready', () => setTimeout(refreshStatusOnly, 1500));
         window.addEventListener('pos-sync-code-changed', renderHomeBlock);
     }
 

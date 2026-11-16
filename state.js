@@ -32,7 +32,6 @@ let fraudWarningAcknowledgedCurrentTransaction = false;
 let cartHistory = [];
 let redoStack = [];
 
-let ably = null;
 let channel = null;
 
 let editingProdIndex = -1;
@@ -46,7 +45,7 @@ let managerAuthTarget = 'customer';
 let receiptDirectoryHandle = null;
 let savedDirectoryHandle = null;
 
-// この端末を一意に識別するID（Ably経由のブロードキャストで「自分自身が送った
+// この端末を一意に識別するID（同期（Firebase）経由のブロードキャストで「自分自身が送った
 // イベントかどうか」を判定するために使う。年齢確認モーダルの表示などで使用）
 const POS_DEVICE_ID = 'dev_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2);
 

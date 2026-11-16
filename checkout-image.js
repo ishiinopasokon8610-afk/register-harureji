@@ -4,17 +4,62 @@
 // ・データ管理・ロゴ設定画面から画像を1枚登録できる
 // ・お会計完了（completeTransaction）のタイミングで、
 //   客用画面いっぱいに、下からアニメーションでせり上がって表示される
-// ・別端末（客用画面が別デバイスの場合）にはAbly経由で画像データを送信する
+// ・別端末（客用画面が別デバイスの場合）には、同期（Firebase）経由で画像を渡す
+//
+// 【今回の改良：画像はURLで渡す】
+// これまでは、お会計が完了するたびに、画像データそのもの（数百KB）を他の端末へ
+// 送っていた。会計のたびに重い通信が走るため、同期が遅くなる原因になっていた。
+// → 画像を登録した時に、Firebase Storage へも1回だけアップロードし、そのURLを保存する
+//   （pos_checkout_complete_image_url。小さい文字なので、設定同期でも他端末へ届く）。
+//   お会計のたびに送るのは、URLだけにした（数十文字）。
+//   受け取った端末は、URLから画像を表示する。URLが無い（Storageを使えない）時は、
+//   これまで通り画像データそのものを送る（安全のための予備）。
+// ※ Firebase Storage のルールを設定していないと、アップロードは失敗します
+//   （その場合は自動で予備の方法になるので、画像が出なくなることはありません）。
 // ==========================================
 
 const CHECKOUT_IMAGE_KEY = 'pos_checkout_complete_image';
 
-// この端末を識別するID（同じ端末が自分で送信したAblyイベントを、
+// この端末を識別するID（同じ端末が自分で送信した同期イベントを、
 // 受信時に二重表示しないようにするために使う）
 const CHECKOUT_IMAGE_DEVICE_ID = 'dev_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2);
 
+const CHECKOUT_IMAGE_URL_KEY = 'pos_checkout_complete_image_url';          // 同期される（URL）
+const CHECKOUT_IMAGE_STORAGE_PATH_KEY = 'pos_sync_checkout_image_path';    // pos_sync_ で始まるので同期されない（古い画像の削除用）
+
+function getCheckoutCompleteImageUrl() {
+    return localStorage.getItem(CHECKOUT_IMAGE_URL_KEY) || '';
+}
+
+// 画像データがこの端末に無くても、URLだけで表示できるようにする
 function getCheckoutCompleteImage() {
-    return localStorage.getItem(CHECKOUT_IMAGE_KEY) || '';
+    return localStorage.getItem(CHECKOUT_IMAGE_KEY) || getCheckoutCompleteImageUrl();
+}
+
+// 画像を Firebase Storage にアップロードして、URLを保存する（失敗しても静かに諦める）
+async function uploadCheckoutImageToStorage(dataUrl) {
+    try {
+        if (!window.firebase || !firebase.storage || !window.PosSync || typeof PosSync.getPathHash !== 'function') return '';
+        const hash = PosSync.getPathHash();
+        if (!hash || !dataUrl || String(dataUrl).indexOf('data:') !== 0) return '';
+
+        // 毎回新しいファイル名にする（古い画像がキャッシュで表示され続けるのを防ぐ）
+        const ref = firebase.storage().ref('pos_images/' + hash + '/checkout-' + Date.now().toString(36) + '.jpg');
+        const snap = await ref.putString(dataUrl, 'data_url');
+        const url = await snap.ref.getDownloadURL();
+
+        const oldPath = localStorage.getItem(CHECKOUT_IMAGE_STORAGE_PATH_KEY);
+        localStorage.setItem(CHECKOUT_IMAGE_URL_KEY, url);
+        localStorage.setItem(CHECKOUT_IMAGE_STORAGE_PATH_KEY, ref.fullPath);
+        if (oldPath && oldPath !== ref.fullPath) {
+            firebase.storage().ref(oldPath).delete().catch(() => {});
+        }
+        if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
+        return url;
+    } catch (e) {
+        console.warn('お会計完了画像のURL保存に失敗しました（画像データそのものを送る方法で続けます）:', e && e.message ? e.message : e);
+        return '';
+    }
 }
 
 // 管理画面：画像アップロード（大きすぎる画像は自動で縮小してから保存）
@@ -76,6 +121,9 @@ function uploadCheckoutCompleteImage(event) {
             }
 
             if (saved) {
+                // 新しい画像になったので、古いURLは使わない。アップロードできたら新しいURLに入れ替える
+                localStorage.removeItem(CHECKOUT_IMAGE_URL_KEY);
+                uploadCheckoutImageToStorage(localStorage.getItem(CHECKOUT_IMAGE_KEY));
                 if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
                 if (typeof playSound === 'function') playSound('success');
                 if (typeof showCustomConfirm === 'function') {
@@ -114,6 +162,12 @@ function uploadCheckoutCompleteImage(event) {
 
 function clearCheckoutCompleteImage() {
     localStorage.removeItem(CHECKOUT_IMAGE_KEY);
+    localStorage.removeItem(CHECKOUT_IMAGE_URL_KEY);
+    try {
+        const oldPath = localStorage.getItem(CHECKOUT_IMAGE_STORAGE_PATH_KEY);
+        if (oldPath && window.firebase && firebase.storage) firebase.storage().ref(oldPath).delete().catch(() => {});
+        localStorage.removeItem(CHECKOUT_IMAGE_STORAGE_PATH_KEY);
+    } catch (e) { /* 無視 */ }
     renderCheckoutImagePreview();
     if (typeof playSound === 'function') playSound('click');
 }
@@ -134,14 +188,18 @@ function renderCheckoutImagePreview() {
 // 客用画面側：画面いっぱいにアニメーションで表示する
 // ※ この関数自体は「今どの画面がアクティブか」を判定しない（常に表示する）。
 //   同一端末で店員側の画面にも出さないための判定は、呼び出し側（triggerCheckoutCompleteImage /
-//   Ablyの受信ハンドラ）で行う。
-function displayCheckoutCompleteImage(dataUrl) {
+//   同期の受信ハンドラ）で行う。
+function displayCheckoutCompleteImage(dataUrl, fallbackSrc) {
     if (!dataUrl) return;
 
     const overlay = document.getElementById('customer-checkout-image-overlay');
     const imgEl = document.getElementById('customer-checkout-image');
     if (!overlay || !imgEl) return;
 
+    // URLが読み込めない時（削除済み・通信不良など）は、予備の画像（この端末に保存されている画像データ）に切り替える
+    imgEl.onerror = function () {
+        if (fallbackSrc && imgEl.getAttribute('src') !== fallbackSrc) imgEl.src = fallbackSrc;
+    };
     imgEl.src = dataUrl;
     overlay.style.display = 'flex';
     overlay.classList.remove('img-slide-up');
@@ -174,10 +232,14 @@ function triggerCheckoutCompleteImage() {
         displayCheckoutCompleteImage(dataUrl);
     }
 
-    // 他端末へ、Ably経由で画像データを送信する（受信側で客用ディスプレイ設定を確認する）
+    // 他端末へ画像を渡す（受信側で客用ディスプレイ設定を確認する）。
+    // URLがあれば、URLだけを送る（軽い）。無い時だけ、画像データそのものを送る。
     if (typeof channel !== 'undefined' && channel) {
         try {
-            channel.publish('checkout-image-event', { image: dataUrl, senderId: CHECKOUT_IMAGE_DEVICE_ID });
+            const url = getCheckoutCompleteImageUrl();
+            channel.publish('checkout-image-event', url
+                ? { imageUrl: url, senderId: CHECKOUT_IMAGE_DEVICE_ID }
+                : { image: dataUrl, senderId: CHECKOUT_IMAGE_DEVICE_ID });
         } catch (err) {
             console.warn('客用画面への画像送信に失敗しました:', err);
         }
@@ -185,7 +247,7 @@ function triggerCheckoutCompleteImage() {
 }
 
 // レジ側／客用画面側どちらでも呼べる：表示中の画像を消し、他端末（客用ディスプレイ）にも
-// Ably経由で「消してください」を伝える。次のお会計が始まったタイミングで呼ばれる。
+// 同期（Firebase）経由で「消してください」を伝える。次のお会計が始まったタイミングで呼ばれる。
 function hideCheckoutCompleteImageAndBroadcast() {
     hideCheckoutCompleteImage();
     if (typeof channel !== 'undefined' && channel) {
@@ -197,20 +259,22 @@ function hideCheckoutCompleteImageAndBroadcast() {
     }
 }
 
-// 別端末からAblyメッセージを受信するための購読登録。
-// channel（Ably）の初期化はレジ/客画面を開いたタイミングで行われるため、
+// 別端末から同期メッセージを受信するための購読登録。
+// channel（Firebase同期）の初期化はレジ/客画面を開いたタイミングで行われるため、
 // 準備ができるまで少し待ってから一度だけ登録する。
 (function waitForChannelAndSubscribeCheckoutImage() {
     if (typeof channel !== 'undefined' && channel) {
         channel.subscribe('checkout-image-event', (msg) => {
-            if (msg && msg.data && msg.data.image) {
-                // 自分自身が送信したイベントのエコー（Ablyはデフォルトで送信者にも配信される）は、
+            if (msg && msg.data && (msg.data.imageUrl || msg.data.image)) {
+                // 自分自身が送信したイベントのエコー（同期イベントは送信者にも配信される）は、
                 // すでにローカルで表示処理済みなので無視する
                 if (msg.data.senderId === CHECKOUT_IMAGE_DEVICE_ID) return;
                 // 「客用ディスプレイ」に設定されている端末以外では表示しない
                 // （そうしないと複数端末を使っている場合、全端末に表示されてしまうため）
                 if (typeof isCustomerDisplayDevice === 'function' && !isCustomerDisplayDevice()) return;
-                displayCheckoutCompleteImage(msg.data.image);
+                // URLで届いた場合は、この端末に画像データがあれば、読み込めなかった時の予備にする
+                const localData = localStorage.getItem(CHECKOUT_IMAGE_KEY) || '';
+                displayCheckoutCompleteImage(msg.data.imageUrl || msg.data.image, msg.data.imageUrl ? localData : '');
             }
         });
 
