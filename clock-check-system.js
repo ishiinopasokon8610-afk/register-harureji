@@ -60,11 +60,14 @@
         const t1 = realNow();
         const dateHeader = res.headers.get('Date');
         if (!dateHeader) return null;
-        let serverMs = new Date(dateHeader).getTime();
+        const serverMs = new Date(dateHeader).getTime();
         if (!isFinite(serverMs)) return null;
-        // CDNが保存していた応答を返した場合、Dateヘッダーは「作られた時刻」なので、Age（経過秒）を足す
+        // 【不具合修正】以前は Age（キャッシュ経過秒）を Date に足していたが、CDNによっては
+        // Date が既に「今の時刻」になっているため、足すと最大10分ほどサーバー時刻が進んで見え、
+        // 端末の時計は合っているのに「遅れています」と誤警告が出ていた。
+        // Age を足すのをやめ、古い応答の可能性が高い時（Age が60秒超）は判定に使わない（＝止めない）。
         const age = parseInt(res.headers.get('Age') || '0', 10);
-        if (isFinite(age) && age > 0) serverMs += age * 1000;
+        if (isFinite(age) && age > 60) return null;
         // Dateヘッダーは秒単位（切り捨て）なので、通信の往復の真ん中の時刻と比べる
         return { serverMs, deviceMs: Math.round((t0 + t1) / 2) };
     }
