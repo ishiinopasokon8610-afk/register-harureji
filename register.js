@@ -771,8 +771,8 @@ function addToCart(name, price, taxRate = 10, genre = 'その他商品') {
 
     if (existingItem) {
         existingItem.qty += 1;
-        // 同じ商品を続けてスキャンした時も、商品名と価格を読み上げる（ピッという音だけにしない）
-        speak(`${speakName}、 ${finalPrice} えん です。 ${existingItem.qty} こ め`);
+        // 同じ商品を続けてスキャンした時は、「同一商品です」と読み上げる（ピッという音だけにしない）
+        speak('どういつ しょうひん です');
     } else {
         const newItem = { name: name, price: finalPrice, qty: 1, taxRate: finalTaxRate, genre: genre };
         if (isTaxExemptItem) {
@@ -782,11 +782,6 @@ function addToCart(name, price, taxRate = 10, genre = 'その他商品') {
         cart.push(newItem);
         speak(`${speakName}、 ${finalPrice} えん です`);
     }
-    // 画面にも「いまスキャンした商品名と価格」を表示する
-    try {
-        const shownItem = existingItem || cart[cart.length - 1];
-        showToastAnimation(`${name}　¥${Number(finalPrice).toLocaleString()}` + (shownItem && shownItem.qty > 1 ? `（${shownItem.qty}点目）` : ''));
-    } catch (e) { /* 表示に失敗してもレジ操作は続ける */ }
     updateReceipt();
 }
 

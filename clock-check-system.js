@@ -41,15 +41,29 @@
     /* ---------- サーバー時刻の取得 ---------- */
     // HEADリクエストはService Workerを通らず、必ずネットワークへ行く。
     // URLに毎回違う値を付けて、途中のキャッシュからも返らないようにする。
+    // 端末の「実際の時刻」。Date.now() はページ内のスクリプトで書き換えられている可能性が
+    // あるため、ブラウザ本体の時計（performance.timeOrigin + performance.now()）を使う。
+    function realNow() {
+        try {
+            if (typeof performance !== 'undefined' && performance.timeOrigin && typeof performance.now === 'function') {
+                return Math.round(performance.timeOrigin + performance.now());
+            }
+        } catch (e) { /* 下のDate.now()を使う */ }
+        return Date.now();
+    }
+
     async function fetchServerTime() {
-        const t0 = Date.now();
-        const url = location.pathname + '?_clk=' + t0;
+        const t0 = realNow();
+        const url = location.pathname + '?_clk=' + Date.now();
         const res = await fetch(url, { method: 'HEAD', cache: 'no-store' });
-        const t1 = Date.now();
+        const t1 = realNow();
         const dateHeader = res.headers.get('Date');
         if (!dateHeader) return null;
-        const serverMs = new Date(dateHeader).getTime();
+        let serverMs = new Date(dateHeader).getTime();
         if (!isFinite(serverMs)) return null;
+        // CDNが保存していた応答を返した場合、Dateヘッダーは「作られた時刻」なので、Age（経過秒）を足す
+        const age = parseInt(res.headers.get('Age') || '0', 10);
+        if (isFinite(age) && age > 0) serverMs += age * 1000;
         // Dateヘッダーは秒単位（切り捨て）なので、通信の往復の真ん中の時刻と比べる
         return { serverMs, deviceMs: Math.round((t0 + t1) / 2) };
     }
@@ -102,6 +116,14 @@
         }
 
         return problems.length ? { problems, detail } : { problems: [], detail: '' };
+    }
+
+    // 参考：ページ内の Date.now() が、ブラウザ本体の時計と大きく違っていないか（原因調査用。画面には出さない）
+    function warnIfDateOverridden() {
+        try {
+            const d = Math.abs(Date.now() - realNow());
+            if (d > TOLERANCE_MS) console.warn('[clock-check] ページ内の Date.now() が端末の実際の時刻と ' + fmtDiff(d) + ' ずれています。Date を書き換えているスクリプトがないか確認してください。');
+        } catch (e) { /* 無視 */ }
     }
 
     /* ---------- 警告画面 ---------- */
@@ -177,6 +199,7 @@
     /* ---------- 確認の実行・スケジュール ---------- */
     async function runCheck(manual) {
         if (checking) return;
+        warnIfDateOverridden();
         checking = true;
         const statusEl = overlayEl ? overlayEl.querySelector('#clock-skew-status') : null;
         if (manual && statusEl) statusEl.textContent = '確認しています…';
