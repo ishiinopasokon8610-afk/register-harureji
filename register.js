@@ -885,6 +885,7 @@ function applyHalfPrice() {
 let selectedCartIndex = -1;
 
 function updateReceipt() {
+    saveRegisterCart(); // カートが変わるたびに控えを保存する（間違えてページを更新しても消えないように）
     const receiptBody = getReceiptBody();
     const displayTotal = getDisplayTotal();
     if (!receiptBody) return;
@@ -1417,6 +1418,11 @@ async function completeTransaction() {
         localStorage.setItem('pos_history', JSON.stringify(historyList));
         if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
 
+        // 会計が確定した：カートの控えを消す。レシートを閉じてカートが空になるまでは保存もしない
+        // （この間にページを更新しても、支払い済みの商品が復元されて二重に会計されないように）
+        registerCartPaid = true;
+        try { localStorage.removeItem(REGISTER_CART_KEY); } catch (e) { /* 無視 */ }
+
         // 使い切りバーコード（自動化バーコード）を、会計成立と同時に自動削除する
         if (typeof cleanupOneTimeDiscountBarcodes === 'function') cleanupOneTimeDiscountBarcodes();
 
@@ -1819,3 +1825,96 @@ document.addEventListener('keydown', (e) => {
         }
     }, true);
 })();
+
+
+/* =========================================================
+   スキャン中のカートの控え（間違えてページを更新しても消えないように）
+   ---------------------------------------------------------
+   ・カートが変わるたび（updateReceipt）に、カートの中身・免税の状態・会員カードの
+     バーコードを localStorage（pos_sync_register_cart）へ控える。
+     pos_sync_ で始まるキーなので、他の端末への同期・バックアップには含まれない。
+   ・ページを開き直すと、控えがあればカートを元に戻す（会員カードは、読み上げなしで静かに戻す）。
+   ・会計が完了してカートが空になった時／「全取消」でカートが空になった時は、控えも消える。
+   ・最後の操作から12時間たった控えは捨てる（前日の商品が出てこないように）。
+   ・客用画面の端末（受信したカートを表示するだけの端末）では、保存も復元もしない。
+   ・年齢確認・詐欺注意の「確認済み」は引き継がない（更新後は、必要な商品でもう一度確認する）。
+   ========================================================= */
+const REGISTER_CART_KEY = 'pos_sync_register_cart';
+const REGISTER_CART_TTL_MS = 12 * 60 * 60 * 1000;
+let registerCartPaid = false;  // 会計確定後、カートが空になるまで true
+let registerCartReady = false; // 起動時の復元が終わるまでは保存しない（空のカートで控えを上書きしないため）
+
+function isRegisterCartSkipDevice() {
+    try {
+        if (typeof isCustomerDisplayDevice === 'function' && isCustomerDisplayDevice()) return true;
+        const cust = document.getElementById('customer-screen');
+        if (cust && cust.classList.contains('active')) return true;
+    } catch (e) { /* 無視 */ }
+    return false;
+}
+
+function saveRegisterCart() {
+    try {
+        if (!registerCartReady || isRegisterCartSkipDevice()) return;
+        if (typeof cart === 'undefined' || !Array.isArray(cart) || cart.length === 0) {
+            registerCartPaid = false;
+            localStorage.removeItem(REGISTER_CART_KEY);
+            return;
+        }
+        if (registerCartPaid) return;
+        localStorage.setItem(REGISTER_CART_KEY, JSON.stringify({
+            savedAt: Date.now(),
+            cart: cart,
+            taxExempt: (typeof taxExemptTransaction !== 'undefined') && !!taxExemptTransaction,
+            member: (typeof activeCustomer !== 'undefined' && activeCustomer && activeCustomer.barcode) ? activeCustomer.barcode : ''
+        }));
+    } catch (e) { /* 無視 */ }
+}
+
+async function restoreRegisterCart() {
+    try {
+        if (isRegisterCartSkipDevice()) return;
+        if (typeof cart !== 'undefined' && Array.isArray(cart) && cart.length > 0) return; // すでに中身がある時は触らない
+        const d = JSON.parse(localStorage.getItem(REGISTER_CART_KEY));
+        if (!d || !Array.isArray(d.cart) || (Date.now() - (Number(d.savedAt) || 0)) > REGISTER_CART_TTL_MS) {
+            localStorage.removeItem(REGISTER_CART_KEY);
+            return;
+        }
+        const items = d.cart.filter(i => i && i.name && typeof i.price === 'number' && Number(i.qty) > 0);
+        if (items.length === 0) { localStorage.removeItem(REGISTER_CART_KEY); return; }
+
+        cart = items;
+        if (d.taxExempt) taxExemptTransaction = true;
+
+        // 会員カード：読み上げ・効果音なしで、画面の会員表示だけ元に戻す
+        if (d.member && typeof fetchAndAddItem === 'function') {
+            const origSpeak = window.speak, origSound = window.playSound;
+            try {
+                window.speak = function () {};
+                window.playSound = function () {};
+                await fetchAndAddItem(d.member);
+            } catch (e) {
+                console.warn('[register] 会員カードの復元に失敗しました:', e);
+            } finally {
+                window.speak = origSpeak;
+                window.playSound = origSound;
+            }
+        }
+
+        updateReceipt();
+        if (typeof updateCustomerDisplay === 'function') updateCustomerDisplay();
+        if (typeof broadcastState === 'function') broadcastState();
+        if (typeof showToastAnimation === 'function') showToastAnimation('読み取り済みの商品を元に戻しました');
+    } catch (e) {
+        console.warn('[register] カートの復元に失敗しました:', e);
+        try { localStorage.removeItem(REGISTER_CART_KEY); } catch (e2) { /* 無視 */ }
+    }
+}
+
+// 他の追加機能の起動処理（updateReceiptの差し替えなど）がすべて終わってから復元する
+window.addEventListener('load', () => {
+    setTimeout(async () => {
+        try { await restoreRegisterCart(); }
+        finally { registerCartReady = true; }
+    }, 1500);
+});

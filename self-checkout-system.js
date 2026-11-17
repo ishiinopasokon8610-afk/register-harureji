@@ -28,6 +28,10 @@
 // register.js / ui.js / index.html は直接編集せず、フック方式で実現する。
 //
 // 【今回の更新内容】
+// ・スキャンした商品（と会員カード）を、変更のたびに localStorage（pos_sync_self_cart）へ控えるようにした。
+//   間違えてページを更新しても、読み取り済みの商品が消えず、そのまま戻る。
+//   控えを消すのは：レジで支払い済みになった時／最初の画面に戻った時／セルフレジを終了した時／
+//   最後の操作から30分たった時（次のお客様に前の人の商品が出ないように）。
 // ・ホーム画面：「客用画面」「セルフレジ」の2つのボタンを、専用の枠（flex）で囲むのをやめ、
 //   他の行（担当者管理／商品管理 など）と同じ2列の表（グリッド）の中に直接置くようにした。
 //   これで、左右の端・ボタン同士のすき間・列の位置が下の行とぴったり揃う。
@@ -67,6 +71,8 @@
     const ZXING_URL = 'https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js';
     const EXIT_TARGET = 'self-checkout-exit';
     const START_TARGET = 'self-checkout-start';
+    const CART_KEY = 'pos_sync_self_cart';                   // お客様側：スキャン中の商品の控え（端末ごと。pos_sync_ なので同期・バックアップされない）
+    const CART_TTL_MS = 30 * 60 * 1000;                      // 最後の操作から30分たった控えは、次のお客様のため捨てる
 
     const MY_ID = (typeof SYNC_DEVICE_ID !== 'undefined' && SYNC_DEVICE_ID)
         ? SYNC_DEVICE_ID
@@ -225,6 +231,44 @@
         scanner: null
     };
 
+    /* ---------- スキャン中の商品の控え（間違えてページを更新しても消えないように） ---------- */
+    // 商品・会員カード・画面の状態を、変更のたびに localStorage へ控える。
+    // 会計が終わる（レジで支払い済み）・最初の画面に戻る・セルフレジを終了する時は、控えを消す。
+    function saveCart() {
+        try {
+            if (!isSelfMode()) return;
+            if (S.items.length === 0 && !S.order) { localStorage.removeItem(CART_KEY); return; }
+            localStorage.setItem(CART_KEY, JSON.stringify({
+                savedAt: Date.now(),
+                view: S.view,
+                memberBarcode: S.memberBarcode || '',
+                items: S.items,
+                order: S.order
+            }));
+        } catch (e) { /* 無視 */ }
+    }
+
+    function clearSavedCart() {
+        try { localStorage.removeItem(CART_KEY); } catch (e) { /* 無視 */ }
+    }
+
+    // 控えを S に戻す。戻せたら true。古い（30分超）・壊れている・空の控えは捨てる
+    function restoreCart() {
+        try {
+            const d = JSON.parse(localStorage.getItem(CART_KEY));
+            if (!d || !Array.isArray(d.items) || (Date.now() - (Number(d.savedAt) || 0)) > CART_TTL_MS) { clearSavedCart(); return false; }
+            const items = d.items.filter(i => i && i.name && Number(i.qty) > 0);
+            if (items.length === 0) { clearSavedCart(); return false; }
+            S.items = items;
+            S.memberBarcode = d.memberBarcode || '';
+            S.order = null;
+            S.view = 'scan';
+            // レジへ送信済みだった場合は、「送信しました」画面に戻し、5秒後に最初の画面へ（通常の流れと同じ）
+            if (d.view === 'wait' && d.order && d.order.id) { S.order = d.order; S.view = 'wait'; }
+            return true;
+        } catch (e) { clearSavedCart(); return false; }
+    }
+
     function findProduct(code) {
         const list = (typeof products !== 'undefined' && Array.isArray(products)) ? products : [];
         return list.find(p => p && (String(p.jan) === String(code) || p.name === code)) || null;
@@ -364,7 +408,9 @@
     function setView(v) {
         // 「レジへ送信しました」画面から別の画面へ移る時は、5秒後に戻すタイマーを止める
         if (v !== 'wait') clearWaitTimer();
-        S.view = v; renderView(); publishLive(false);
+        S.view = v;
+        if (v === 'start' || v === 'thanks') clearSavedCart(); else saveCart();
+        renderView(); publishLive(false);
     }
 
     // 最初の画面へ戻す（次のお客様のために、商品・会員カード・注文の紐づけをすべて空にする）
@@ -374,6 +420,7 @@
         S.items = [];
         S.order = null;       // レジ側へ送信済みの注文は、レジに残る（ここでは何も取り消さない）
         S.memberBarcode = '';
+        clearSavedCart();
         setView('start');
     }
 
@@ -532,6 +579,7 @@
     }
 
     function renderScanList() {
+        saveCart();
         const list = $('sc-list');
         if (!list) return;
         const t = totals();
@@ -654,6 +702,7 @@
             say('ありがとう ござい まし た');
             S.items = [];
             S.order = null;
+            clearSavedCart();
             setView('thanks');
             if (S.thanksTimer) clearTimeout(S.thanksTimer);
             S.thanksTimer = setTimeout(() => { S.thanksTimer = null; if (isSelfMode()) { S.memberBarcode = ''; setView('start'); } }, 8000);
@@ -776,7 +825,8 @@
     }
 
     /* ---------- 開始・終了 ---------- */
-    function showRoot() {
+    // reopen = true：ページを開き直した時（控えがあれば、商品をそのまま戻す）
+    function showRoot(reopen) {
         const root = buildRoot();
         root.style.display = 'flex';
         clearWaitTimer();
@@ -784,7 +834,17 @@
         S.memberBarcode = '';
         S.items = [];
         S.order = null;
+        const restored = !!reopen && restoreCart();
+        if (!restored) clearSavedCart();
         renderView();
+        if (restored) {
+            publishLive(false);
+            if (S.view === 'wait') {
+                S.waitTimer = setTimeout(() => { S.waitTimer = null; if (isSelfMode() && S.view === 'wait') resetToStart(); }, 5000);
+            } else {
+                flash('読み取り済みの商品を元に戻しました', true);
+            }
+        }
     }
 
     // 店長ロックをかける（auth-system.js の lockManagerAuth() と同じ状態にする）。
@@ -829,6 +889,7 @@
         if (S.thanksTimer) { clearTimeout(S.thanksTimer); S.thanksTimer = null; }
         if (S.order) publish(EV_STATUS, { orderId: S.order.id, status: 'cancelled', by: 'self' });
         S.items = []; S.order = null;
+        clearSavedCart();
         publishLive(true);
         const root = $('self-checkout-root');
         if (root) root.style.display = 'none';
@@ -1337,7 +1398,7 @@
         updateBadge();
         ensureHomeButton();
         setInterval(() => { loadPending(); updateBadge(); updateMonitorBadge(); ensureHomeButton(); }, 1500);
-        if (isSelfMode()) showRoot(); // セルフレジ画面のまま、ページを開き直した時
+        if (isSelfMode()) showRoot(true); // セルフレジ画面のまま、ページを開き直した時（商品の控えがあれば戻す）
     }
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
     else start();
