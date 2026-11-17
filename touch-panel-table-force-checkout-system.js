@@ -298,3 +298,80 @@ let tpOriginalConfirmResetTouchPanelTable = null;
     }
     tryHook();
 })();
+
+/* ---------- ⑤ マウスの長押しにも対応する ---------- */
+// 元の長押し処理（touch-panel-table-reset-and-badge-position-system.js）は
+// touchstart 等の「指でのタッチ」だけを見ているため、PCでマウスを使うと
+// 長押ししても何も起きなかった。ここでマウスの長押し（約0.6秒）にも対応する。
+// 指でのタッチは元の処理がそのまま担当するので、ここでは扱わない
+// （二重に反応しないよう、タッチ直後に届く疑似マウスイベントは無視する）。
+const TP_FC_MOUSE_LONG_PRESS_MS = 600;
+let tpFcLastTouchAt = 0;
+document.addEventListener('touchstart', () => { tpFcLastTouchAt = Date.now(); }, { passive: true, capture: true });
+
+function tpFcSetupMouseLongPress(grid) {
+    if (!grid || grid.dataset.tpFcMouseBound === '1') return;
+    grid.dataset.tpFcMouseBound = '1';
+
+    let timer = null;
+    let fired = false;
+    let startX = 0, startY = 0;
+
+    function clearTimer() {
+        if (timer) { clearTimeout(timer); timer = null; }
+    }
+
+    grid.addEventListener('mousedown', function (ev) {
+        if (ev.button !== 0) return;
+        if (Date.now() - tpFcLastTouchAt < 1000) return; // タッチ直後の疑似マウスイベント
+        // 店員用モードのときだけ有効（お客様用モードでは何もしない）
+        if (typeof touchPanelState === 'undefined' || touchPanelState.mode !== 'staff') return;
+        const cell = ev.target.closest('.tp-table-cell');
+        if (!cell) return;
+        fired = false;
+        startX = ev.clientX; startY = ev.clientY;
+        clearTimer();
+        timer = setTimeout(() => {
+            fired = true;
+            timer = null;
+            const num = parseInt(cell.dataset.table, 10);
+            if (!isNaN(num) && typeof window.tpConfirmResetTouchPanelTable === 'function') {
+                window.tpConfirmResetTouchPanelTable(num);
+            }
+        }, TP_FC_MOUSE_LONG_PRESS_MS);
+    });
+
+    grid.addEventListener('mousemove', function (ev) {
+        if (!timer) return;
+        if (Math.abs(ev.clientX - startX) > 12 || Math.abs(ev.clientY - startY) > 12) clearTimer();
+    });
+    grid.addEventListener('mouseup', clearTimer);
+    grid.addEventListener('mouseleave', clearTimer);
+
+    // 長押しが発火した直後のクリックは、通常のテーブル選択が走らないよう止める
+    grid.addEventListener('click', function (ev) {
+        if (fired) {
+            ev.preventDefault();
+            ev.stopImmediatePropagation();
+            fired = false;
+        }
+    }, true);
+}
+
+(function hookRenderGridForMouseLongPress() {
+    function tryHook() {
+        if (typeof window.renderTouchPanelTableGrid !== 'function') {
+            setTimeout(tryHook, 300);
+            return;
+        }
+        const original = window.renderTouchPanelTableGrid;
+        window.renderTouchPanelTableGrid = function (...args) {
+            const result = original.apply(this, args);
+            tpFcSetupMouseLongPress(document.getElementById('tp-table-grid'));
+            return result;
+        };
+        // すでに卓番画面が表示されている場合にも対応
+        tpFcSetupMouseLongPress(document.getElementById('tp-table-grid'));
+    }
+    tryHook();
+})();
