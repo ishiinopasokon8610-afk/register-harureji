@@ -1,19 +1,16 @@
 // customer-fraud-warning-multilang-staff-notice-system.js
 // 1) 「詐欺にご注意ください」画面（#customer-fraud-modal）に
 //    英語・中国語（簡体字）・韓国語の表示を追加する。
-// 2) お客様側で詐欺注意画面が表示されている間、
-//    店員側の画面に「お客様が詐欺注意画面を確認中」と表示する。
-// index.html 等の中核ファイルは変更せず、DOMとlocalStorage経由で動くフック。
-// ※ 店員側への通知は「同じブラウザの別タブ/別ウィンドウ」間で動作します。
-//    別端末へ通知する場合は、同期システム側への接続が別途必要です。
+// 2) 年齢確認・詐欺注意の確認中、確認を始めたレジの画面に「確認中」の帯と
+//    「この商品を取り消す」ボタンを表示する。
+//    firebase-sync-system.js の channel の 'age-check-event' / 'fraud-warning-event'
+//    を見張るので、お客様画面が別端末でも動く。
+// index.html 等の中核ファイルは変更しないフック。
 
 (function () {
   "use strict";
 
-  var STORAGE_KEY = "haru_fraud_modal_status";
-  var HEARTBEAT_MS = 4000; // 表示中は定期的に生存通知を送る
-  var STALE_MS = 12000; // これ以上通知が来なければ「閉じた」とみなす
-  var CHANNEL_NAME = "haru_fraud_modal_channel";
+  var STALE_MS = 90000; // 「同意」が来なくても、これだけ経ったら帯を消す
 
   /* ---------- 1) 多言語表示 ---------- */
 
@@ -57,51 +54,38 @@
     }
   }
 
-  /* ---------- 2) 店員側への「確認中」通知 ---------- */
+  /* ---------- 2) 店員側の「確認中」表示＋取り消しボタン ---------- */
+  // 年齢確認（age-check-event）と詐欺注意（fraud-warning-event）の両方を見張る。
+  // 表示するのは、確認を始めた「このレジ」だけ（ほかのレジには出さない）。
 
-  function isVisible(el) {
-    if (!el) return false;
-    var cs = window.getComputedStyle(el);
-    if (cs.display === "none" || cs.visibility === "hidden") return false;
-    return el.getClientRects().length > 0;
-  }
+  var hideTimer = null;
+  var currentMode = ""; // "age" か "fraud"
+  var fraudModalSavedDisplay = null;
 
-  var channel = null;
-  try {
-    if (window.BroadcastChannel) channel = new BroadcastChannel(CHANNEL_NAME);
-  } catch (e) {}
-
-  var sourceActive = false; // このタブでモーダルが表示中か
-  var heartbeatTimer = null;
-
-  function publish(active) {
-    var payload = { active: !!active, ts: Date.now() };
+  function isCustomerDisplay() {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
-    } catch (e) {}
-    try {
-      if (channel) channel.postMessage(payload);
-    } catch (e) {}
-  }
-
-  function checkSource() {
-    var modal = document.getElementById("customer-fraud-modal");
-    var nowActive = isVisible(modal);
-    if (nowActive === sourceActive) return;
-    sourceActive = nowActive;
-    publish(sourceActive);
-    if (sourceActive) {
-      heartbeatTimer = setInterval(function () {
-        publish(true);
-      }, HEARTBEAT_MS);
-    } else if (heartbeatTimer) {
-      clearInterval(heartbeatTimer);
-      heartbeatTimer = null;
+      return typeof isCustomerDisplayDevice === "function" && isCustomerDisplayDevice();
+    } catch (e) {
+      return false;
     }
   }
 
-  // 受信側（店員側）バナー
-  var lastRemote = { active: false, ts: 0 };
+  function isOwn(data) {
+    try {
+      if (data && data.senderId && typeof POS_DEVICE_ID !== "undefined") {
+        return data.senderId === POS_DEVICE_ID;
+      }
+    } catch (e) {}
+    return true; // 送信元が分からないときは表示する
+  }
+
+  function myId() {
+    try {
+      return typeof POS_DEVICE_ID !== "undefined" ? POS_DEVICE_ID : null;
+    } catch (e) {
+      return null;
+    }
+  }
 
   function ensureBanner() {
     var b = document.getElementById("fraud-status-banner");
@@ -111,42 +95,96 @@
     b.setAttribute("role", "status");
     b.innerHTML =
       '<span class="fraud-status-icon">⚠️</span>' +
-      "<span>お客様が「詐欺注意」画面を確認中です</span>";
+      '<span class="fraud-status-text"></span>' +
+      '<button type="button" class="fraud-status-cancel">この商品を取り消す</button>';
+    b.querySelector(".fraud-status-cancel").addEventListener("click", onCancelClick);
     document.body.appendChild(b);
     return b;
   }
 
-  function renderBanner() {
-    var fresh =
-      lastRemote.active && Date.now() - lastRemote.ts < STALE_MS;
-    // お客様画面自身（モーダルが見えているタブ）には出さない
-    var show = fresh && !sourceActive;
+  function showBanner(mode) {
+    if (isCustomerDisplay()) return; // お客様画面には出さない
+    currentMode = mode;
+    var b = ensureBanner();
+    b.querySelector(".fraud-status-text").textContent =
+      mode === "age"
+        ? "お客様が年齢確認中です"
+        : "お客様が「詐欺注意」画面を確認中です";
+    b.style.display = "flex";
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(hideBanner, STALE_MS);
+  }
+
+  function hideBanner() {
+    clearTimeout(hideTimer);
+    currentMode = "";
     var b = document.getElementById("fraud-status-banner");
-    if (show) {
-      b = ensureBanner();
-      b.style.display = "flex";
-    } else if (b) {
-      b.style.display = "none";
+    if (b) b.style.display = "none";
+  }
+
+  function onCancelClick() {
+    var mode = currentMode;
+    hideBanner();
+    if (typeof channel === "undefined" || !channel || !channel.publish) return;
+    var payload = { action: "cancel", senderId: myId() };
+    if (mode === "age") {
+      // 既存の「年齢確認を取り消す」処理（お客様が「同意しない」を押したときと同じ流れ）
+      channel.publish("age-check-event", payload);
+    } else if (mode === "fraud") {
+      channel.publish("fraud-warning-event", payload);
     }
   }
 
-  function receive(payload) {
-    if (!payload || typeof payload.ts !== "number") return;
-    lastRemote = { active: !!payload.active, ts: payload.ts };
-    renderBanner();
+  // 詐欺注意の取り消し（既存の処理には「取り消し」が無いため、ここで行う）
+  function applyFraudCancel() {
+    try {
+      if (typeof pendingFraudCheckItem !== "undefined") pendingFraudCheckItem = null;
+    } catch (e) {}
+    var m = document.getElementById("customer-fraud-modal");
+    if (m && m.style.display !== "none") {
+      fraudModalSavedDisplay = m.style.display;
+      m.style.display = "none";
+    }
+    hideBanner();
   }
 
-  window.addEventListener("storage", function (e) {
-    if (e.key !== STORAGE_KEY || !e.newValue) return;
-    try {
-      receive(JSON.parse(e.newValue));
-    } catch (err) {}
-  });
+  // 次に詐欺注意が始まるとき、取り消しで隠した表示を元に戻す
+  function restoreFraudModalIfHidden() {
+    var m = document.getElementById("customer-fraud-modal");
+    if (m && fraudModalSavedDisplay !== null && m.style.display === "none") {
+      m.style.display = fraudModalSavedDisplay;
+    }
+    fraudModalSavedDisplay = null;
+  }
 
-  if (channel) {
-    channel.onmessage = function (e) {
-      receive(e.data);
-    };
+  function onAgeEvent(message) {
+    var data = (message && message.data) || {};
+    if (data.action === "start") {
+      if (isOwn(data)) showBanner("age");
+    } else if (data.action === "success" || data.action === "cancel") {
+      if (currentMode === "age") hideBanner();
+    }
+  }
+
+  function onFraudEvent(message) {
+    var data = (message && message.data) || {};
+    if (data.action === "start") {
+      restoreFraudModalIfHidden();
+      if (isOwn(data)) showBanner("fraud");
+    } else if (data.action === "success") {
+      if (currentMode === "fraud") hideBanner();
+    } else if (data.action === "cancel") {
+      applyFraudCancel();
+    }
+  }
+
+  var subscribed = false;
+  function trySubscribe() {
+    if (subscribed) return;
+    if (typeof channel === "undefined" || !channel || !channel.subscribe) return;
+    subscribed = true;
+    channel.subscribe("age-check-event", onAgeEvent);
+    channel.subscribe("fraud-warning-event", onFraudEvent);
   }
 
   /* ---------- スタイル ---------- */
@@ -164,7 +202,9 @@
       "#fraud-status-banner{display:none;position:fixed;top:0;left:0;right:0;z-index:2147483000;" +
       "align-items:center;justify-content:center;gap:8px;padding:10px 14px;" +
       "background:#d97706;color:#fff;font-weight:700;font-size:15px;box-shadow:0 2px 8px rgba(0,0,0,.25)}" +
-      "#fraud-status-banner .fraud-status-icon{font-size:18px}";
+      "#fraud-status-banner .fraud-status-icon{font-size:18px}" +
+      "#fraud-status-banner .fraud-status-cancel{margin-left:10px;min-height:40px;padding:6px 16px;border:0;border-radius:8px;background:#fff;color:#b45309;font-weight:700;font-size:14px;cursor:pointer}" +
+      "#fraud-status-banner .fraud-status-cancel:active{opacity:.7}";
     document.head.appendChild(style);
   }
 
@@ -172,25 +212,13 @@
 
   function tick() {
     applyMultilang();
-    checkSource();
-    renderBanner(); // 通知が途絶えた場合に自動で消す
+    trySubscribe();
   }
 
   function init() {
     injectStyle();
     tick();
     setInterval(tick, 500);
-
-    // 起動時点で既に他タブが表示中だった場合に拾う
-    try {
-      var raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) receive(JSON.parse(raw));
-    } catch (e) {}
-
-    // タブを閉じたとき/遷移したときは「閉じた」と通知
-    window.addEventListener("pagehide", function () {
-      if (sourceActive) publish(false);
-    });
   }
 
   if (document.readyState === "loading") {
