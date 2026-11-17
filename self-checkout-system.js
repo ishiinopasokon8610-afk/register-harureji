@@ -28,6 +28,9 @@
 // register.js / ui.js / index.html は直接編集せず、フック方式で実現する。
 //
 // 【今回の更新内容】
+// ・レジのバーコード欄に、お客様の画面に出ている4桁の「お会計番号」（例：1234）を入力して
+//   Enter（または確定）すると、その注文がカートに入り、そのままお会計に進めるようにした。
+//   （これまでは SC○○○○○○ のバーコード読み取りか、「セルフレジ待ち」一覧の「読み込む」だけだった）
 // ・スキャンした商品（と会員カード）を、変更のたびに localStorage（pos_sync_self_cart）へ控えるようにした。
 //   間違えてページを更新しても、読み取り済みの商品が消えず、そのまま戻る。
 //   控えを消すのは：レジで支払い済みになった時／最初の画面に戻った時／セルフレジを終了した時／
@@ -1182,7 +1185,17 @@
         if (typeof focusJanInput === 'function') focusJanInput();
     }
 
-    // 注文のバーコード（SC123456）を、いつものバーコード欄で読み取った時
+    // その文字列が、店員・会員・商品のどれかとして登録されているか
+    function isRegisteredCode(c) {
+        try {
+            if (typeof clerks !== 'undefined' && Array.isArray(clerks) && clerks.some(x => x && x.barcode && String(x.barcode) === c)) return true;
+            if (typeof customers !== 'undefined' && Array.isArray(customers) && customers.some(x => x && String(x.barcode) === c)) return true;
+            if (typeof products !== 'undefined' && Array.isArray(products) && products.some(x => x && (String(x.jan) === c || x.name === c))) return true;
+        } catch (e) { /* 無視 */ }
+        return false;
+    }
+
+    // 注文のバーコード（SC123456）や4桁のお会計番号を、いつものバーコード欄で読み取り・入力した時
     (function hookFetchAndAddItem() {
         function tryHook() {
             if (typeof window.fetchAndAddItem !== 'function') { setTimeout(tryHook, 300); return; }
@@ -1196,6 +1209,17 @@
                     sound('error');
                     say('その ちゅうもん ばんごう は みつかり ませ ん');
                     return;
+                }
+                // お客様の画面に出た4桁の「お会計番号」（例：1234）を、バーコード欄に入力した時
+                // （全角の数字・末尾の「番」も受け付ける）。
+                // ただし、同じ数字の店員・会員・商品が登録されている時は、そちらを優先する
+                // （＝いつもの読み取りを邪魔しない）。該当する待ちの注文が無い時も、いつも通りの処理に任せる。
+                const callNoText = String(code || '').trim()
+                    .replace(/[０-９]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 0xFEE0))
+                    .replace(/番$/, '');
+                if (/^\d{4}$/.test(callNoText) && !isRegisteredCode(callNoText)) {
+                    const o = pending.find(x => String(x.callNo) === callNoText);
+                    if (o) { requestLoad(o); return; }
                 }
                 return original.call(this, code, ...rest);
             };
