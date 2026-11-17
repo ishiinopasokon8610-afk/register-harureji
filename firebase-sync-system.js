@@ -65,7 +65,8 @@
     const LIVE_EVENTS = new Set([
         'update-cart', 'age-check-event', 'fraud-warning-event',
         'checkout-image-event', 'checkout-image-hide-event',
-        'sync-request', 'sync-full-sent'   // 「全部送って」の依頼と返信（古い依頼を後から再生しないため）
+        'sync-request', 'sync-full-sent',  // 「全部送って」の依頼と返信（古い依頼を後から再生しないため）
+        'self-checkout-live'               // セルフレジのスキャン状況の見守り（その場限り）
     ]);
     // 自分には返さないイベント
     const NO_ECHO_EVENTS = new Set(['update-cart']);

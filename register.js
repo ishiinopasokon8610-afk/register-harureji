@@ -669,7 +669,8 @@ function checkAndAddToCart(prod) {
 // 詐欺注意モーダル関連
 // ------------------------------------------
 // 年齢確認（showAgeCheckModals/handleAgeCheckResult）と同じ仕組みだが、
-// こちらは「客用画面が表示されている端末」にのみ表示する（店員側の画面には何も出さない）。
+// こちらの同意画面は「客用画面が表示されている端末」に出す。店員側の画面には、
+// 同意を待っている間、「詐欺注意の確認中です」の待ち画面が出る（clerk-fraud-modal）。
 function showFraudWarningModal() {
     const custScreen = document.getElementById('customer-screen');
     const isCustomer = custScreen && custScreen.classList.contains('active');
@@ -678,8 +679,55 @@ function showFraudWarningModal() {
     if (isCustomer && custModal) {
         custModal.style.display = 'flex';
         if (typeof speak === 'function') speak("詐欺にご注意ください。内容をご確認のうえ、同意するボタンを押してください。");
+    } else {
+        // 【追加】客用画面でない端末（店員側のレジ画面など）には、年齢確認と同じように
+        // 「お客様が確認中です」という待ち画面を出す（これまでは何も出なかった）
+        showClerkFraudWaiting();
     }
-    // 客用画面がアクティブでない端末（店員側のレジ画面など）には表示しない
+}
+
+// 店員側の「詐欺注意を確認中」の待ち画面（年齢確認の「年齢確認中です」と同じ見た目）
+let clerkFraudWatchTimer = null;
+function ensureClerkFraudModal() {
+    let el = document.getElementById('clerk-fraud-modal');
+    if (el) return el;
+    el = document.createElement('div');
+    el.id = 'clerk-fraud-modal';
+    el.style.cssText = 'display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.92);z-index:25000;justify-content:center;align-items:center;flex-direction:column;color:white;text-align:center;padding:20px;box-sizing:border-box;';
+    el.innerHTML = '<div class="age-icon-large">⚠️</div>' +
+        '<h1 class="age-title-large">詐欺注意の確認中です</h1>' +
+        '<p class="age-desc-large">お客様の画面での操作をお待ちください...</p>' +
+        '<button type="button" id="clerk-fraud-cancel-btn" style="margin-top:36px;padding:12px 26px;font-size:16px;border:1px solid #bbb;border-radius:10px;background:transparent;color:#ddd;cursor:pointer;">確認を取りやめる（商品は追加しません）</button>';
+    document.body.appendChild(el);
+    el.querySelector('#clerk-fraud-cancel-btn').addEventListener('click', cancelClerkFraudWaiting);
+    return el;
+}
+
+function showClerkFraudWaiting() {
+    const el = ensureClerkFraudModal();
+    el.style.display = 'flex';
+    // 確認が終わった（または別の理由で待ちが解除された）のに、画面が残ってしまわないよう見張る
+    if (clerkFraudWatchTimer) clearInterval(clerkFraudWatchTimer);
+    clerkFraudWatchTimer = setInterval(() => {
+        if (!pendingFraudCheckItem) hideClerkFraudWaiting();
+    }, 500);
+}
+
+function hideClerkFraudWaiting() {
+    if (clerkFraudWatchTimer) { clearInterval(clerkFraudWatchTimer); clerkFraudWatchTimer = null; }
+    const el = document.getElementById('clerk-fraud-modal');
+    if (el) el.style.display = 'none';
+}
+
+// 客用画面が無い・つながらない時などに、店員が待ちをやめられるようにする
+function cancelClerkFraudWaiting() {
+    if (typeof playSound === 'function') playSound('click');
+    pendingFraudCheckItem = null;
+    hideClerkFraudWaiting();
+    if (channel) channel.publish('fraud-warning-event', { action: 'cancel', senderId: POS_DEVICE_ID });
+    const custModal = document.getElementById('customer-fraud-modal');
+    if (custModal) custModal.style.display = 'none';
+    if (typeof focusJanInput === 'function') focusJanInput();
 }
 
 // 客用画面で「同意する」ボタンが押された時に呼ばれる
@@ -691,6 +739,7 @@ function handleFraudWarningAgree() {
 function onFraudWarningAgreed() {
     const custModal = document.getElementById('customer-fraud-modal');
     if (custModal) custModal.style.display = 'none';
+    hideClerkFraudWaiting(); // 店員側の待ち画面も閉じる
     fraudWarningAcknowledgedCurrentTransaction = true;
 
     if (pendingFraudCheckItem) {
@@ -1709,16 +1758,18 @@ document.addEventListener('keydown', (e) => {
     }
 });
 /* =========================================================
-   領収書まわりのキー操作
+   領収書まわりのキー操作（Backspace 版）
    ------------------------------------------
-   ・「領収書を発行しますか？」 … Enter＝はい ／ Backspace（Delete）＝いいえ
-   ・お会計レシート画面       … Enter＝画像(PNG)保存 ／ Backspace（Delete）＝閉じる
-   index.html 内にも同じ画面向けのキー処理があるが（こちらでは Enter が「いいえ」になっていた）、
+   ・「領収書を発行しますか？」 … Backspace＝はい（発行する） ／ Delete または Esc＝いいえ
+   ・お会計レシート画面       … Backspace＝画像(PNG)保存 ／ Delete または Esc＝閉じる
+   ・Enter は、この2つの画面では何もしない。バーコードスキャナーは読み取りのたびに
+     Enter を送るため、スキャンの拍子に、発行・保存・閉じる、が勝手に走らないようにする。
+   index.html 内にも同じ画面向けのキー処理があるが（そちらでは Enter が「いいえ」になっていた）、
    window の「キャプチャ段階」で先に受け取り、ここで処理を終わらせて（stopImmediatePropagation）
    そちらへは渡さない。他の確認ダイアログ（「領収書を発行しますか？」以外）には触れない。
    ========================================================= */
 (function receiptKeyShortcuts() {
-    let receiptKeySaving = false; // 画像保存の最中に Enter をもう一度押しても、二重に保存しない
+    let receiptKeySaving = false; // 画像保存の最中に Backspace をもう一度押しても、二重に保存しない
 
     function isShown(el) {
         if (!el) return false;
@@ -1731,8 +1782,10 @@ document.addEventListener('keydown', (e) => {
         if (typeof window.isClockSkewBlocking === 'function' && window.isClockSkewBlocking()) return;
         if (e.ctrlKey || e.altKey || e.metaKey || e.isComposing) return;
 
-        const isYesKey = e.key === 'Enter';
-        const isNoKey = e.key === 'Backspace' || e.key === 'Delete';
+        const isYesKey = e.key === 'Backspace';
+        // 【変更】「いいえ／閉じる」は Delete・Esc ではなく Enter キーにした
+        const isNoKey = e.key === 'Enter';
+        const isEnter = false; // Enter は「いいえ／閉じる」として扱う（上のisNoKey）
         if (!isYesKey && !isNoKey) return;
 
         const confirmModal = document.getElementById('custom-confirm-modal');
@@ -1745,7 +1798,7 @@ document.addEventListener('keydown', (e) => {
             if (!text.includes('領収書を発行しますか？')) return; // 別の確認ダイアログは今まで通り
             e.preventDefault();
             e.stopImmediatePropagation();
-            if (e.repeat) return; // 押しっぱなしで次の画面まで進んでしまわないように
+            if (e.repeat || isEnter) return; // Enter は何もしない／押しっぱなしで次の画面まで進まない
             if (typeof closeCustomConfirm === 'function') closeCustomConfirm(isYesKey);
             return;
         }
@@ -1754,7 +1807,7 @@ document.addEventListener('keydown', (e) => {
         if (isShown(printModal)) {
             e.preventDefault();
             e.stopImmediatePropagation();
-            if (e.repeat) return;
+            if (e.repeat || isEnter) return;
             if (isYesKey) {
                 if (receiptKeySaving) return;
                 receiptKeySaving = true;
