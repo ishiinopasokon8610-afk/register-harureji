@@ -2,11 +2,12 @@
 // touch-panel-table-force-checkout-system.js
 // ------------------------------------------
 // 【この機能】
-// 卓番選択画面（店員用モード）でテーブルを長押しすると、
+// 卓番選択画面（店員用モード）でテーブルを長押しすると、次のメニューが出る。
 //   ・💰 会計する（店長認証あり）
 //   ・🔄 データをリセットだけする（こちらも店長認証あり）
+//   ・（使用中のテーブルのみ）🍽️ このテーブルに入る（店員用）
 //   ・キャンセル
-// の3択が出る。
+// 長押しのほか、使用中のテーブルを1タップしても同じメニューが出る。
 //
 // 「会計する」を選ぶと、
 //   1. 店長認証（店長バーコード）
@@ -121,6 +122,13 @@ function tpShowForceCheckoutMenu(num) {
     }
 
     addBtn('💰 会計する（店長認証）', '#2e7d32', () => tpStartForceCheckout(num));
+    // 使用中のテーブルをタップしたとき、これまでは「いいえ」で選べた
+    // 「使用中のまま店員用としてこのテーブルに入る」も、ここから選べるようにする
+    let isOccupied = false;
+    try { isOccupied = !!(typeof getOccupiedTouchPanelTables === 'function' && getOccupiedTouchPanelTables().has(num)); } catch (e) { /* 無視 */ }
+    if (isOccupied && typeof selectTouchPanelTable === 'function') {
+        addBtn('🍽️ このテーブルに入る（店員用）', '#1565c0', () => selectTouchPanelTable(num, true));
+    }
     addBtn('🔄 データをリセットだけする（店長認証）', '#c62828', () => {
         tpRequestManagerThen(() => {
             if (typeof tpOriginalConfirmResetTouchPanelTable === 'function') tpOriginalConfirmResetTouchPanelTable(num);
@@ -372,6 +380,25 @@ function tpFcSetupMouseLongPress(grid) {
         };
         // すでに卓番画面が表示されている場合にも対応
         tpFcSetupMouseLongPress(document.getElementById('tp-table-grid'));
+    }
+    tryHook();
+})();
+
+/* ---------- ⑥ 使用中のテーブルを1タップするとメニューを出す ---------- */
+// 店員用モードで「使用中」のテーブルをタップすると、これまでは
+// tpStaffPickOccupiedTable() が「空席に戻しますか？」の確認を出していた。
+// これを、長押しと同じ3択（＋このテーブルに入る）のメニューに差し替える。
+// 空席のテーブルのタップは、これまでどおり（テーブルを選んで注文へ）。
+// お客様用モードの「使用中です」案内（tpNotifyTableOccupied）はそのまま。
+(function hookTapOnOccupiedTable() {
+    function tryHook() {
+        if (typeof window.tpStaffPickOccupiedTable !== 'function') {
+            setTimeout(tryHook, 300);
+            return;
+        }
+        window.tpStaffPickOccupiedTable = function (num) {
+            tpShowForceCheckoutMenu(num);
+        };
     }
     tryHook();
 })();
