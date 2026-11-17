@@ -2,12 +2,13 @@
 // touch-panel-table-force-checkout-system.js
 // ------------------------------------------
 // 【この機能】
-// 卓番選択画面（店員用モード）でテーブルを長押しすると、次のメニューが出る。
+// 卓番選択画面でテーブルを長押しすると、次のメニューが出る（モードは問わない）。
 //   ・💰 会計する（店長認証あり）
 //   ・🔄 データをリセットだけする（こちらも店長認証あり）
-//   ・（使用中のテーブルのみ）🍽️ このテーブルに入る（店員用）
+//   ・（使用中のテーブル かつ 店員用モードのときのみ）🍽️ このテーブルに入る
 //   ・キャンセル
 // 長押しのほか、使用中のテーブルを1タップしても同じメニューが出る。
+// 会計・リセットは必ず店長認証を通すので、店員用モード以外でも安全。
 //
 // 「会計する」を選ぶと、
 //   1. 店長認証（店長バーコード）
@@ -126,7 +127,8 @@ function tpShowForceCheckoutMenu(num) {
     // 「使用中のまま店員用としてこのテーブルに入る」も、ここから選べるようにする
     let isOccupied = false;
     try { isOccupied = !!(typeof getOccupiedTouchPanelTables === 'function' && getOccupiedTouchPanelTables().has(num)); } catch (e) { /* 無視 */ }
-    if (isOccupied && typeof selectTouchPanelTable === 'function') {
+    const isStaffMode = (typeof touchPanelState !== 'undefined' && touchPanelState.mode === 'staff');
+    if (isOccupied && isStaffMode && typeof selectTouchPanelTable === 'function') {
         addBtn('🍽️ このテーブルに入る（店員用）', '#1565c0', () => selectTouchPanelTable(num, true));
     }
     addBtn('🔄 データをリセットだけする（店長認証）', '#c62828', () => {
@@ -332,8 +334,6 @@ function tpFcSetupMouseLongPress(grid) {
     grid.addEventListener('mousedown', function (ev) {
         if (ev.button !== 0) return;
         if (Date.now() - tpFcLastTouchAt < 1000) return; // タッチ直後の疑似マウスイベント
-        // 店員用モードのときだけ有効（お客様用モードでは何もしない）
-        if (typeof touchPanelState === 'undefined' || touchPanelState.mode !== 'staff') return;
         const cell = ev.target.closest('.tp-table-cell');
         if (!cell) return;
         fired = false;
@@ -399,6 +399,86 @@ function tpFcSetupMouseLongPress(grid) {
         window.tpStaffPickOccupiedTable = function (num) {
             tpShowForceCheckoutMenu(num);
         };
+    }
+    tryHook();
+})();
+
+/* ---------- ⑦ 店員用モード以外でも、メニューが出るようにする ---------- */
+// 卓番選択画面は、店員用モード以外（客用表示）のときは、使用中のテーブルを
+// タップすると tpNotifyTableOccupied() が「テーブルNは現在使用中です」と
+// 出すだけで、元の長押し処理も店員用モードでしか動かない作りだった。
+// 会計・リセットはどちらも店長認証が必要なので、モードに関係なくメニューを
+// 出しても、店長バーコードがなければ何も実行できない。
+// （「このテーブルに入る（店員用）」は認証なしの操作なので、店員用モードの
+//   ときだけメニューに出す）
+(function hookTapOnOccupiedTableInAnyMode() {
+    function tryHook() {
+        if (typeof window.tpNotifyTableOccupied !== 'function') {
+            setTimeout(tryHook, 300);
+            return;
+        }
+        window.tpNotifyTableOccupied = function (num) {
+            tpShowForceCheckoutMenu(num);
+        };
+    }
+    tryHook();
+})();
+
+// 指での長押し：店員用モードのときは元の処理が担当するので、
+// ここでは店員用モード以外のときだけ受け持つ
+function tpFcSetupTouchLongPressForNonStaff(grid) {
+    if (!grid || grid.dataset.tpFcTouchBound === '1') return;
+    grid.dataset.tpFcTouchBound = '1';
+
+    let timer = null;
+    let fired = false;
+
+    function clearTimer() {
+        if (timer) { clearTimeout(timer); timer = null; }
+    }
+
+    grid.addEventListener('touchstart', function (ev) {
+        if (typeof touchPanelState !== 'undefined' && touchPanelState.mode === 'staff') return;
+        const cell = ev.target.closest('.tp-table-cell');
+        if (!cell) return;
+        fired = false;
+        clearTimer();
+        timer = setTimeout(() => {
+            fired = true;
+            timer = null;
+            const num = parseInt(cell.dataset.table, 10);
+            if (!isNaN(num) && typeof window.tpConfirmResetTouchPanelTable === 'function') {
+                window.tpConfirmResetTouchPanelTable(num);
+            }
+        }, TP_FC_MOUSE_LONG_PRESS_MS);
+    }, { passive: true });
+
+    ['touchend', 'touchmove', 'touchcancel'].forEach(name => {
+        grid.addEventListener(name, clearTimer, { passive: true });
+    });
+
+    grid.addEventListener('click', function (ev) {
+        if (fired) {
+            ev.preventDefault();
+            ev.stopImmediatePropagation();
+            fired = false;
+        }
+    }, true);
+}
+
+(function hookRenderGridForTouchLongPressNonStaff() {
+    function tryHook() {
+        if (typeof window.renderTouchPanelTableGrid !== 'function') {
+            setTimeout(tryHook, 300);
+            return;
+        }
+        const original = window.renderTouchPanelTableGrid;
+        window.renderTouchPanelTableGrid = function (...args) {
+            const result = original.apply(this, args);
+            tpFcSetupTouchLongPressForNonStaff(document.getElementById('tp-table-grid'));
+            return result;
+        };
+        tpFcSetupTouchLongPressForNonStaff(document.getElementById('tp-table-grid'));
     }
     tryHook();
 })();
