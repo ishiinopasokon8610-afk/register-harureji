@@ -539,22 +539,100 @@ function deleteDiscountBarcode(index) {
     }
 }
 
+/* =========================================================
+   Firebase経由での複数端末同期（マージ方式）
+   このお店で使っている他の端末（スマホ・レジ端末・タッチパネルなど）にも
+   登録した自動化バーコードをリアルタイムで反映する。
+
+   【不具合修正：他の端末で作ったバーコードが連携されない／消える／アーカイブが復活する】
+   以前は「送られてきた一覧で、自分の一覧を丸ごと置き換える」方式だったため、
+     ・2台がほぼ同時にバーコードを作ると、あとから届いた方の一覧で、もう片方が作った分が消える
+     ・開いたばかりの端末など、古い一覧を持った端末が1件作るだけで、全端末の一覧が古い状態に戻る
+     ・自分が送った一覧が、自分に「古い内容のまま」戻ってきて、直前の変更（アーカイブ等）を巻き戻す
+   といったことが起きていた。
+   今回から、一覧を丸ごと置き換えず、バーコードごとに「新しい方を残す」マージ方式にした。
+     ・各バーコードに updatedAt（最後に変更した時刻）を付け、同じ番号なら新しい方を採用する
+     ・削除は「消した印（deleted）」として一緒に送り、他の端末でも消えるようにする
+       （印が無いと、マージした時に消したものが復活してしまうため）
+     ・自分が送ったものが戻ってきても無視する
+     ・相手に足りないものが自分にあれば、少し待ってから送り直す（取りこぼしの自動回復）
+   saveDiscounts() を呼ぶ既存の処理（作成・編集・アーカイブ・復元・削除など）は、
+   そのまま変更なしで動く（変更・削除は、保存の直前に前回との差分から自動で検出する）。
+   ※古い版のままの端末が混ざっていると、その端末の操作は従来どおり上書きになる。
+     全端末を新しい版に更新すること。
+   ========================================================= */
+const DISC_TOMB_KEY = 'pos_discounts_deleted';
+const DISC_TOMB_KEEP_MS = 30 * 24 * 60 * 60 * 1000;
+
+// 端末ごとの時計のずれで「新しい・古い」が逆転しないよう、できるだけサーバー時刻を使う
+function discNow() {
+    try {
+        if (window.PosSync && typeof window.PosSync.serverNow === 'function') return window.PosSync.serverNow();
+    } catch (e) { /* 無視 */ }
+    return Date.now();
+}
+
+function discLoadTombstones() {
+    try {
+        const o = JSON.parse(localStorage.getItem(DISC_TOMB_KEY) || '{}');
+        return (o && typeof o === 'object' && !Array.isArray(o)) ? o : {};
+    } catch (e) { return {}; }
+}
+
+function discSaveTombstones(t) {
+    const limit = discNow() - DISC_TOMB_KEEP_MS;
+    Object.keys(t).forEach(k => { if ((Number(t[k]) || 0) < limit) delete t[k]; });
+    try { localStorage.setItem(DISC_TOMB_KEY, JSON.stringify(t)); } catch (e) { /* 無視 */ }
+}
+
+function discPlain(d) {
+    const c = Object.assign({}, d);
+    delete c.updatedAt;
+    return JSON.stringify(c);
+}
+
+function discComputeSnapshot(list) {
+    const snap = {};
+    (list || []).forEach(d => {
+        if (d && d.barcode !== undefined && d.barcode !== null) snap[String(d.barcode)] = discPlain(d);
+    });
+    return snap;
+}
+
+// 「前回保存（または他端末から受信）した時点の中身」。ここと比べて、変わったバーコードに updatedAt を付け、
+// 無くなったバーコードには「消した印」を付ける
+let discSnapshot = discComputeSnapshot(discountBarcodes);
+
+function discStampChanges() {
+    const now = discNow();
+    const cur = discComputeSnapshot(discountBarcodes);
+    discountBarcodes.forEach(d => {
+        if (!d || d.barcode === undefined || d.barcode === null) return;
+        const k = String(d.barcode);
+        if (discSnapshot[k] !== cur[k]) d.updatedAt = now;
+    });
+    const tomb = discLoadTombstones();
+    let tombChanged = false;
+    Object.keys(discSnapshot).forEach(k => {
+        if (!(k in cur)) { tomb[k] = now; tombChanged = true; }
+    });
+    if (tombChanged) discSaveTombstones(tomb);
+    discSnapshot = cur;
+}
+
 function saveDiscounts() {
+    discStampChanges();
     localStorage.setItem('pos_discounts', JSON.stringify(discountBarcodes));
     if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
     broadcastDiscounts();
 }
 
-/* =========================================================
-   Firebase経由での複数端末同期
-   このお店で使っている他の端末（スマホ・レジ端末など）にも
-   登録した自動化バーコードをリアルタイムで反映する。
-   ========================================================= */
 function broadcastDiscounts() {
     if (typeof channel !== 'undefined' && channel) {
         try {
             channel.publish('discount-sync', {
                 discounts: discountBarcodes,
+                deleted: discLoadTombstones(),
                 time: Date.now(),
                 senderId: (typeof SYNC_DEVICE_ID !== 'undefined') ? SYNC_DEVICE_ID : null
             });
@@ -564,17 +642,81 @@ function broadcastDiscounts() {
     }
 }
 
+// 受信した一覧を、いまの一覧に混ぜる。戻り値：相手に足りないものが自分にあるか（true なら送り直す）
+function discMergeRemote(remoteList, remoteTomb) {
+    const tomb = discLoadTombstones();
+    Object.keys(remoteTomb || {}).forEach(k => {
+        const t = Number(remoteTomb[k]) || 0;
+        if (t > (Number(tomb[k]) || 0)) tomb[k] = t;
+    });
+
+    const map = new Map();
+    const order = [];
+    const consider = (d) => {
+        if (!d || d.barcode === undefined || d.barcode === null) return;
+        const k = String(d.barcode);
+        const cur = map.get(k);
+        if (!cur) { map.set(k, d); order.push(k); return; }
+        const a = Number(cur.updatedAt) || 0;
+        const b = Number(d.updatedAt) || 0;
+        // 新しい方を採用。同じ時刻なら、どの端末でも同じ結果になるよう文字列の比較で決める
+        if (b > a || (b === a && JSON.stringify(d) > JSON.stringify(cur))) map.set(k, d);
+    };
+    (discountBarcodes || []).forEach(consider);
+    remoteList.forEach(consider);
+
+    const merged = [];
+    order.forEach(k => {
+        const d = map.get(k);
+        const del = Number(tomb[k]) || 0;
+        // 消した印の方が新しいか同じなら、消えたものとして扱う（消したあとに作り直したものは updatedAt が新しいので残る）
+        if (del && del >= (Number(d.updatedAt) || 0)) return;
+        merged.push(d);
+    });
+
+    const remoteMap = new Map();
+    remoteList.forEach(d => { if (d && d.barcode !== undefined && d.barcode !== null) remoteMap.set(String(d.barcode), d); });
+    let remoteLacks = false;
+    merged.forEach(d => {
+        const r = remoteMap.get(String(d.barcode));
+        if (!r || JSON.stringify(r) !== JSON.stringify(d)) remoteLacks = true;
+    });
+    Object.keys(tomb).forEach(k => {
+        if ((Number(remoteTomb && remoteTomb[k]) || 0) < (Number(tomb[k]) || 0)) remoteLacks = true;
+    });
+
+    discountBarcodes = merged;
+    discSaveTombstones(tomb);
+    try { localStorage.setItem('pos_discounts', JSON.stringify(merged)); } catch (e) { /* 無視 */ }
+    discSnapshot = discComputeSnapshot(merged);
+    return remoteLacks;
+}
+
+let discRebroadcastTimer = null;
+let discLastRebroadcastAt = 0;
+function discScheduleRebroadcast() {
+    if (discRebroadcastTimer) return;
+    // 同時に何台も送り直さないよう、少しランダムに待つ
+    discRebroadcastTimer = setTimeout(() => {
+        discRebroadcastTimer = null;
+        if (Date.now() - discLastRebroadcastAt < 3000) return;
+        discLastRebroadcastAt = Date.now();
+        broadcastDiscounts();
+    }, 300 + Math.random() * 1500);
+}
+
 (function waitForChannelAndSubscribeDiscountSync() {
     if (typeof channel !== 'undefined' && channel) {
         channel.subscribe('discount-sync', (msg) => {
-            if (msg && msg.data && Array.isArray(msg.data.discounts)) {
-                discountBarcodes = msg.data.discounts;
-                localStorage.setItem('pos_discounts', JSON.stringify(discountBarcodes));
-                // 割引バーコード管理画面が開いている場合は表示も更新する
-                if (document.getElementById('discount-tbody')) {
-                    renderDiscounts();
-                }
+            if (!msg || !msg.data || !Array.isArray(msg.data.discounts)) return;
+            // 自分が送ったものが戻ってきただけなら、何もしない（古い内容で上書きして、直前の変更を巻き戻さないため）
+            if (msg.own) return;
+            const remoteLacks = discMergeRemote(msg.data.discounts, msg.data.deleted);
+            // 割引バーコード管理画面が開いている場合は表示も更新する
+            if (document.getElementById('discount-tbody')) {
+                renderDiscounts();
             }
+            if (remoteLacks) discScheduleRebroadcast();
         });
     } else {
         setTimeout(waitForChannelAndSubscribeDiscountSync, 500);

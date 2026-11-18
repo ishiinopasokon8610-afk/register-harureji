@@ -342,23 +342,77 @@
   // 割引バーコードの同期（discount-sync）は他の端末へ確実に届いているので、
   // 注文の中身をそのバーコードに持たせて、レジの「🏷️ 自動化バーコード一覧」から
   // タップ（またはホームの一覧）で呼び出せるようにする。
+  //
+  // 【今回の修正】
+  //  ① 使い終わった注文（読み込み済み・会計済み・取消）のバーコードは、自動でアーカイブする
+  //     （archiveOrderBarcode）。以前は「使い切り」の印だけ付いていて、レジが注文を直接
+  //     読み込む使い方だとバーコード自体は「使われた」ことにならず、一覧に残り続けていた。
+  //  ② 作れなかった時に、黙って諦めず、理由をコンソールに出す。さらに、レジが受け取って
+  //     待っている注文（standby）は、作れるまで数秒ごとに作り直す（ensureOrderBarcodes）。
+  //     「商品データがまだ届いていない」「一覧がまだ読み込み前」の間に注文が来ても取りこぼさない。
+  //  ③ 注文の商品コードが jan 以外の名前（code / barcode）で入っていても拾えるようにした。
+  //  ④ 同じ番号の「古いアーカイブ」が残っていても、新しい注文のバーコードは作る
+  //     （番号が再利用された時に、新しい注文だけバーコードが作られない状態を防ぐ）。
+  var finishedOrders = {}; // 読み込み済み・会計済み・取消になった注文 id -> 時刻（遅れて届いた注文でバーコードを作らないため）
+  var barcodeWarned = {}; // 同じ理由の警告を何度も出さないため
+
+  function warnOnce(key, msg) {
+    if (barcodeWarned[key]) return;
+    barcodeWarned[key] = 1;
+    console.warn("[register-assign] " + msg);
+  }
+
+  function itemJan(it) {
+    if (!it) return "";
+    var v = it.jan || it.code || it.barcode || "";
+    return String(v);
+  }
+
+  function refreshDiscountViews() {
+    try {
+      if (typeof renderDiscounts === "function") renderDiscounts();
+      if (typeof renderHomeAutomationBlocksIfVisible === "function") renderHomeAutomationBlocksIfVisible();
+      if ($("automation-barcode-list-overlay") && typeof renderAutomationBarcodeListBox === "function") renderAutomationBarcodeListBox();
+    } catch (e) {}
+  }
+
   function publishOrderBarcode(order) {
     try {
-      if (!order || !order.callNo) return;
-      if (typeof discountBarcodes === "undefined" || !Array.isArray(discountBarcodes)) return;
+      if (!order || !order.callNo || !order.id) return false;
+      if (finishedOrders[order.id]) return false; // すでに使い終わった注文
+      if (typeof discountBarcodes === "undefined" || !Array.isArray(discountBarcodes)) {
+        warnOnce("nolist", "自動化バーコードの一覧(discountBarcodes)がまだ読み込まれていません。あとで作り直します");
+        return false;
+      }
       var code = "SELF" + order.callNo;
-      // アーカイブ（使用済み）のものも含めて、同じ番号・同じ注文がすでにあれば作り直さない
-      if (discountBarcodes.some(function (d) { return d && (d.barcode === code || (d.selfOrderId && d.selfOrderId === order.id)); })) return;
+      // 同じ注文がすでにあれば（アーカイブ済みでも）作り直さない（アーカイブしたものを復活させない）
+      if (discountBarcodes.some(function (d) { return d && d.selfOrderId && d.selfOrderId === order.id; })) return true;
+      // 同じ番号が「使用中」で残っていたら、そちらを優先する。アーカイブ済みだけなら、新しい注文を作る
+      var sameCode = discountBarcodes.filter(function (d) { return d && d.barcode === code; });
+      if (sameCode.some(function (d) { return !d.archived; })) return false;
+      // アーカイブ済みだけが同じ番号で残っている＝番号が再利用された。バーコードは番号ごとに1件なので、古い方を片付ける
+      if (sameCode.length) {
+        discountBarcodes = discountBarcodes.filter(function (d) { return !(d && d.barcode === code); });
+      }
+
       var rows = [];
+      var skipped = [];
       (order.items || []).forEach(function (it) {
-        if (!it || !it.jan) return;
-        if (typeof products !== "undefined" && !products.some(function (p) { return p.jan === String(it.jan); })) return;
-        var r = rows.find(function (x) { return x.jan === String(it.jan); });
+        var jan = itemJan(it);
+        if (!jan) return;
+        if (typeof products !== "undefined" && Array.isArray(products) && !products.some(function (p) { return p && String(p.jan) === jan; })) {
+          skipped.push(jan);
+          return;
+        }
+        var r = rows.find(function (x) { return x.jan === jan; });
         if (r) r.qty += Math.max(1, parseInt(it.qty, 10) || 1);
-        else rows.push({ jan: String(it.jan), qty: Math.max(1, parseInt(it.qty, 10) || 1) });
+        else rows.push({ jan: jan, qty: Math.max(1, parseInt(it.qty, 10) || 1) });
       });
-      if (!rows.length) return;
-      discountBarcodes.push({
+      if (!rows.length) {
+        warnOnce("norows-" + order.id, code + " を作れません。商品が見つかりません（商品一覧に無いコード: " + (skipped.join(",") || "なし") + "）。商品データが届いたら自動で作り直します");
+        return false;
+      }
+      var entry = {
         barcode: code,
         name: "🧾 セルフレジ " + order.callNo + "番（¥" + (Number(order.total) || 0).toLocaleString() + "）",
         enabled: true,
@@ -369,11 +423,65 @@
         oneTime: true,
         registerOnly: true,
         selfOrderId: order.id
-      });
+      };
+      discountBarcodes.push(entry);
       if (typeof saveDiscounts === "function") saveDiscounts();
+      refreshDiscountViews();
+      return true;
     } catch (e) {
       console.warn("[register-assign] 注文バーコードの発行に失敗しました:", e);
+      return false;
     }
+  }
+
+  // 使い終わった注文のバーコードを、削除せず「使用済み（アーカイブ）」に移す。
+  // （返金・取引取消の時に、アーカイブから復元できるように）
+  function archiveOrderBarcode(orderId) {
+    try {
+      if (!orderId) return false;
+      finishedOrders[orderId] = Date.now();
+      // セルフレジ端末・客用画面は何もしない（レジ側が保存して同期した結果を受け取る）
+      if (isSelfMode() || isCustomerDisplay()) return false;
+      if (typeof discountBarcodes === "undefined" || !Array.isArray(discountBarcodes)) return false;
+      var now = Date.now();
+      var changed = false;
+      discountBarcodes.forEach(function (d) {
+        if (d && d.selfOrderId === orderId && !d.archived) {
+          // discount-system.js の cleanupOneTimeDiscountBarcodes() と同じ形にする
+          d.archived = true;
+          d.archivedAt = now;
+          d.enabled = false;
+          changed = true;
+        }
+      });
+      if (!changed) return false;
+      if (typeof saveDiscounts === "function") saveDiscounts();
+      else {
+        try {
+          localStorage.setItem("pos_discounts", JSON.stringify(discountBarcodes));
+        } catch (e) {}
+      }
+      refreshDiscountViews();
+      return true;
+    } catch (e) {
+      console.warn("[register-assign] バーコードのアーカイブに失敗しました:", e);
+      return false;
+    }
+  }
+
+  // レジが受け取って待っている注文の分は、バーコードが無ければ作り直す（取りこぼし対策）
+  function ensureOrderBarcodes() {
+    try {
+      if (!isRegisterDevice()) return;
+      var ids = Object.keys(standby);
+      for (var i = 0; i < ids.length; i++) {
+        var s = standby[ids[i]];
+        var d = s && s.msg && s.msg.data;
+        if (!d || !d.callNo || !d.id) continue;
+        if (Date.now() - (d.createdAt || 0) > ORDER_TTL_MS) continue;
+        publishOrderBarcode(d);
+      }
+    } catch (e) {}
   }
 
   function showOverlay(callNo, registerNo) {
@@ -764,6 +872,8 @@
         delete standby[d.orderId];
         delete mine[d.orderId];
         removeIssued(d.orderId);
+        // 使われた（読み込み済み・会計済み）／取り消された注文の自動化バーコードは、アーカイブへ移す
+        archiveOrderBarcode(d.orderId);
       }
     });
   }
@@ -945,17 +1055,10 @@
   function bindDiscountSyncRefresh() {
     if (discountSyncBound || typeof channel === "undefined" || !channel || typeof channel.subscribe !== "function") return;
     discountSyncBound = true;
-    channel.subscribe("discount-sync", function (msg) {
-      try {
-        var list = msg && msg.data && msg.data.discounts;
-        if (Array.isArray(list)) {
-          discountBarcodes = list;
-          localStorage.setItem("pos_discounts", JSON.stringify(list));
-        }
-        if (typeof renderDiscounts === "function") renderDiscounts();
-        if (typeof renderHomeAutomationBlocksIfVisible === "function") renderHomeAutomationBlocksIfVisible();
-        if ($("automation-barcode-list-overlay") && typeof renderAutomationBarcodeListBox === "function") renderAutomationBarcodeListBox();
-      } catch (e) {}
+    // 【今回の修正】ここでも一覧を丸ごと置き換えていたのをやめた。一覧の取り込み（マージ）は
+    // discount-system.js が行う。こちらは、取り込みが終わったあとの画面の更新だけを行う。
+    channel.subscribe("discount-sync", function () {
+      setTimeout(refreshDiscountViews, 0);
     });
   }
 
@@ -973,6 +1076,7 @@
     autoAssignMyNo();
     publishPresence(false);
     evaluateFallback();
+    ensureOrderBarcodes();
     updateBadge();
     renderArrival();
     watchPendingList();
@@ -1003,6 +1107,16 @@
         mine: Object.keys(mine),
         standby: Object.keys(standby)
       };
+    },
+    // コンソールで haruRegisterAssign.barcodes() を実行すると、SELF番号の自動化バーコードの状態が見られる
+    barcodes: function () {
+      try {
+        return discountBarcodes
+          .filter(function (d) { return d && /^SELF/.test(d.barcode); })
+          .map(function (d) { return { barcode: d.barcode, archived: !!d.archived, name: d.name, selfOrderId: d.selfOrderId }; });
+      } catch (e) {
+        return [];
+      }
     }
   };
 })();

@@ -106,7 +106,19 @@
 //   復活して出てくる点を修正。セルフレジ端末が古い一覧を同期していたのをやめ、バーコードは
 //   注文を受け取ったレジ側で作るようにした（self-checkout-call-number-register-assign-system.js）。
 //   CACHE_VERSION を v32 に上げた。
-const CACHE_VERSION = 'v33';
+// ・不具合修正: セルフレジの自動化バーコード（SELF番号）が作られない／一覧に出ない点と、
+//   使い終わっても一覧に残り続ける点を修正した（self-checkout-call-number-register-assign-system.js）。
+//   使われた注文（読み込み済み・会計済み・取消）のバーコードは自動でアーカイブへ移し、
+//   作れなかった注文は、レジが待っている間 自動で作り直す。
+//   CACHE_VERSION を v34 に上げた。
+// ・不具合修正: 言語メニューで「日本語」を選んでも翻訳が解除されなかった点を修正（language-system.js）。
+//   CACHE_VERSION を v35 に上げた。
+// ・不具合修正: 他の端末（タッチパネル・作成画面・レジ）で作った自動化バーコードが連携されない／消える／
+//   アーカイブが復活する点を修正。同期が「一覧を丸ごと上書き」する方式だったため、ほぼ同時に作ると片方が消え、
+//   古い一覧を持った端末が1件作るだけで全端末が古い状態に戻っていた。バーコードごとに新しい方を残す
+//   マージ方式に変更した（discount-system.js、self-checkout-call-number-register-assign-system.js）。
+//   CACHE_VERSION を v36 に上げた。
+const CACHE_VERSION = 'v36';
 const CACHE_NAME = `register-cache-${CACHE_VERSION}`;
 const ASSETS = [
   './',
