@@ -276,7 +276,7 @@
 
   function chooseRegister() {
     var list = freshRegs();
-    if (list.length < 2) return null; // 1台以下：レジ番号は案内せず「待ち」
+    if (list.length < 1) return null; // つながっているレジが無い：レジ番号は案内しない（1台でもあれば案内する）
     var now = Date.now();
     recentAssign = recentAssign.filter(function (a) {
       return now - a.t < RECENT_ASSIGN_MS;
@@ -341,15 +341,15 @@
     hideOverlay();
     var o = document.createElement("div");
     o.id = "haru-callno-overlay";
+    // お客様の画面は「セルフレジお会計は6903番です」だけ。空いているレジが分かるときだけ、案内を1行添える
     var guide = registerNo
-      ? '<div class="guide"><b>' + esc(registerNo) + "番</b>レジへお進みください</div>" +
-        '<div class="sub">レジで「' + esc(callNo) + "番」とお伝えください</div>"
-      : '<div class="guide"><span class="wait">待ち</span>そのままお待ちください</div>' +
-        '<div class="sub">順番にご案内します。レジで「' + esc(callNo) + "番」とお伝えください</div>";
+      ? '<div class="guide"><b>' + esc(registerNo) + "番</b>レジへお進みください</div>"
+      : "";
     o.innerHTML =
       "<div>" +
-      '<div class="lbl">お会計番号</div>' +
+      '<div class="guide" style="margin-top:0">セルフレジお会計は</div>' +
       '<div class="num">' + esc(callNo) + "</div>" +
+      '<div class="guide">番です</div>' +
       guide +
       '<button type="button">閉じる</button>' +
       "</div>";
@@ -360,9 +360,8 @@
     setTimeout(function () {
       if (!$("haru-callno-overlay")) return;
       say(
-        registerNo
-          ? "おかいけい ばんごう は " + digitsKana(callNo) + " ばん です。 " + registerNo + " ばん れじ へ おすすみ ください"
-          : "おかいけい ばんごう は " + digitsKana(callNo) + " ばん です。 じゅんばん に ごあんない します。 そのまま おまち ください"
+        "せるふ れじ おかいけい は " + digitsKana(callNo) + " ばん です。" +
+          (registerNo ? " " + registerNo + " ばん れじ へ おすすみ ください" : "")
       );
     }, 3200);
   }
@@ -377,6 +376,11 @@
     if (!d || !d.registerTag || isSelfMode()) return handler(msg);
     if (d.registerTag === myTag()) {
       if (d.id) mine[d.id] = Date.now();
+      // 4桁の番号が付いた注文は、勝手にカートへ入れず、店員が番号を入力するまで待つ
+      if (d.callNo && d.id) {
+        standby[d.id] = { msg: msg, tag: d.registerTag, missingSince: 0 };
+        return;
+      }
       return handler(msg);
     }
     // 別のレジが担当：この端末では受け取らない（引き継ぎ用に控えだけ持つ）
@@ -516,7 +520,8 @@
         (!d.registerTag || d.registerTag === myTag())
       ) {
         setTimeout(function () {
-          toastAtRegister(d.callNo);
+          showArrivalModal(d.callNo);
+          say(d.callNo ? digitsKana(d.callNo) + " ばん の おきゃくさま が き ます。 ばんごう を かくにん して にゅうりょく して ください" : "");
         }, 1500);
       }
     });
@@ -529,6 +534,124 @@
         delete mine[d.orderId];
       }
     });
+  }
+
+  /* ---------- 別のレジ宛ての注文でも、番号を打てばパッと読み込む ---------- */
+  // 注文は割り当てられたレジにしか届かないが、お客様が別のレジに来てしまった時も、
+  // 4桁の番号を打てば、自動化バーコードのように一瞬でカートに入るようにする。
+  function isKnownCode(c) {
+    try {
+      if (typeof clerks !== "undefined" && clerks.some(function (x) { return x && x.barcode && String(x.barcode) === c; })) return true;
+      if (typeof customers !== "undefined" && customers.some(function (x) { return x && String(x.barcode) === c; })) return true;
+      if (typeof products !== "undefined" && products.some(function (x) { return x && (String(x.jan) === c || x.name === c); })) return true;
+    } catch (e) {}
+    return false;
+  }
+
+  function hookTypedCallNo() {
+    if (typeof window.fetchAndAddItem !== "function") return;
+    if (window.fetchAndAddItem.__haruCallNoHooked) return;
+    var original = window.fetchAndAddItem;
+    var wrapped = function (code) {
+      var rest = arguments;
+      var txt = String(code || "")
+        .trim()
+        .replace(/[０-９]/g, function (c) {
+          return String.fromCharCode(c.charCodeAt(0) - 0xfee0);
+        })
+        .replace(/番$/, "");
+      if (/^\d{4}$/.test(txt) && !isKnownCode(txt)) {
+        var found = null;
+        Object.keys(standby).forEach(function (id) {
+          var d = standby[id] && standby[id].msg && standby[id].msg.data;
+          if (d && String(d.callNo) === txt) found = id;
+        });
+        if (found) {
+          var s = standby[found];
+          delete standby[found];
+          mine[found] = Date.now();
+          var autoLoads = false;
+          try {
+            autoLoads = isActiveScreen("register-screen") && typeof cart !== "undefined" && cart.length === 0;
+          } catch (e) {}
+          orderHandlers.forEach(function (h) {
+            try {
+              h(s.msg);
+            } catch (e) {}
+          });
+          // カートが空なら受け取った瞬間に自動で入る。入っている時は、待ち一覧に入ったので同じ番号でもう一度処理する
+          if (autoLoads) return;
+          return window.fetchAndAddItem.apply(this, rest);
+        }
+      }
+      return original.apply(this, rest);
+    };
+    wrapped.__haruCallNoHooked = true;
+    window.fetchAndAddItem = wrapped;
+  }
+
+  /* ---------- レジ側：「○○○○番のお客様が来ます」の案内（入力されるまで出し続ける） ---------- */
+  function renderArrival() {
+    var now = Date.now();
+    var nums = [];
+    if (isRegisterDevice() && isActiveScreen("register-screen")) {
+      Object.keys(standby).forEach(function (id) {
+        var s = standby[id];
+        var d = s && s.msg && s.msg.data;
+        if (!d || s.tag !== myTag() || !d.callNo) return;
+        if (now - (d.createdAt || 0) > ORDER_TTL_MS) return;
+        nums.push(d.callNo);
+      });
+    }
+    var b = $("haru-arrival-banner");
+    if (!nums.length) {
+      if (b) b.style.display = "none";
+      return;
+    }
+    if (!b) {
+      b = document.createElement("div");
+      b.id = "haru-arrival-banner";
+      b.style.cssText =
+        "position:fixed;left:50%;top:10px;transform:translateX(-50%);z-index:9500;max-width:94vw;" +
+        "background:#e65100;color:#fff;font-weight:900;font-size:20px;line-height:1.5;text-align:center;" +
+        "padding:10px 22px;border-radius:14px;box-shadow:0 6px 18px rgba(0,0,0,.4)";
+      document.body.appendChild(b);
+    }
+    b.innerHTML = nums.map(function (n) { return esc(n) + "番"; }).join("、") +
+      "のお客様が来ます<br><span style=\"font-size:15px;font-weight:700\">番号を確認して入力してください</span>";
+    b.style.display = "block";
+  }
+
+  /* ---------- 注文が届いた時：どの画面を見ていても知らせ、OKでレジ画面へ移動 ---------- */
+  var REGISTER_URL = "https://ishiinopasokon8610-afk.github.io/register-harureji/index_min.html#register";
+
+  function showArrivalModal(callNo) {
+    ensureStyle();
+    var m = $("haru-arrival-modal");
+    var line = esc(callNo) + "番のお客様が来ます";
+    if (m) {
+      // すでに出ている時は、番号を追記する
+      var list = m.querySelector(".nums");
+      if (list && list.textContent.indexOf(callNo + "番") === -1) list.innerHTML += "<br>" + line;
+      return;
+    }
+    m = document.createElement("div");
+    m.id = "haru-arrival-modal";
+    m.style.cssText =
+      "position:fixed;inset:0;z-index:2147483200;background:rgba(0,0,0,.65);display:flex;align-items:center;justify-content:center;padding:16px";
+    m.innerHTML =
+      '<div style="background:#fff;color:#1f2933;border-radius:18px;padding:28px 24px;max-width:420px;width:100%;text-align:center">' +
+      '<div style="font-size:44px">🛒</div>' +
+      '<div style="font-size:22px;font-weight:900;margin:6px 0">セルフレジのお客様が来ました</div>' +
+      '<div class="nums" style="font-size:28px;font-weight:900;color:#e65100;margin:10px 0">' + line + "</div>" +
+      '<div style="font-size:15px;color:#52606d;margin-bottom:18px">番号を確認して入力してください</div>' +
+      '<button type="button" style="width:100%;min-height:56px;border:0;border-radius:14px;background:#1f9d55;color:#fff;font-size:22px;font-weight:900;cursor:pointer">OK</button>' +
+      "</div>";
+    m.querySelector("button").addEventListener("click", function () {
+      m.remove();
+      location.href = REGISTER_URL;
+    });
+    document.body.appendChild(m);
   }
 
   /* ---------- レジ番号バッジ ---------- */
@@ -580,6 +703,7 @@
 
   function tick() {
     patchChannel();
+    hookTypedCallNo();
     ensureAttached();
     // レジ画面を開いた端末は「レジ」として覚える（客用・セルフレジ端末は数えない）
     if (isActiveScreen("register-screen") && !isSelfMode() && !isCustomerDisplay() && lsGet(FLAG_KEY) !== "1") {
@@ -589,6 +713,7 @@
     publishPresence(false);
     evaluateFallback();
     updateBadge();
+    renderArrival();
     watchPendingList();
   }
 
