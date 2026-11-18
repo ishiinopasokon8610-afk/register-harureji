@@ -336,6 +336,43 @@
     if (o) o.remove();
   }
 
+  // 注文を「自動化バーコード」としても発行する（レジ専用）。
+  // 割引バーコードの同期（discount-sync）は他の端末へ確実に届いているので、
+  // 注文の中身をそのバーコードに持たせて、レジの「🏷️ 自動化バーコード一覧」から
+  // タップ（またはホームの一覧）で呼び出せるようにする。
+  function publishOrderBarcode(order) {
+    try {
+      if (!order || !order.callNo) return;
+      if (typeof discountBarcodes === "undefined" || !Array.isArray(discountBarcodes)) return;
+      var code = "SELF" + order.callNo;
+      if (discountBarcodes.some(function (d) { return d && d.barcode === code && !d.archived; })) return;
+      var rows = [];
+      (order.items || []).forEach(function (it) {
+        if (!it || !it.jan) return;
+        if (typeof products !== "undefined" && !products.some(function (p) { return p.jan === String(it.jan); })) return;
+        var r = rows.find(function (x) { return x.jan === String(it.jan); });
+        if (r) r.qty += Math.max(1, parseInt(it.qty, 10) || 1);
+        else rows.push({ jan: String(it.jan), qty: Math.max(1, parseInt(it.qty, 10) || 1) });
+      });
+      if (!rows.length) return;
+      discountBarcodes.push({
+        barcode: code,
+        name: "🧾 セルフレジ " + order.callNo + "番（¥" + (Number(order.total) || 0).toLocaleString() + "）",
+        enabled: true,
+        products: rows,
+        discount: null,
+        validFrom: null,
+        validTo: null,
+        oneTime: true,
+        registerOnly: true,
+        selfOrderId: order.id
+      });
+      if (typeof saveDiscounts === "function") saveDiscounts();
+    } catch (e) {
+      console.warn("[register-assign] 注文バーコードの発行に失敗しました:", e);
+    }
+  }
+
   function showOverlay(callNo, registerNo) {
     ensureStyle();
     hideOverlay();
@@ -491,6 +528,7 @@
       try {
         if (name === EV_ORDER && data && Array.isArray(data.items) && isSelfMode()) {
           decorateOrder(data);
+          publishOrderBarcode(data);
         }
       } catch (e) {
         console.warn("[register-assign] 番号の付与に失敗しました:", e);
