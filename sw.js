@@ -96,7 +96,10 @@
 //   打っても「未登録商品」になる点を修正（firebase-sync-system.js の LIVE_EVENTS に
 //   注文・状態通知を追加）。スクリプトはキャッシュ優先のため CACHE_VERSION を v29 に上げた。
 // ==========================================
-const CACHE_VERSION = 'v29';
+// ・変更: セルフレジの4桁の番号の読み上げを、1桁ずつ（ななはちいちろく）ではなく、
+//   ふつうの数（ななせんはっぴゃくじゅうろく）にした（self-checkout-call-number-register-assign-system.js）。
+//   CACHE_VERSION を v30 に上げた。
+const CACHE_VERSION = 'v30';
 const CACHE_NAME = `register-cache-${CACHE_VERSION}`;
 const ASSETS = [
   './',
