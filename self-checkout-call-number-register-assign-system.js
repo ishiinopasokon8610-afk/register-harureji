@@ -113,7 +113,7 @@
   }
   function isRegisterDevice() {
     return (
-      lsGet(FLAG_KEY) === "1" &&
+      (lsGet(FLAG_KEY) === "1" || isActiveScreen("register-screen")) &&
       !isSelfMode() &&
       !isCustomerDisplay() &&
       !isActiveScreen("customer-screen")

@@ -11,20 +11,29 @@
           ".validate": "newData.hasChildren(['createdAt'])"
         },
         "events": {
-          ".indexOn": [
-            "t"
-          ],
+          ".indexOn": ["t"],
           "$eventId": {
             ".validate": "newData.hasChildren(['n','t','d']) && newData.child('d').isString() && newData.child('d').val().length < 12000000"
           }
         },
         "live": {
-          ".indexOn": [
-            "t"
-          ],
+          ".indexOn": ["t"],
           "$eventId": {
             ".validate": "newData.hasChildren(['n','t','d']) && newData.child('d').isString() && newData.child('d').val().length < 12000000"
           }
+        },
+        "presence": {
+          "$deviceId": {
+            ".validate": "newData.hasChildren(['t'])"
+          }
+        },
+        "registers": {
+          "$deviceId": {
+            ".validate": "newData.hasChildren(['no','t']) && newData.child('no').isNumber()"
+          }
+        },
+        "business_state": {
+          ".validate": "newData.hasChildren(['d','t']) && newData.child('d').isString() && newData.child('d').val().length < 100000"
         }
       }
     },
