@@ -26,11 +26,18 @@
 //   update-notification-system.js の「リロード」は Service Worker を一度解除するため、
 //   プッシュの購読も消える。そこで、開くたびに（スマホ通知がONの端末は）トークンを取り直して登録し直す。
 //
-// 【導入】index.html で、次の2か所を追加する。
-//   1) firebase-storage-compat.js の次の行に
-//        <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-messaging-compat.js"></script>
-//   2) notifications-system.js と firebase-sync-system.js より後ろ（business-status-firebase-state-system.js の次など）に
+// 【導入】index.html で、notifications-system.js と firebase-sync-system.js より後ろ
+//   （business-status-firebase-state-system.js の次など）に次の1行を追加する。
 //        <script src="push-notification-system.js"></script>
+//   ※ firebase-messaging-compat.js は、もう使わない（読み込んであっても害は無い）。
+//
+// 【なぜ Firebase の新しい版（12.14.0）を別に読み込むのか】
+//   同じドメイン（github.io）の別のアプリが、新しい Firebase SDK（12.14以降）で通知の登録を行うと、
+//   ブラウザの中の保存場所（IndexedDB の firebase-messaging-database）が「バージョン2」になる。
+//   レジが使っている古い Firebase（10.14.1）は「バージョン1」で開こうとして、
+//   "The requested version (1) is less than the existing version (2)" で失敗してしまう。
+//   そこで、通知の登録だけは、新しい版を「別アプリ名（haru-push）」で読み込んで使う。
+//   レジ本体（Realtime Database など）は今までどおり 10.14.1 のまま。
 //
 // 【設定】下の VAPID_KEY に、Firebaseコンソール →「プロジェクトの設定」→「Cloud Messaging」→
 //   「ウェブプッシュ証明書」で作った「キーペア（公開鍵）」を貼り付ける。
@@ -40,6 +47,8 @@
     'use strict';
 
     // ★ここを書き換える★
+    const MODULAR_SDK_VERSION = '12.14.0'; // 通知の登録だけに使う Firebase の版（保存場所のバージョン2に対応）
+    const MODULAR_APP_NAME = 'haru-push';
     const VAPID_KEY = 'BBLX6piya_nsdJqnMnnmZ4jlUox8ZSGTCAH1e7-OyifrY_A02mTi2mSpqJ5h6bfyRAfj8Nv11vLJli-PjYFZfv4';
 
     // pos_sync_ で始まるキーは、バックアップ・設定同期の対象外（＝他の端末に引き継がれない）。
@@ -72,8 +81,7 @@
     function pushSupported() {
         return 'serviceWorker' in navigator && 'PushManager' in window &&
             typeof Notification !== 'undefined' &&
-            typeof firebase !== 'undefined' && typeof firebase.messaging === 'function' &&
-            (typeof firebase.messaging.isSupported !== 'function' || firebase.messaging.isSupported());
+            typeof firebase !== 'undefined' && typeof firebase.app === 'function';
     }
 
     function vapidConfigured() {
@@ -94,6 +102,29 @@
         const code = err.code ? String(err.code) : '';
         const msg = err.message ? String(err.message) : String(err);
         return (code ? code + ' / ' : '') + msg.slice(0, 200);
+    }
+
+    // 通知の登録用に、新しい版の Firebase を別アプリ名で読み込む（初回だけ読み込み、あとは使い回す）
+    let modularPromise = null;
+    function loadModularMessaging() {
+        if (modularPromise) return modularPromise;
+        const base = 'https://www.gstatic.com/firebasejs/' + MODULAR_SDK_VERSION + '/';
+        modularPromise = Promise.all([
+            import(base + 'firebase-app.js'),
+            import(base + 'firebase-messaging.js')
+        ]).then(([appMod, msgMod]) => {
+            let app;
+            try {
+                app = appMod.getApp(MODULAR_APP_NAME);
+            } catch (e) {
+                app = appMod.initializeApp(firebase.app().options, MODULAR_APP_NAME);
+            }
+            return { msgMod: msgMod, messaging: msgMod.getMessaging(app) };
+        }).catch((e) => {
+            modularPromise = null; // 次回やり直せるようにする
+            throw e;
+        });
+        return modularPromise;
     }
 
     async function sha256Hex(text) {
@@ -149,7 +180,8 @@
         const base = p.getBaseRef();
 
         const reg = await navigator.serviceWorker.ready;
-        const token = await firebase.messaging().getToken({ vapidKey: VAPID_KEY, serviceWorkerRegistration: reg });
+        const m = await loadModularMessaging();
+        const token = await m.msgMod.getToken(m.messaging, { vapidKey: VAPID_KEY, serviceWorkerRegistration: reg });
         if (!token) throw new Error('NO_TOKEN');
 
         const hash = await sha256Hex(token);
@@ -216,7 +248,8 @@
             if (hash && syncReady()) await sync().getBaseRef().child('push_tokens').child(hash).remove();
         } catch (e) { /* 失敗しても、Functions側が無効トークンとして後で掃除する */ }
         try {
-            if (typeof firebase !== 'undefined' && typeof firebase.messaging === 'function') await firebase.messaging().deleteToken();
+            const m = await loadModularMessaging();
+            await m.msgMod.deleteToken(m.messaging);
         } catch (e) { /* 無視 */ }
         updatePushButton();
     }
