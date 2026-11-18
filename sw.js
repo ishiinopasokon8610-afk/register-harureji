@@ -102,7 +102,11 @@
 // ・追加: セルフレジ画面の「全画面」ボタンを「管理」に変更。店長認証のあと、発行した番号のうち
 //   まだ使われていないものを、発行順に見られる（self-checkout-call-number-register-assign-system.js）。
 //   CACHE_VERSION を v31 に上げた。
-const CACHE_VERSION = 'v32';
+// ・不具合修正: レジでアーカイブした自動化バーコード（SELF番号）が、セルフレジで新しく注文すると
+//   復活して出てくる点を修正。セルフレジ端末が古い一覧を同期していたのをやめ、バーコードは
+//   注文を受け取ったレジ側で作るようにした（self-checkout-call-number-register-assign-system.js）。
+//   CACHE_VERSION を v32 に上げた。
+const CACHE_VERSION = 'v33';
 const CACHE_NAME = `register-cache-${CACHE_VERSION}`;
 const ASSETS = [
   './',

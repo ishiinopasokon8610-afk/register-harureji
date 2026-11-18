@@ -78,25 +78,6 @@
       return false;
     }
   }
-  // 【今回追加】タッチパネル（お客様がメニューを見て注文する画面）が開いている間は、
-  // 「◯◯◯◯番のお客様が来ます」の案内や、自動化バーコードの管理・作成画面を出さない。
-  // タッチパネルは開くと #touch-panel-overlay が作られ、閉じると削除される。
-  function isTouchPanelOpen() {
-    return !!$("touch-panel-overlay");
-  }
-  // タッチパネルが開いている間は、自動化バーコードの作成画面（#discount-screen）と一覧
-  // （#automation-barcode-list-overlay）を隠す（下の ensureStyle の CSS）。見えなくするだけなので、
-  // 登録フォームの入力欄は残り、タッチパネルの「店員を呼ぶ」「注文」による登録はこれまでどおり動く。
-  function syncTouchPanelState() {
-    var open = isTouchPanelOpen();
-    if (document.body) document.body.classList.toggle("haru-tp-open", open);
-    if (open) {
-      var m = $("haru-arrival-modal");
-      if (m) m.remove();
-      var b = $("haru-arrival-banner");
-      if (b) b.style.display = "none";
-    }
-  }
   function lsGet(k) {
     try {
       return localStorage.getItem(k);
@@ -347,8 +328,7 @@
       "#haru-register-no-badge{position:fixed;top:calc(env(safe-area-inset-top,0px) + 6px);right:8px;z-index:9000;" +
       "padding:3px 9px;border:0;border-radius:999px;background:rgba(30,40,60,.55);color:#fff;font-size:12px;font-weight:700;" +
       "opacity:.78;cursor:pointer;display:none;line-height:1.5}" +
-      "#haru-register-no-badge:active{opacity:1}" +
-      "body.haru-tp-open #discount-screen,body.haru-tp-open #automation-barcode-list-overlay{display:none!important}";
+      "#haru-register-no-badge:active{opacity:1}";
     document.head.appendChild(st);
   }
 
@@ -367,7 +347,8 @@
       if (!order || !order.callNo) return;
       if (typeof discountBarcodes === "undefined" || !Array.isArray(discountBarcodes)) return;
       var code = "SELF" + order.callNo;
-      if (discountBarcodes.some(function (d) { return d && d.barcode === code && !d.archived; })) return;
+      // アーカイブ（使用済み）のものも含めて、同じ番号・同じ注文がすでにあれば作り直さない
+      if (discountBarcodes.some(function (d) { return d && (d.barcode === code || (d.selfOrderId && d.selfOrderId === order.id)); })) return;
       var rows = [];
       (order.items || []).forEach(function (it) {
         if (!it || !it.jan) return;
@@ -496,7 +477,6 @@
   }
 
   function toastAtRegister(callNo) {
-    if (isTouchPanelOpen()) return;
     try {
       if (typeof showToastAnimation === "function") {
         showToastAnimation("🔢 " + callNo + "番のお客様の会計をお願いします");
@@ -733,7 +713,10 @@
         if (name === EV_ORDER && data && Array.isArray(data.items) && isSelfMode()) {
           decorateOrder(data);
           recordIssued(data);
-          publishOrderBarcode(data);
+          // 【今回の修正】ここで自動化バーコード（SELF番号）を作って全体を同期するのをやめた。
+          // セルフレジ端末が持つ一覧は古いことがあり、新しく注文するたびにその古い一覧を
+          // 送ってしまい、レジでアーカイブ（使用済み）にしたバーコードが復活していた。
+          // バーコードは、注文を受け取ったレジ側で作る（下の「受け取った注文の番号を控える」部分）。
         }
       } catch (e) {
         console.warn("[register-assign] 番号の付与に失敗しました:", e);
@@ -757,13 +740,17 @@
       if (!d || !d.id || !d.callNo) return;
       callNos[d.id] = d.callNo;
       usedNos[d.callNo] = Date.now();
+      // レジ側（セルフレジ端末・客用画面以外）：自分の一覧にバーコードを足す。
+      // 足したあとは、レジの一覧（アーカイブ済みも含む）が正しい状態として同期される
+      if (!isSelfMode() && !isCustomerDisplay() && !isActiveScreen("customer-screen")) {
+        publishOrderBarcode(d);
+      }
       if (
         isRegisterDevice() &&
         d.senderId !== (typeof SYNC_DEVICE_ID !== "undefined" ? SYNC_DEVICE_ID : "") &&
         (!d.registerTag || d.registerTag === myTag())
       ) {
         setTimeout(function () {
-          if (isTouchPanelOpen()) return; // タッチパネルを開いている間は案内も読み上げもしない
           showArrivalModal(d.callNo);
           say(d.callNo ? digitsKana(d.callNo) + " ばん の おきゃくさま が き ます。 ばんごう を かくにん して にゅうりょく して ください" : "");
         }, 1500);
@@ -847,7 +834,7 @@
   function renderArrival() {
     var now = Date.now();
     var nums = [];
-    if (isRegisterDevice() && isActiveScreen("register-screen") && !isTouchPanelOpen()) {
+    if (isRegisterDevice() && isActiveScreen("register-screen")) {
       Object.keys(standby).forEach(function (id) {
         var s = standby[id];
         var d = s && s.msg && s.msg.data;
@@ -879,7 +866,6 @@
   var REGISTER_URL = "https://ishiinopasokon8610-afk.github.io/register-harureji/index_min.html#register";
 
   function showArrivalModal(callNo) {
-    if (isTouchPanelOpen()) return;
     ensureStyle();
     var m = $("haru-arrival-modal");
     var line = esc(callNo) + "番のお客様が来ます";
@@ -974,7 +960,6 @@
   }
 
   function tick() {
-    syncTouchPanelState();
     patchChannel();
     bindDiscountSyncRefresh();
     hookTypedCallNo();
@@ -998,10 +983,6 @@
     patchChannel();
     tick();
     setInterval(tick, 1500);
-    // タッチパネルを開いた・閉じた瞬間にも反映する（1.5秒待たずに切り替える）
-    try {
-      new MutationObserver(syncTouchPanelState).observe(document.body, { childList: true });
-    } catch (e) {}
   }
 
   // channel の包み込みは、できるだけ早く行う（self-checkout-system.js が購読する前に）
