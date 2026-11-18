@@ -90,7 +90,13 @@
 //   の2つを、手動で一緒に上げること（CACHE_VERSIONが同じままだと、
 //   キャッシュ優先のスクリプトが古いまま入れ替わらない）。
 // ==========================================
-const CACHE_VERSION = 'v28';
+// ==========================================
+// 【今回の更新内容（変更点まとめ）】
+// ・不具合修正: セルフレジの注文（self-checkout-order）がレジに届かず、4桁の番号を
+//   打っても「未登録商品」になる点を修正（firebase-sync-system.js の LIVE_EVENTS に
+//   注文・状態通知を追加）。スクリプトはキャッシュ優先のため CACHE_VERSION を v29 に上げた。
+// ==========================================
+const CACHE_VERSION = 'v29';
 const CACHE_NAME = `register-cache-${CACHE_VERSION}`;
 const ASSETS = [
   './',

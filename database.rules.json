@@ -11,13 +11,17 @@
           ".validate": "newData.hasChildren(['createdAt'])"
         },
         "events": {
-          ".indexOn": ["t"],
+          ".indexOn": [
+            "t"
+          ],
           "$eventId": {
             ".validate": "newData.hasChildren(['n','t','d']) && newData.child('d').isString() && newData.child('d').val().length < 12000000"
           }
         },
         "live": {
-          ".indexOn": ["t"],
+          ".indexOn": [
+            "t"
+          ],
           "$eventId": {
             ".validate": "newData.hasChildren(['n','t','d']) && newData.child('d').isString() && newData.child('d').val().length < 12000000"
           }
@@ -34,6 +38,24 @@
         },
         "business_state": {
           ".validate": "newData.hasChildren(['d','t']) && newData.child('d').isString() && newData.child('d').val().length < 100000"
+        },
+        "push_tokens": {
+          "$hash": {
+            ".validate": "$hash.matches(/^[0-9a-f]{64}$/) && newData.hasChildren(['token','t']) && newData.child('token').isString() && newData.child('token').val().length < 600"
+          }
+        },
+        "push_outbox": {
+          ".indexOn": [
+            "t"
+          ],
+          "$id": {
+            ".validate": "$id.matches(/^[0-9a-f]{32}$/) && newData.hasChildren(['title','t']) && newData.child('title').isString() && newData.child('title').val().length <= 200 && (!newData.hasChild('body') || (newData.child('body').isString() && newData.child('body').val().length <= 600))"
+          }
+        },
+        "push_sent": {
+          ".indexOn": [
+            "t"
+          ]
         }
       }
     },

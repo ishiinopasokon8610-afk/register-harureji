@@ -66,7 +66,13 @@
         'update-cart', 'age-check-event', 'fraud-warning-event',
         'checkout-image-event', 'checkout-image-hide-event',
         'sync-request', 'sync-full-sent',  // 「全部送って」の依頼と返信（古い依頼を後から再生しないため）
-        'self-checkout-live'               // セルフレジのスキャン状況の見守り（その場限り）
+        'self-checkout-live',              // セルフレジのスキャン状況の見守り（その場限り）
+        // 【今回追加】セルフレジの注文と状態通知。
+        // これまで events（24時間残る・1本の順番待ちで受信）に入っていたため、前に大きなデータが
+        // あると注文がレジに届かず、4桁の番号を打っても「未登録商品」になっていた。
+        // live は別の順番待ちで受信されるので詰まらない。注文は30分で無効になる設計のため、
+        // 5分で消える live で問題ない（レジを開き直した場合の備えは、自動化バーコード SELF番号）
+        'self-checkout-order', 'self-checkout-status'
     ]);
     // 自分には返さないイベント
     const NO_ECHO_EVENTS = new Set(['update-cart']);
