@@ -99,7 +99,10 @@
 // ・変更: セルフレジの4桁の番号の読み上げを、1桁ずつ（ななはちいちろく）ではなく、
 //   ふつうの数（ななせんはっぴゃくじゅうろく）にした（self-checkout-call-number-register-assign-system.js）。
 //   CACHE_VERSION を v30 に上げた。
-const CACHE_VERSION = 'v30';
+// ・追加: セルフレジ画面の「全画面」ボタンを「管理」に変更。店長認証のあと、発行した番号のうち
+//   まだ使われていないものを、発行順に見られる（self-checkout-call-number-register-assign-system.js）。
+//   CACHE_VERSION を v31 に上げた。
+const CACHE_VERSION = 'v31';
 const CACHE_NAME = `register-cache-${CACHE_VERSION}`;
 const ASSETS = [
   './',

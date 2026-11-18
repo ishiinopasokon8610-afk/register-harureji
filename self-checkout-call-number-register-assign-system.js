@@ -516,6 +516,181 @@
     relabelPendingList();
   }
 
+  /* ---------- 発行した番号の控えと、店長だけが見られる「管理」画面 ---------- */
+  // 【今回追加】お客様が番号を忘れた時のため、セルフレジの画面右上の「全画面」ボタンを「管理」に変えた。
+  //  ・押すと必ず店長ロックをかけ直し、店長認証（バーコード）を求める。
+  //  ・認証できたら、発行した順に、まだ使われていない番号（レジが読み込む前・取り消す前のもの）を出す。
+  //  ・控えは、この端末の localStorage（pos_sync_ で始まるので他の端末へは同期されない）に持つ。
+  var ISSUED_KEY = "pos_sync_self_issued";
+  var TARGET_NUMBERS = "self-checkout-call-numbers";
+  var issuedTimer = null;
+
+  function readIssued() {
+    var list = [];
+    try {
+      list = JSON.parse(lsGet(ISSUED_KEY) || "[]");
+    } catch (e) {}
+    if (!Array.isArray(list)) list = [];
+    var now = Date.now();
+    return list
+      .filter(function (x) {
+        return x && x.id && x.callNo && now - (x.at || 0) < ORDER_TTL_MS; // 30分たった注文はレジ側も無効にする
+      })
+      .sort(function (a, b) {
+        return (a.at || 0) - (b.at || 0); // 発行した順
+      });
+  }
+  function writeIssued(list) {
+    lsSet(ISSUED_KEY, JSON.stringify(list.slice(-200)));
+  }
+  function recordIssued(order) {
+    if (!order || !order.id || !order.callNo) return;
+    var list = readIssued().filter(function (x) {
+      return x.id !== order.id;
+    });
+    list.push({
+      id: order.id,
+      callNo: order.callNo,
+      total: Number(order.total) || 0,
+      count: Number(order.count) || 0,
+      at: order.createdAt || Date.now()
+    });
+    writeIssued(list);
+  }
+  function removeIssued(orderId) {
+    var list = readIssued();
+    var next = list.filter(function (x) {
+      return x.id !== orderId;
+    });
+    if (next.length !== list.length) writeIssued(next);
+  }
+
+  // auth-system.js の lockManagerAuth() は、ホームへ移動して読み上げてしまうので、
+  // 状態だけを同じにする（self-checkout-system.js の lockManagerNow と同じ内容）
+  function lockManagerQuietly() {
+    try {
+      if (typeof managerAuthDone !== "undefined") managerAuthDone = false;
+      sessionStorage.removeItem("pos_manager_auth");
+      sessionStorage.removeItem("pos_manager_auth_time");
+      if (typeof updateManagerButtonState === "function") updateManagerButtonState();
+      var api = $("api-settings-container");
+      if (api) api.style.display = "none";
+    } catch (e) {}
+  }
+
+  function closeIssuedModal() {
+    clearInterval(issuedTimer);
+    issuedTimer = null;
+    var m = $("haru-issued-modal");
+    if (m) m.remove();
+    lockManagerQuietly(); // 閉じる時にも、もう一度ロックをかける
+  }
+
+  function renderIssuedList() {
+    var host = $("haru-issued-list");
+    if (!host) return;
+    var list = readIssued();
+    if (!list.length) {
+      host.innerHTML = '<div style="padding:28px 8px;color:#7b8794;font-size:17px;text-align:center">まだ使われていない番号はありません</div>';
+      return;
+    }
+    host.innerHTML = list
+      .map(function (x) {
+        var d = new Date(x.at);
+        var hhmm = ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2);
+        return (
+          '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 4px;border-bottom:1px solid #e4e7eb">' +
+          '<b style="font-size:34px;font-family:ui-monospace,Menlo,Consolas,monospace;letter-spacing:.05em">' + esc(x.callNo) + "</b>" +
+          '<span style="font-size:15px;color:#52606d;text-align:right">' + esc(hhmm) + "　" + esc(x.count) + "点　¥" + esc((x.total || 0).toLocaleString()) + "</span>" +
+          "</div>"
+        );
+      })
+      .join("");
+  }
+
+  function showIssuedModal() {
+    ensureStyle();
+    if ($("haru-issued-modal")) return;
+    var m = document.createElement("div");
+    m.id = "haru-issued-modal";
+    m.style.cssText =
+      "position:fixed;inset:0;z-index:2147483050;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;padding:14px";
+    m.innerHTML =
+      '<div style="background:#fff;color:#1f2933;border-radius:18px;padding:20px 18px;max-width:460px;width:100%;max-height:88vh;display:flex;flex-direction:column">' +
+      '<div style="font-size:20px;font-weight:900">🔢 まだ使われていない番号</div>' +
+      '<div style="font-size:13px;color:#52606d;margin:4px 0 8px">発行した順です（レジが読み込むと消えます）</div>' +
+      '<div id="haru-issued-list" style="flex:1;min-height:80px;overflow-y:auto;-webkit-overflow-scrolling:touch"></div>' +
+      '<div style="display:flex;gap:10px;margin-top:14px">' +
+      '<button type="button" id="haru-issued-fs" style="flex:1;min-height:48px;border:0;border-radius:12px;background:#e4e7eb;color:#1f2933;font-size:15px;font-weight:800;cursor:pointer">⛶ 全画面にする</button>' +
+      '<button type="button" id="haru-issued-close" style="flex:1;min-height:48px;border:0;border-radius:12px;background:#1e3a5f;color:#fff;font-size:17px;font-weight:900;cursor:pointer">閉じる</button>' +
+      "</div></div>";
+    document.body.appendChild(m);
+    m.querySelector("#haru-issued-close").addEventListener("click", closeIssuedModal);
+    m.querySelector("#haru-issued-fs").addEventListener("click", function () {
+      try {
+        if (window.haruFullscreenLock && typeof window.haruFullscreenLock.enter === "function") {
+          window.haruFullscreenLock.enter();
+          return;
+        }
+        var de = document.documentElement;
+        var fn = de.requestFullscreen || de.webkitRequestFullscreen;
+        if (fn) {
+          var p = fn.call(de);
+          if (p && p.catch) p.catch(function () {});
+        }
+      } catch (e) {}
+    });
+    renderIssuedList();
+    clearInterval(issuedTimer);
+    issuedTimer = setInterval(renderIssuedList, 2000);
+    // 認証が済んだら、すぐロックし直す（この画面を見るのに、もう認証は要らない）
+    lockManagerQuietly();
+    setTimeout(lockManagerQuietly, 400);
+  }
+
+  // 「管理」ボタンを押した時：必ずロックをかけてから、店長認証を求める
+  function requestIssuedList() {
+    try {
+      if (typeof playSound === "function") playSound("click");
+    } catch (e) {}
+    lockManagerQuietly();
+    if (typeof requestManagerAuth === "function") {
+      setTimeout(function () {
+        requestManagerAuth(TARGET_NUMBERS);
+      }, 60);
+    }
+  }
+
+  // セルフレジ画面右上の「⛶ 全画面」ボタンを「🔧 管理」に差し替える
+  // （全画面は、セルフレジを始める時に自動で要求されるため。必要なら管理画面の中にも全画面ボタンがある）
+  function ensureManageButton() {
+    var btn = $("sc-fs-btn");
+    if (!btn || btn.getAttribute("data-haru-mgr") === "1") return;
+    var nb = btn.cloneNode(true); // 元のクリック処理（全画面）を外すため、複製して置き換える
+    nb.setAttribute("data-haru-mgr", "1");
+    nb.textContent = "🔧 管理";
+    nb.title = "店長認証のあと、発行した番号を見られます";
+    nb.addEventListener("click", requestIssuedList);
+    btn.parentNode.replaceChild(nb, btn);
+  }
+
+  // 店長認証が成功した時、auth-system.js の openManagerAuthTarget() から呼ばれる。
+  // 知らない目的だとホームへ移動してしまうので、この目的だけを横取りする。
+  function hookAuthTarget() {
+    if (typeof window.openManagerAuthTarget !== "function") return;
+    if (window.openManagerAuthTarget.__haruIssuedHooked) return;
+    var original = window.openManagerAuthTarget;
+    var wrapped = function (target) {
+      if (target === TARGET_NUMBERS) {
+        showIssuedModal();
+        return;
+      }
+      return original.apply(this, arguments);
+    };
+    wrapped.__haruIssuedHooked = true;
+    window.openManagerAuthTarget = wrapped;
+  }
+
   /* ---------- channel の包み込み ---------- */
 
   var patched = false;
@@ -536,6 +711,7 @@
       try {
         if (name === EV_ORDER && data && Array.isArray(data.items) && isSelfMode()) {
           decorateOrder(data);
+          recordIssued(data);
           publishOrderBarcode(data);
         }
       } catch (e) {
@@ -578,6 +754,7 @@
       if (d.status === "loaded" || d.status === "paid" || d.status === "cancelled" || d.status === "discarded") {
         delete standby[d.orderId];
         delete mine[d.orderId];
+        removeIssued(d.orderId);
       }
     });
   }
@@ -777,6 +954,8 @@
     patchChannel();
     bindDiscountSyncRefresh();
     hookTypedCallNo();
+    hookAuthTarget();
+    ensureManageButton();
     ensureAttached();
     // レジ画面を開いた端末は「レジ」として覚える（客用・セルフレジ端末は数えない）
     if (isActiveScreen("register-screen") && !isSelfMode() && !isCustomerDisplay() && lsGet(FLAG_KEY) !== "1") {
