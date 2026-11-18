@@ -296,13 +296,8 @@
   function decorateOrder(order) {
     var n = issueCallNo();
     order.callNo = n;
-    var r = chooseRegister();
-    if (r) {
-      order.registerNo = r.no;
-      order.registerTag = r.tag;
-      recentAssign.push({ tag: r.tag, t: Date.now() });
-    }
-    showOverlay(n, r ? r.no : null);
+    // レジ番号は案内しない（レジで店員が番号を入力して呼び出す方式）
+    showOverlay(n, null);
   }
 
   /* ---------- お客様画面の案内 ---------- */
@@ -410,6 +405,12 @@
 
   function filterOrder(msg, handler) {
     var d = msg && msg.data;
+    if (d && !d.registerTag && d.callNo && d.id && !isSelfMode() && isRegisterDevice()) {
+      // 番号付きの注文：レジでは勝手にカートへ入れず、店員が番号を入力するまで待つ
+      mine[d.id] = Date.now();
+      standby[d.id] = { msg: msg, tag: myTag(), missingSince: 0 };
+      return;
+    }
     if (!d || !d.registerTag || isSelfMode()) return handler(msg);
     if (d.registerTag === myTag()) {
       if (d.id) mine[d.id] = Date.now();
@@ -622,6 +623,14 @@
           return window.fetchAndAddItem.apply(this, rest);
         }
       }
+      if (/^\d{4}$/.test(txt) && !isKnownCode(txt)) {
+        try {
+          var bc = "SELF" + txt;
+          if (typeof discountBarcodes !== "undefined" && discountBarcodes.some(function (d) { return d && d.barcode === bc && d.enabled !== false && !d.archived; })) {
+            return original.call(this, bc);
+          }
+        } catch (e) {}
+      }
       return original.apply(this, rest);
     };
     wrapped.__haruCallNoHooked = true;
@@ -739,8 +748,27 @@
 
   /* ---------- 定期処理 ---------- */
 
+  var discountSyncBound = false;
+  function bindDiscountSyncRefresh() {
+    if (discountSyncBound || typeof channel === "undefined" || !channel || typeof channel.subscribe !== "function") return;
+    discountSyncBound = true;
+    channel.subscribe("discount-sync", function (msg) {
+      try {
+        var list = msg && msg.data && msg.data.discounts;
+        if (Array.isArray(list)) {
+          discountBarcodes = list;
+          localStorage.setItem("pos_discounts", JSON.stringify(list));
+        }
+        if (typeof renderDiscounts === "function") renderDiscounts();
+        if (typeof renderHomeAutomationBlocksIfVisible === "function") renderHomeAutomationBlocksIfVisible();
+        if ($("automation-barcode-list-overlay") && typeof renderAutomationBarcodeListBox === "function") renderAutomationBarcodeListBox();
+      } catch (e) {}
+    });
+  }
+
   function tick() {
     patchChannel();
+    bindDiscountSyncRefresh();
     hookTypedCallNo();
     ensureAttached();
     // レジ画面を開いた端末は「レジ」として覚える（客用・セルフレジ端末は数えない）

@@ -90,7 +90,7 @@
 //   の2つを、手動で一緒に上げること（CACHE_VERSIONが同じままだと、
 //   キャッシュ優先のスクリプトが古いまま入れ替わらない）。
 // ==========================================
-const CACHE_VERSION = 'v24';
+const CACHE_VERSION = 'v25';
 const CACHE_NAME = `register-cache-${CACHE_VERSION}`;
 const ASSETS = [
   './',
@@ -207,4 +207,47 @@ self.addEventListener('fetch', (e) => {
       return response || fetch(req);
     })
   );
+});
+
+// ==========================================
+// 【プッシュ通知（FCM）の受け取り】（push-notification-system.js / functions/index.js と対）
+// ------------------------------------------
+// スマホがバックグラウンドでも、Cloud Functions から届いたプッシュを通知として表示する。
+// Service Worker は1つのスコープに1つしか置けないため、別ファイル（firebase-messaging-sw.js）
+// は作らず、この sw.js に直接 push / notificationclick の処理を足している。
+// ・Functions は notification ではなく data（title / body / icon / tag）だけを送る。
+//   表示はここで行う。
+// ・iPhone(Safari) は「プッシュを受け取ったら必ず通知を表示する」ことが条件なので、
+//   タブを開いていても表示を省略しない（省略を繰り返すと購読が取り消されることがある）。
+// ==========================================
+const PUSH_DEFAULT_ICON = 'https://raw.githubusercontent.com/ishiinopasokon8610-afk/image-list/main/images/register-sabicon.png';
+
+self.addEventListener('push', (event) => {
+  let payload = {};
+  try {
+    payload = event.data ? event.data.json() : {};
+  } catch (err) {
+    payload = { data: { title: 'haruレジ', body: event.data ? event.data.text() : '' } };
+  }
+  const d = payload.data || payload.notification || payload || {};
+  const title = d.title || 'haruレジ';
+  const options = {
+    body: d.body || '',
+    icon: d.icon || PUSH_DEFAULT_ICON,
+    data: { url: d.url || self.registration.scope }
+  };
+  // 同じ tag の通知は上書きされる（同じ通知が二重に並ばない）
+  if (d.tag) options.tag = d.tag;
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  event.waitUntil((async () => {
+    const list = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const c of list) {
+      if ('focus' in c) return c.focus();
+    }
+    return self.clients.openWindow(self.registration.scope);
+  })());
 });
