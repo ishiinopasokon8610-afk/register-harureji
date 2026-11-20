@@ -297,6 +297,8 @@ function broadcastAllSyncNow() {
     broadcastHistorySync();
     broadcastTimecardSync();
     if (typeof broadcastCustomersSync === 'function') broadcastCustomersSync();
+    // 自動化バーコード（以前はここに無く、後から参加した端末に届かなかった）
+    if (typeof broadcastDiscounts === 'function') broadcastDiscounts();
 }
 
 const FULL_SYNC_STAMP_KEY = 'pos_sync_last_full_request_at'; // pos_sync_ で始まるので、バックアップ・設定同期の対象外

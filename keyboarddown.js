@@ -8,12 +8,20 @@
 // ==========================================
 
 document.addEventListener('DOMContentLoaded', () => {
+    // 商品名検索欄はレジ画面内だが、文字を手入力するためキーボードを出す
+    const KEYBOARD_ALLOWED_IDS = ['product-name-search'];
+    const isKeyboardAllowed = (el) => !!(el && KEYBOARD_ALLOWED_IDS.includes(el.id));
+
     const applyKeyboardMode = () => {
         const registerScreen = document.getElementById('register-screen');
         if (!registerScreen) return;
 
         // レジ画面内の入力欄：ソフトウェアキーボードを出さない
         registerScreen.querySelectorAll('input, textarea').forEach(input => {
+            if (isKeyboardAllowed(input)) {
+                if (input.getAttribute('inputmode') === 'none') input.removeAttribute('inputmode');
+                return;
+            }
             if (input.getAttribute('inputmode') !== 'none') {
                 input.setAttribute('inputmode', 'none');
             }
@@ -38,7 +46,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const registerScreen = document.getElementById('register-screen');
         if (!registerScreen) return;
 
-        if (registerScreen.contains(target)) {
+        if (isKeyboardAllowed(target)) {
+            if (target.getAttribute('inputmode') === 'none') target.removeAttribute('inputmode');
+        } else if (registerScreen.contains(target)) {
             if (target.getAttribute('inputmode') !== 'none') {
                 target.setAttribute('inputmode', 'none');
             }

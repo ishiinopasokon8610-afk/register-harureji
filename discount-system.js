@@ -723,6 +723,21 @@ function discScheduleRebroadcast() {
     }
 })();
 
+// 起動してつながった時：
+//  ・自分が持っている一覧を他端末へ送る（マージ方式なので、送っても他端末の分は消えない）
+//  ・自分の一覧が空なら、他端末に「全部送って」と頼む（後から参加した端末が受け取れるように）
+window.addEventListener('pos-sync-ready', () => {
+    setTimeout(() => {
+        try {
+            if ((discountBarcodes || []).length > 0 || Object.keys(discLoadTombstones()).length > 0) {
+                discScheduleRebroadcast();
+            } else if (typeof window.requestFullSync === 'function') {
+                window.requestFullSync();
+            }
+        } catch (e) { /* 無視 */ }
+    }, 3000);
+});
+
 /* =========================================================
    カメラでバーコードを読み取って自動入力する
    （スマホ1台だけで自動化バーコードの登録ができるようにするための機能）
