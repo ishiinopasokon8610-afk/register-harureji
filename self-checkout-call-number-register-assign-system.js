@@ -325,7 +325,7 @@
       "#haru-callno-overlay .wait{display:inline-block;background:#ffd54a;color:#1a2540;border-radius:14px;padding:2px 22px;margin-right:8px}" +
       "#haru-callno-overlay .sub{margin-top:14px;font-size:min(4.4vw,20px);color:#d7e1f2;line-height:1.6}" +
       "#haru-callno-overlay button{margin-top:26px;min-height:52px;padding:10px 34px;border:0;border-radius:14px;font-size:18px;font-weight:900;background:#fff;color:#1a2540;cursor:pointer}" +
-      "#haru-register-no-badge{position:fixed;top:calc(env(safe-area-inset-top,0px) + 6px);right:8px;z-index:9000;" +
+      "#haru-register-no-badge{display:none !important;position:fixed;top:calc(env(safe-area-inset-top,0px) + 6px);right:8px;z-index:9000;" +
       "padding:3px 9px;border:0;border-radius:999px;background:rgba(30,40,60,.55);color:#fff;font-size:12px;font-weight:700;" +
       "opacity:.78;cursor:pointer;display:none;line-height:1.5}" +
       "#haru-register-no-badge:active{opacity:1}";
@@ -585,11 +585,7 @@
   }
 
   function toastAtRegister(callNo) {
-    try {
-      if (typeof showToastAnimation === "function") {
-        showToastAnimation("🔢 " + callNo + "番のお客様の会計をお願いします");
-      }
-    } catch (e) {}
+    // 【変更】「◯番のお客様の会計をお願いします」の表示は不要になったため、何も表示しない
   }
 
   // 待ち一覧の SC○○○○○○ を、4桁の番号に置き換える
@@ -853,16 +849,7 @@
       if (!isSelfMode() && !isCustomerDisplay() && !isActiveScreen("customer-screen")) {
         publishOrderBarcode(d);
       }
-      if (
-        isRegisterDevice() &&
-        d.senderId !== (typeof SYNC_DEVICE_ID !== "undefined" ? SYNC_DEVICE_ID : "") &&
-        (!d.registerTag || d.registerTag === myTag())
-      ) {
-        setTimeout(function () {
-          showArrivalModal(d.callNo);
-          say(d.callNo ? digitsKana(d.callNo) + " ばん の おきゃくさま が き ます。 ばんごう を かくにん して にゅうりょく して ください" : "");
-        }, 1500);
-      }
+      // 【変更】「◯番のお客様が来ます」の案内（モーダル・読み上げ）は不要になったため廃止
     });
 
     origSubscribe.call(channel, EV_STATUS, function (msg) {
@@ -942,6 +929,9 @@
 
   /* ---------- レジ側：「○○○○番のお客様が来ます」の案内（入力されるまで出し続ける） ---------- */
   function renderArrival() {
+    var _old = $("haru-arrival-banner");
+    if (_old) _old.style.display = "none";
+    return; // 【変更】案内バナーは廃止。番号は、存在する番号ならそのまま入力で受け付ける
     var now = Date.now();
     var nums = [];
     if (isRegisterDevice() && isActiveScreen("register-screen")) {
@@ -1043,10 +1033,9 @@
   }
 
   function updateBadge() {
-    var b = ensureBadge();
-    var show = isRegisterDevice() && isActiveScreen("register-screen") && !!getMyNo();
-    b.style.display = show ? "block" : "none";
-    if (show) b.textContent = "レジ" + getMyNo();
+    // 【変更】「レジ1」などのレジ番号の表示はしない（番号の管理は内部だけで行う）
+    var b = $("haru-register-no-badge");
+    if (b) b.remove();
   }
 
   /* ---------- 定期処理 ---------- */

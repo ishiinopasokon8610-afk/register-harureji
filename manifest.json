@@ -2,7 +2,8 @@
   "name": "ハイテク音声レジスター",
   "short_name": "音声レジ",
   "start_url": "./index.html",
-  "display": "standalone",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone"],
   "background_color": "#ffffff",
   "theme_color": "#317EFB",
   "icons": [

@@ -48,6 +48,16 @@ const SCREEN_HASH_MAP = {
         }
         const original = window.showScreen;
         window.showScreen = function (screenId, ...rest) {
+            // 顧客情報の画面は、店長認証を通った直後（openManagerAuthTarget）でなければ開かない。
+            // ブラウザの戻る/進む・ハッシュ(#members)・他のファイルからの直接呼び出しで、認証なしに開かれるのを防ぐ。
+            if (screenId === 'customer-mgmt-screen') {
+                if (!window.__customerMgmtAuthorized) {
+                    if (typeof requestManagerAuth === 'function') requestManagerAuth('customer');
+                    return;
+                }
+            } else {
+                window.__customerMgmtAuthorized = false; // 他の画面へ移ったら、次に開く時はまた認証が必要
+            }
             const result = original.apply(this, [screenId, ...rest]);
             const hash = SCREEN_HASH_MAP[screenId];
             if (hash && window.location.hash !== hash) {

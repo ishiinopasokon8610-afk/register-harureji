@@ -179,6 +179,8 @@
         if (typeof playSound === 'function') playSound('click');
         const printModal = document.getElementById('receipt-print-modal');
         if (printModal) printModal.style.display = 'none';
+        // レジ画面の「領収書発行」から開いた時は、再発行の一覧には戻らない
+        if (window.__receiptInvoiceFromRegister) { window.__receiptInvoiceFromRegister = false; return; }
         showReissueModal(true); // 再発行の一覧に戻る（入力内容・表示件数はそのまま）
     });
 
@@ -191,7 +193,7 @@
         return customers.find((c) => c && c.barcode === barcode) || null;
     }
 
-    function decorateReissuedReceipt(rec) {
+    function decorateReissuedReceipt(rec, noBanner) {
         const content = document.getElementById('print-receipt-content');
         if (!content) return;
 
@@ -208,6 +210,8 @@
             }
         });
 
+        // 領収書として発行した時は「再発行」の枠は出さない
+        if (noBanner) return;
         const banner = document.createElement('div');
         banner.id = 'receipt-reissue-banner';
         banner.style.cssText = 'text-align:center; font-weight:bold; color:#c62828; border:2px solid #c62828; border-radius:4px; padding:4px 0; margin-bottom:8px;';
@@ -215,14 +219,17 @@
         content.insertBefore(banner, content.firstChild);
     }
 
-    function reissueReceipt(rec) {
+    // invoiceOpts = { clientName } を渡すと、レシートの下に領収書もつけて発行する（宛名が空なら空欄）
+    function reissueReceipt(rec, invoiceOpts) {
         if (!hasDetail(rec)) {
+            if (invoiceOpts) { setInvoiceError('この取引は明細データが無いため、領収書を発行できません（古い取引）。'); return false; }
             setReissueError('この取引は明細データが無いため、再発行できません（古い取引）。');
-            return;
+            return false;
         }
         if (typeof generateReceiptHTML !== 'function') {
+            if (invoiceOpts) { setInvoiceError('レシート機能が読み込まれていません。ページを開き直してください。'); return false; }
             setReissueError('レシート機能が読み込まれていません。ページを開き直してください。');
-            return;
+            return false;
         }
 
         showReissueModal(false); // 一覧を隠して、レシート画面を前面に出す
@@ -244,8 +251,9 @@
             activeCustomer = findCustomerByBarcode(rec.customerBarcode);
 
             window.__receiptReissueActive = true;
-            generateReceiptHTML(false);
-            decorateReissuedReceipt(rec);
+            if (invoiceOpts) generateReceiptHTML(true, invoiceOpts.clientName || '');
+            else generateReceiptHTML(false);
+            decorateReissuedReceipt(rec, !!invoiceOpts);
         } catch (err) {
             console.error('レシートの再発行に失敗しました:', err);
             window.__receiptReissueActive = false;
@@ -266,6 +274,7 @@
             earnedPointsThisTime = saved.earnedPointsThisTime;
             window.__receiptReissueTarget = null;
         }
+        return true;
     }
 
     /* ---------------------------------------------------------
@@ -423,6 +432,108 @@
         container.insertBefore(btn, container.firstChild);
         return true;
     }
+
+    /* ---------------------------------------------------------
+       ⑤ レジ画面の「🧾 領収書発行」ボタン
+          取引番号を入力 → 宛名を入力（空欄のままなら、宛名は空欄をあけて発行）
+       --------------------------------------------------------- */
+    function setInvoiceError(msg) {
+        const el = document.getElementById('receipt-invoice-error');
+        if (el) el.textContent = msg || '';
+        if (msg && typeof playSound === 'function') playSound('error');
+    }
+
+    function ensureInvoiceModal() {
+        let modal = document.getElementById('receipt-invoice-modal');
+        if (modal) return modal;
+        modal = document.createElement('div');
+        modal.id = 'receipt-invoice-modal';
+        modal.className = 'modal-overlay';
+        modal.style.zIndex = '2000';
+        modal.innerHTML = `
+            <div class="modal-box" style="width:min(440px, 94vw); box-sizing:border-box;">
+                <h3 class="modal-title navy" style="text-align:center;">🧾 領収書の発行</h3>
+                <p class="modal-desc" style="text-align:center;">取引番号（レシート下部）を入力してください。</p>
+                <input id="receipt-invoice-no-input" class="modal-input" placeholder="取引番号（例: R000123 ／ 123）" autocomplete="off" inputmode="numeric">
+                <p class="modal-desc" style="margin:12px 0 4px;">宛名（空欄のままなら、宛名は空欄で発行します）</p>
+                <input id="receipt-invoice-name-input" class="modal-input" placeholder="例: 山田 太郎（空欄可）" autocomplete="off">
+                <div id="receipt-invoice-error" style="color:#c62828; font-size:12px; min-height:18px; margin:6px 0;"></div>
+                <div class="modal-btn-group">
+                    <button id="receipt-invoice-cancel-btn" class="modal-btn cancel">キャンセル</button>
+                    <button id="receipt-invoice-submit-btn" class="modal-btn primary">発行する</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+
+        const noInput = modal.querySelector('#receipt-invoice-no-input');
+        const nameInput = modal.querySelector('#receipt-invoice-name-input');
+        noInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); nameInput.focus(); }
+        });
+        nameInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); submitInvoice(); }
+        });
+        modal.querySelector('#receipt-invoice-submit-btn').addEventListener('click', submitInvoice);
+        modal.querySelector('#receipt-invoice-cancel-btn').addEventListener('click', closeInvoiceLookup);
+        return modal;
+    }
+
+    function openInvoiceLookup() {
+        if (typeof playSound === 'function') playSound('click');
+        const modal = ensureInvoiceModal();
+        modal.querySelector('#receipt-invoice-no-input').value = '';
+        modal.querySelector('#receipt-invoice-name-input').value = '';
+        setInvoiceError('');
+        modal.style.display = 'flex';
+        setTimeout(() => modal.querySelector('#receipt-invoice-no-input').focus(), 50);
+    }
+
+    function closeInvoiceLookup() {
+        if (typeof playSound === 'function') playSound('click');
+        const modal = document.getElementById('receipt-invoice-modal');
+        if (modal) modal.style.display = 'none';
+    }
+
+    function submitInvoice() {
+        const target = normalizeReceiptNoInput(document.getElementById('receipt-invoice-no-input').value);
+        if (!target) { setInvoiceError('取引番号を入力してください（例: R000123 ／ 123）。'); return; }
+        const rec = getHistory().find((r) => r && r.receiptNo === target);
+        if (!rec) { setInvoiceError(`取引番号 ${target} の取引は見つかりませんでした。`); return; }
+        const clientName = document.getElementById('receipt-invoice-name-input').value.trim();
+
+        window.__receiptInvoiceFromRegister = true;
+        const ok = reissueReceipt(rec, { clientName });
+        if (ok) {
+            const modal = document.getElementById('receipt-invoice-modal');
+            if (modal) modal.style.display = 'none';
+        } else {
+            window.__receiptInvoiceFromRegister = false;
+        }
+    }
+
+    window.openReceiptInvoiceLookup = openInvoiceLookup;
+
+    // レジ画面のヘッダーに「🧾 領収書発行」ボタンを置く（店長認証のボタンがあればその左、無ければ一番左）
+    function injectInvoiceButton() {
+        const reg = document.getElementById('register-screen');
+        if (!reg) return;
+        if (reg.querySelector('#receipt-invoice-open-btn')) return;
+        const actions = reg.querySelector('.header-actions');
+        if (!actions) return;
+
+        const btn = document.createElement('button');
+        btn.id = 'receipt-invoice-open-btn';
+        btn.className = 'btn-refund-reg';
+        btn.style.cssText = 'background:#0277bd;';
+        btn.textContent = '🧾 領収書発行';
+        btn.addEventListener('click', openInvoiceLookup);
+
+        const mgr = Array.from(reg.querySelectorAll('button')).find((b) => /店長(認証|ロック)/.test(b.textContent || ''));
+        if (mgr && mgr.parentNode) mgr.parentNode.insertBefore(btn, mgr);
+        else actions.insertBefore(btn, actions.firstChild);
+    }
+    setInterval(injectInvoiceButton, 1500);
 
     (function tryInjectButton() {
         function attempt() {

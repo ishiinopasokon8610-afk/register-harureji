@@ -27,7 +27,7 @@
 // ==========================================
 
 // ★リリースのたびに、この値を書き換えてください★
-const APP_VERSION = 'v3.0.40';
+const APP_VERSION = 'v3.0.43';
 
 // このファイル自身のURL（script要素のsrcから逆算する。
 // index.html側でファイル名を変更・移動していても追従できるようにするため）
@@ -110,8 +110,20 @@ function ensureVersionBadge() {
 /* =========================================================
    ② 新バージョン通知バナー
    ========================================================= */
+// 【追加】タッチパネル（お客様が操作する画面）を表示している間は、更新の通知もリロードも
+// 行わない。リロードされると操作中の画面が初期化され、入力途中の個人情報が
+// 消える／見えてしまうため。タッチパネルから離れたあとの次回チェックで通知する。
+function isTouchPanelInUse() {
+    try {
+        if (typeof window.tpGuardDebug === 'function') return !!window.tpGuardDebug();
+        if (document.getElementById('seat-guide-overlay')) return true;
+    } catch (e) {}
+    return false;
+}
+
 function showUpdateAvailableNotice(latestVersion) {
     if (document.getElementById('app-update-notice')) return;
+    if (isTouchPanelInUse()) return;
 
     // 同じバージョンへの通知は、一度閉じたら再表示しない
     const dismissed = sessionStorage.getItem(UPDATE_CHECK_DISMISSED_KEY);
@@ -141,6 +153,7 @@ function showUpdateAvailableNotice(latestVersion) {
 
     notice.querySelector('#app-update-reload-btn').addEventListener('click', async (ev) => {
         // 連打防止＋「押した」ことが分かるように表示を変える
+        if (isTouchPanelInUse()) return; // タッチパネル操作中はリロードしない
         const reloadBtn = ev.currentTarget;
         reloadBtn.disabled = true;
         reloadBtn.textContent = '更新中…';
@@ -205,6 +218,10 @@ async function checkForAppUpdate() {
 
 document.addEventListener('DOMContentLoaded', () => {
     ensureVersionBadge();
+    setInterval(() => {
+        const n = document.getElementById('app-update-notice');
+        if (n && isTouchPanelInUse()) n.remove();
+    }, 1000);
     // 起動直後はまだ読み込み中の可能性があるため少し待ってから初回チェック
     setTimeout(checkForAppUpdate, 10000);
     setInterval(checkForAppUpdate, UPDATE_CHECK_INTERVAL_MS);

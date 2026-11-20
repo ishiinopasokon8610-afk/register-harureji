@@ -1434,6 +1434,10 @@ async function completeTransaction() {
 }
 
 function promptReceiptAndInvoice() {
+    // 【変更】「領収書を発行しますか？」の確認は出さず、そのままレシートを表示する。
+    // 領収書は、レジ画面の「🧾 領収書発行」ボタン（receipt-reissue-system.js）から、取引番号を指定して発行する。
+    generateReceiptHTML(false);
+    return;
     showCustomConfirm(
         "領収書を発行しますか？",
         " りょうしゅうしょを はっこう し ます か？ありがとうございました。",
@@ -1587,12 +1591,12 @@ html += `<div style="text-align: center; margin-top: 15px; font-weight: bold;">�
         html += `
             <div style="border-top: 2px dashed #666; margin: 25px 0 15px 0; padding-top: 15px;"></div>
             <div style="text-align: center; font-weight: bold; font-size: 16px; margin-bottom: 8px;">【 領 収 書 】</div>
-            <div style="font-size: 14px; font-weight: bold; margin-bottom: 10px; border-bottom: 1px solid #333; padding-bottom: 4px;">${escapeHtml(clientName)} 様</div>
+            <div style="font-size: 14px; font-weight: bold; margin-bottom: 10px; padding-bottom: 4px; min-height: 22px;${clientName ? ' border-bottom: 1px solid #333;' : ''}">${clientName ? escapeHtml(clientName) : '<span style="display:inline-block; width:75%; border-bottom:1px solid #333;">&nbsp;</span>'} 様</div>
             <div style="font-size: 18px; font-weight: bold; margin: 10px 0; text-align: center;">金額: ¥${billingAmount.toLocaleString()} -</div>
             <div style="font-size: 12px; margin-bottom: 8px;">但し: お品代として</div>
             <div style="font-size: 11px; color: #555; margin-bottom: 10px;">
                 <div>発行日: ${new Date().toLocaleDateString()}</div>
-                <div>発行元: ハイテク音声レジスター</div>
+                <div>発行元: haruレジ</div>
             </div>
             <div style="border-bottom: 1px dashed #333; margin: 6px 0;"></div>
             <div style="font-size: 11px; color: #444;">

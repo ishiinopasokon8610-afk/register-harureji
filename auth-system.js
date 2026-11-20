@@ -51,7 +51,19 @@ function handleManagerBtnClick() {
     }
 }
 
+// 画面移動をせず、読み上げもせずに、店長ロックの状態だけをかける
+function lockManagerSilently() {
+    if (typeof managerAuthDone !== 'undefined') managerAuthDone = false;
+    sessionStorage.removeItem('pos_manager_auth');
+    sessionStorage.removeItem('pos_manager_auth_time');
+    updateManagerButtonState();
+    const apiSettings = document.getElementById('api-settings-container');
+    if (apiSettings) apiSettings.style.display = 'none';
+}
+
 function requestManagerAuth(target = 'customer') {
+    // 顧客情報は、開くたびに先に店長ロックをかけ直し、必ず店長認証をしてから画面を出す
+    if (target === 'customer') lockManagerSilently();
     if (typeof managerAuthTarget !== 'undefined') {
         managerAuthTarget = target;
     }
@@ -164,6 +176,8 @@ function openManagerAuthTarget(target) {
         } else if (target === 'migration') {
             showScreen('migration-screen');
         } else if (target === 'customer') {
+            // 認証を通った直後だけ、顧客情報の画面を開ける（screen-hash-navigation.js 側のガードと対）
+            window.__customerMgmtAuthorized = true;
             showScreen('customer-mgmt-screen');
         } else if (target === 'history') {
             showScreen('history-screen');
