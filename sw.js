@@ -133,7 +133,8 @@
 // ・変更: 全画面ガードを復活（#touch-panel とお席案内の間だけ、解除しても全画面へ戻す。他の画面では何もしない）。v49。
 // ・変更: 領収書発行では「再発行」の枠を出さない。宛名が空欄の時は、書き込めるように線を引く。v50。
 // ・変更: 領収書の発行元を「haruレジ」に変更。v51。
-const CACHE_VERSION = 'v68';
+const CACHE_VERSION = 'v69';
+// v69: 同期の診断画面 #diag（sync-diagnostic-system.js 新規）
 // v68: チェック更新（チェック済み商品がある更新）では注文チャイムを鳴らさない（order-checkout-display.js）
 // v67: 注文チャイムが鳴った理由を画面に表示（調査用。order-checkout-display.js）
 // v66: 注文カードの同期を安定化（消した注文の復活・ご注文が入りましたの誤報を修正。order-checkout-display.js・extra-settings-sync.js）
