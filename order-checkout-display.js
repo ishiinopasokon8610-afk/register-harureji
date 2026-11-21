@@ -265,8 +265,27 @@ function playNewOrderChime() {
 // 「オーバーレイが勝手に開くのはやめてほしい」との要望のため廃止。
 // 音とアナウンスだけで知らせ、カードの中身はオーバーレイ・グリッドが
 // 存在していれば静かに更新しておく（開くのはあくまで4秒長押し操作のみ）。
-function notifyAndShowNewOrder() {
+// 【調査用】鳴った理由を画面に少しの間だけ表示する（スマホでもコンソール無しで原因を確認できるように）。
+// 原因が分かったら、この関数の中身を空にしてよい。
+function showOrderChimeReasonToast(reason) {
+    try {
+        let el = document.getElementById('order-chime-reason-toast');
+        if (!el) {
+            el = document.createElement('div');
+            el.id = 'order-chime-reason-toast';
+            el.style.cssText = 'position:fixed;left:50%;bottom:70px;transform:translateX(-50%);z-index:100060;max-width:92vw;background:rgba(0,0,0,0.85);color:#fff;padding:8px 14px;border-radius:14px;font-size:12px;line-height:1.5;text-align:center;pointer-events:none;';
+            document.body.appendChild(el);
+        }
+        el.textContent = '🔔 注文チャイム（v67）：' + reason;
+        el.style.display = 'block';
+        clearTimeout(el.__t);
+        el.__t = setTimeout(() => { el.style.display = 'none'; }, 7000);
+    } catch (e) { /* 無視 */ }
+}
+
+function notifyAndShowNewOrder(reason) {
     if (typeof isUseOrderSystemEnabled !== 'function' || !isUseOrderSystemEnabled()) return;
+    showOrderChimeReasonToast(reason || '理由不明（古い呼び出し）');
 
     playNewOrderChime();
     if (typeof speak === 'function') speak('ごちゅうもん が はいり まし た');
@@ -304,7 +323,7 @@ function notifyAndShowNewOrder() {
                         const newRecord = historyList[0]; // 直近の会計は先頭にunshiftされる
                         addOrderToQueue(newRecord); // 既存の未完了注文は消さず、キューに追加する
                         broadcastOrderEvent({ action: 'upsert', record: newRecord });
-                        notifyAndShowNewOrder();
+                        notifyAndShowNewOrder('この端末で会計が成立した');
                     }
                 } catch (e) { console.error(e); }
             }
@@ -342,7 +361,7 @@ function notifyAndShowNewOrder() {
                 // 初めて届いた、いま送られた注文のときだけ知らせる（再接続で再生された過去分では鳴らさない）。
                 const alreadyKnown = !!(id && getOrderById(id));
                 upsertOrderInQueue(data.record);
-                if (!alreadyKnown && isFreshOrderMessage(message)) notifyAndShowNewOrder(); else renderAllOrderCards();
+                if (!alreadyKnown && isFreshOrderMessage(message)) notifyAndShowNewOrder('他の端末から、この端末に無い注文の更新が届いた（注文…' + String(id || '').slice(-6) + '）'); else renderAllOrderCards();
                 return;
             }
 
@@ -357,7 +376,7 @@ function notifyAndShowNewOrder() {
                 if (isOrderRemoved(id)) return;
                 const alreadyKnown = !!(id && getOrderById(id));
                 upsertOrderInQueue(data.record);
-                if (!alreadyKnown && isFreshOrderMessage(message)) notifyAndShowNewOrder(); else renderAllOrderCards();
+                if (!alreadyKnown && isFreshOrderMessage(message)) notifyAndShowNewOrder('旧形式のイベントで届いた注文'); else renderAllOrderCards();
             }
         });
     }
