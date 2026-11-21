@@ -133,7 +133,7 @@
 // ・変更: 全画面ガードを復活（#touch-panel とお席案内の間だけ、解除しても全画面へ戻す。他の画面では何もしない）。v49。
 // ・変更: 領収書発行では「再発行」の枠を出さない。宛名が空欄の時は、書き込めるように線を引く。v50。
 // ・変更: 領収書の発行元を「haruレジ」に変更。v51。
-const CACHE_VERSION = 'v54';
+const CACHE_VERSION = 'v55';
 // v54: 自動化バーコード一覧をFirebaseの状態としても同期（discount-system.js）
 // v53: 商品名検索欄でキーボード表示を許可（keyboarddown.js）
 // v52: 自動化バーコードの同期修正（sync-system.js / discount-system.js）
