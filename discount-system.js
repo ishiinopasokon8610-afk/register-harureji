@@ -373,6 +373,12 @@ function addDiscountBarcode() {
 
 // addDiscountBarcode() の実際の保存処理（重複チェック・確認後に呼ばれる）
 function finalizeAddDiscountBarcode(discData, existingIndex) {
+    // タッチパネルから注文が送られた時は、必ずホームの一覧に出す。
+    // （discount-home-visibility-toggle.js が、この端末のフォームのチェックを読んで
+    // hideFromHome を付けるため、チェックが残っていると注文が一覧に出なかった）
+    if (window.__tpOrderRegistering && discData && typeof discData === 'object') {
+        discData.hideFromHome = false;
+    }
     if (existingIndex !== -1) {
         discountBarcodes[existingIndex] = discData;
         // 読み上げは、タッチパネルから注文が送られた時だけ（一覧の操作・手動登録では読み上げない）

@@ -133,7 +133,9 @@
 // ・変更: 全画面ガードを復活（#touch-panel とお席案内の間だけ、解除しても全画面へ戻す。他の画面では何もしない）。v49。
 // ・変更: 領収書発行では「再発行」の枠を出さない。宛名が空欄の時は、書き込めるように線を引く。v50。
 // ・変更: 領収書の発行元を「haruレジ」に変更。v51。
-const CACHE_VERSION = 'v63';
+const CACHE_VERSION = 'v65';
+// v65: タッチパネルの注文バーコードを必ずホーム一覧に出す（discount-system.js）
+// v64: データ管理画面の左メニューから非表示ブロックの項目を除外（migration-anchor-nav-system.js）
 // v63: 注文チェックで「ご注文が入りました」が鳴る不具合を修正（order-checkout-display.js）・自動化バーコード一覧のlocalStorage取り込み（discount-home-live-reload-system.js 新規）
 // v62: 詐欺注意画面を1画面化・客用ディスプレイ設定項目を非表示（ui-compact-fixes-system.js 新規）
 // v61: データ用コードをGoogle Driveのバックアップに保存（gdrive-sync-code-backup.js 新規）
