@@ -132,6 +132,7 @@ function addOrderToQueue(record) {
 // キュー内の1件を上書き（チェック状態の更新等）。無ければ先頭に追加する
 function upsertOrderInQueue(record) {
     if (!record || !record.orderId) return;
+    if (isOrderRemoved(record.orderId)) return; // 消した注文は復活させない
     const queue = getOrderQueue();
     const idx = queue.findIndex(r => r.orderId === record.orderId);
     if (idx >= 0) {
@@ -146,6 +147,46 @@ function upsertOrderInQueue(record) {
 function removeOrderFromQueue(orderId) {
     const queue = getOrderQueue().filter(r => r.orderId !== orderId);
     saveOrderQueue(queue);
+    markOrderRemoved(orderId);
+}
+
+// 【追加】消した注文の「消した印」。
+// 他端末から遅れて届いた古い更新（チェック切り替え・再生された過去のイベント・自分が送った
+// 更新の返り）で、消したはずの注文が復活して「ご注文が入りました」が鳴るのを防ぐ。
+// pos_sync_ で始まるので、バックアップ・設定同期の対象外（この端末だけの記録）。
+const ORDER_REMOVED_KEY = 'pos_sync_order_removed';
+const ORDER_REMOVED_KEEP_MS = 3 * 24 * 60 * 60 * 1000;
+
+function loadOrderRemovedMap() {
+    try {
+        const o = JSON.parse(localStorage.getItem(ORDER_REMOVED_KEY) || '{}');
+        return (o && typeof o === 'object' && !Array.isArray(o)) ? o : {};
+    } catch (e) { return {}; }
+}
+
+function markOrderRemoved(orderId) {
+    if (!orderId) return;
+    try {
+        const m = loadOrderRemovedMap();
+        const now = Date.now();
+        m[orderId] = now;
+        Object.keys(m).forEach(k => { if (now - (Number(m[k]) || 0) > ORDER_REMOVED_KEEP_MS) delete m[k]; });
+        localStorage.setItem(ORDER_REMOVED_KEY, JSON.stringify(m));
+    } catch (e) { /* 無視 */ }
+}
+
+function isOrderRemoved(orderId) {
+    return !!(orderId && loadOrderRemovedMap()[orderId]);
+}
+
+// 届いたイベントが「いま送られたもの」か（再接続で再生された過去のものではないか）
+function isFreshOrderMessage(message) {
+    try {
+        const ts = message && message.timestamp;
+        if (typeof ts !== 'number') return true;
+        const now = (window.PosSync && typeof window.PosSync.serverNow === 'function') ? window.PosSync.serverNow() : Date.now();
+        return (now - ts) < 60 * 1000;
+    } catch (e) { return true; }
 }
 
 function getOrderById(orderId) {
@@ -284,7 +325,10 @@ function notifyAndShowNewOrder() {
             return;
         }
         channel.subscribe('order-checkout-event', (message) => {
-            const data = message.data || {};
+            // 自分が送ったイベントの返りは無視する（自分の画面にはすでに反映済み。
+            // 返りを処理すると、消した直後に古い更新で注文が復活していた）
+            if (message && message.own) return;
+            const data = (message && message.data) || {};
 
             if (data.action === 'remove' && data.orderId) {
                 removeOrderFromQueue(data.orderId);
@@ -292,12 +336,13 @@ function notifyAndShowNewOrder() {
                 return;
             }
             if (data.action === 'upsert' && data.record) {
-                // 【修正】商品のチェック切り替えなど「すでにある注文の更新」でも
-                // 「ご注文が入りました」のチャイム・音声が鳴っていた。
-                // 初めて届いた注文（キューに無かったもの）のときだけ知らせる。
-                const alreadyKnown = !!(data.record.orderId && getOrderById(data.record.orderId));
+                const id = data.record.orderId;
+                if (isOrderRemoved(id)) return; // すでに消した注文
+                // 商品のチェック切り替えなど「すでにある注文の更新」では鳴らさない。
+                // 初めて届いた、いま送られた注文のときだけ知らせる（再接続で再生された過去分では鳴らさない）。
+                const alreadyKnown = !!(id && getOrderById(id));
                 upsertOrderInQueue(data.record);
-                if (alreadyKnown) renderAllOrderCards(); else notifyAndShowNewOrder();
+                if (!alreadyKnown && isFreshOrderMessage(message)) notifyAndShowNewOrder(); else renderAllOrderCards();
                 return;
             }
 
@@ -308,9 +353,11 @@ function notifyAndShowNewOrder() {
                 return;
             }
             if (data.record) {
-                const alreadyKnown = !!(data.record.orderId && getOrderById(data.record.orderId));
+                const id = data.record.orderId;
+                if (isOrderRemoved(id)) return;
+                const alreadyKnown = !!(id && getOrderById(id));
                 upsertOrderInQueue(data.record);
-                if (alreadyKnown) renderAllOrderCards(); else notifyAndShowNewOrder();
+                if (!alreadyKnown && isFreshOrderMessage(message)) notifyAndShowNewOrder(); else renderAllOrderCards();
             }
         });
     }

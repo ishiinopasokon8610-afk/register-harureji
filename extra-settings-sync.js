@@ -80,7 +80,10 @@ const SETTINGS_SYNC_ALREADY_SYNCED_KEYS = [
     'pos_receipt_no_counter',                   // history-receipt-number-system.js（常に増加方向のみで同期する専用ロジックのため対象外）
     'pos_touch_panel_bg_url',                    // touch-panel-order-system.js（touch-panel-menu-setting-event）
     'pos_touch_panel_reco_jans',                 // touch-panel-order-system.js（touch-panel-menu-setting-event）
-    'pos_touch_panel_promo_text'                 // touch-panel-order-system.js（touch-panel-menu-setting-event）
+    'pos_touch_panel_promo_text',                // touch-panel-order-system.js（touch-panel-menu-setting-event）
+    'pos_last_order_display'                     // order-checkout-display.js（お渡し前の注文キュー。'order-checkout-event'で1件ずつ同期している。
+                                                 // 配列ごと「新しい方を採用」で同期すると、消した注文が別端末の古い配列で復活するため対象外。
+                                                 // Googleドライブのバックアップには、これまで通り入る）
 ];
 
 // touch-panel-order-system.js が商品(jan)ごとに動的にキーを増やしている設定
