@@ -259,7 +259,12 @@ function buildMigrationAnchorNav() {
     ensureMigrationAnchorNavStyle();
     ensureMigrationNavMobileControls();
 
-    const titleEls = Array.from(container.querySelectorAll('.migration-title'));
+    // 非表示にしているブロック（例：「この端末を客用ディスプレイにする」）の見出しは、
+    // メニューにも出さない
+    const titleEls = Array.from(container.querySelectorAll('.migration-title')).filter(el => {
+        const blk = el.closest('.migration-block') || el.parentElement || el;
+        return window.getComputedStyle(blk).display !== 'none';
+    });
 
     let nav = document.getElementById(MIGRATION_NAV_ID);
     if (!nav) {

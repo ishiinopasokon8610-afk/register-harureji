@@ -292,8 +292,12 @@ function notifyAndShowNewOrder() {
                 return;
             }
             if (data.action === 'upsert' && data.record) {
+                // 【修正】商品のチェック切り替えなど「すでにある注文の更新」でも
+                // 「ご注文が入りました」のチャイム・音声が鳴っていた。
+                // 初めて届いた注文（キューに無かったもの）のときだけ知らせる。
+                const alreadyKnown = !!(data.record.orderId && getOrderById(data.record.orderId));
                 upsertOrderInQueue(data.record);
-                notifyAndShowNewOrder();
+                if (alreadyKnown) renderAllOrderCards(); else notifyAndShowNewOrder();
                 return;
             }
 
@@ -304,8 +308,9 @@ function notifyAndShowNewOrder() {
                 return;
             }
             if (data.record) {
+                const alreadyKnown = !!(data.record.orderId && getOrderById(data.record.orderId));
                 upsertOrderInQueue(data.record);
-                notifyAndShowNewOrder();
+                if (alreadyKnown) renderAllOrderCards(); else notifyAndShowNewOrder();
             }
         });
     }

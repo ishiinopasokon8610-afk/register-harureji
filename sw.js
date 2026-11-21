@@ -133,7 +133,16 @@
 // ・変更: 全画面ガードを復活（#touch-panel とお席案内の間だけ、解除しても全画面へ戻す。他の画面では何もしない）。v49。
 // ・変更: 領収書発行では「再発行」の枠を出さない。宛名が空欄の時は、書き込めるように線を引く。v50。
 // ・変更: 領収書の発行元を「haruレジ」に変更。v51。
-const CACHE_VERSION = 'v55';
+const CACHE_VERSION = 'v63';
+// v63: 注文チェックで「ご注文が入りました」が鳴る不具合を修正（order-checkout-display.js）・自動化バーコード一覧のlocalStorage取り込み（discount-home-live-reload-system.js 新規）
+// v62: 詐欺注意画面を1画面化・客用ディスプレイ設定項目を非表示（ui-compact-fixes-system.js 新規）
+// v61: データ用コードをGoogle Driveのバックアップに保存（gdrive-sync-code-backup.js 新規）
+// v60: 精算レシートPNGは画面と同じ色で撮影し、金額は背景に合わせた色にする（sales-mgmt.js）
+// v59: 精算レシートPNGをダークモードでも白地に黒文字で保存（sales-mgmt.js）
+// v58: 業務再開画面を1画面に収める・精算レシートの金額表示（sales-mgmt.js）
+// v57: 精算レシートPNGで数字が枠に隠れる不具合の修正（sales-mgmt.js）
+// v56: 受付画面の呼び出し表示・自動ご案内（seat-guide-call-system.js）／売上管理のスマホ対応と不具合修正（sales-mgmt.js）
+// v55: 店員確認の暗証番号を変更可能に（touch-panel-order-system.js / seat-guide-call-system.js）
 // v54: 自動化バーコード一覧をFirebaseの状態としても同期（discount-system.js）
 // v53: 商品名検索欄でキーボード表示を許可（keyboarddown.js）
 // v52: 自動化バーコードの同期修正（sync-system.js / discount-system.js）
