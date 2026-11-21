@@ -375,10 +375,11 @@ function addDiscountBarcode() {
 function finalizeAddDiscountBarcode(discData, existingIndex) {
     if (existingIndex !== -1) {
         discountBarcodes[existingIndex] = discData;
-        if (typeof speak === 'function') speak("ごちゅうもんありがとうございます。とうろくしました。");
+        // 読み上げは、タッチパネルから注文が送られた時だけ（一覧の操作・手動登録では読み上げない）
+        if (window.__tpOrderRegistering && typeof speak === 'function') speak("ついかのごちゅうもんです。");
     } else {
         discountBarcodes.push(discData);
-        if (typeof speak === 'function') speak("ついかのごちゅうもんです。");
+        if (window.__tpOrderRegistering && typeof speak === 'function') speak("ついかのごちゅうもんです。");
     }
 
     saveDiscounts();
@@ -625,6 +626,7 @@ function saveDiscounts() {
     localStorage.setItem('pos_discounts', JSON.stringify(discountBarcodes));
     if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow();
     broadcastDiscounts();
+    if (typeof discStateSchedulePush === 'function') discStateSchedulePush(800);
 }
 
 function broadcastDiscounts() {
@@ -722,6 +724,97 @@ function discScheduleRebroadcast() {
         setTimeout(waitForChannelAndSubscribeDiscountSync, 500);
     }
 })();
+
+/* =========================================================
+   一覧の「現在の状態」をFirebaseに持たせる同期（イベント受信の取りこぼし対策）
+   ------------------------------------------
+   discount-sync のイベントは、(1) 送った時にオンラインだった端末にしか届かない
+   (2) 24時間で消える (3) 受信の順番待ちで取りこぼすことがある、ため、
+   「PCだけ、タッチパネルで作った自動化バーコードが届かない」ことが起きていた。
+   そこで、pos_sync/{場所}/discounts_state に「いまの一覧＋削除の印」を暗号化して置き、
+   どの端末も、つながった時・変更があった時・数分ごとに、それを読んでマージする。
+   マージは従来と同じ（新しい方を採用）なので、他端末の分を消すことはない。
+   Firebaseのルールは、$code の .write が true なので変更不要。
+   ========================================================= */
+let discStateRef = null;
+let discStateHash = '';
+let discStatePushTimer = null;
+let discStateBusy = false;
+
+function discStateApi() {
+    const p = window.PosSync;
+    if (!p || typeof p.isReady !== 'function' || !p.isReady()) return null;
+    if (typeof p.getBaseRef !== 'function' || !p.getBaseRef()) return null;
+    return p;
+}
+
+async function discStatePush() {
+    const p = discStateApi();
+    if (!p) return;
+    try {
+        const d = await p.encryptJson({ discounts: discountBarcodes, deleted: discLoadTombstones() });
+        await p.getBaseRef().child('discounts_state').set({ d: d, t: firebase.database.ServerValue.TIMESTAMP });
+    } catch (e) {
+        console.warn('[discount-sync] 一覧の保存に失敗しました:', e && e.message ? e.message : e);
+    }
+}
+
+function discStateSchedulePush(delay) {
+    if (discStatePushTimer) clearTimeout(discStatePushTimer);
+    discStatePushTimer = setTimeout(() => { discStatePushTimer = null; discStatePush(); }, delay || 800);
+}
+
+async function discStateApply(snap) {
+    const p = discStateApi();
+    if (!p || discStateBusy) return;
+    discStateBusy = true;
+    try {
+        const v = snap && snap.val ? snap.val() : null;
+        if (!v || typeof v.d !== 'string') {
+            // まだ状態が無い：自分が持っていれば置く
+            if ((discountBarcodes || []).length > 0) discStateSchedulePush(500);
+            return;
+        }
+        const data = await p.decryptJson(v.d);
+        if (!data || !Array.isArray(data.discounts)) return;
+        const before = JSON.stringify(discountBarcodes);
+        const remoteLacks = discMergeRemote(data.discounts, data.deleted || {});
+        if (JSON.stringify(discountBarcodes) !== before) {
+            try { if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow(); } catch (e) { /* 無視 */ }
+            if (document.getElementById('discount-tbody')) renderDiscounts();
+            try {
+                if (typeof renderHomeAutomationBlocksIfVisible === 'function') renderHomeAutomationBlocksIfVisible();
+                if (document.getElementById('automation-barcode-list-overlay') && typeof renderAutomationBarcodeListBox === 'function') renderAutomationBarcodeListBox();
+            } catch (e) { /* 無視 */ }
+        }
+        if (remoteLacks) discStateSchedulePush(800); // 相手に足りないものが自分にあれば送り返す
+    } catch (e) {
+        console.warn('[discount-sync] 一覧の受け取りに失敗しました:', e && e.message ? e.message : e);
+    } finally {
+        discStateBusy = false;
+    }
+}
+
+function discStateAttach() {
+    const p = discStateApi();
+    if (!p) return;
+    const hash = p.getPathHash();
+    if (discStateRef && discStateHash === hash) return;
+    if (discStateRef) { try { discStateRef.off('value'); } catch (e) { /* 無視 */ } }
+    discStateHash = hash;
+    discStateRef = p.getBaseRef().child('discounts_state');
+    discStateRef.on('value', discStateApply, (err) => {
+        console.warn('[discount-sync] 一覧の監視でエラー:', err && err.message ? err.message : err);
+    });
+}
+
+window.addEventListener('pos-sync-ready', () => { setTimeout(discStateAttach, 300); });
+setInterval(() => {
+    discStateAttach();
+    // 念のため数分ごとに、いまの状態を読み直す（監視が止まっていた時の保険）
+    const p = discStateApi();
+    if (p && discStateRef) discStateRef.once('value').then(discStateApply).catch(() => {});
+}, 60000);
 
 // 起動してつながった時：
 //  ・自分が持っている一覧を他端末へ送る（マージ方式なので、送っても他端末の分は消えない）

@@ -12,6 +12,9 @@
 //         空きが無い時は「ただいま満席です」と出して、受付は残しておく。
 //       ・「いらっしゃらない」→ その受付を外し、「次のお客様をお呼びいたします」と次の番号を呼ぶ。
 //  ③ 受付データは Firebase（pos_sync/{場所}/seat_guide/tickets）で、すべての端末と共有する。
+//  ③' お客様用の受付画面（受付タブ）が使われていない間は、店員が呼んだ番号を表示し、10秒に1回読み上げる。
+//      お客様が受付時に選んだパスワードの記号を選んで、合っていれば自動で空きテーブルへご案内する
+//      （3回間違えるとロック。スタッフが呼び直す）。呼び出し中の番号は pos_sync/{場所}/seat_guide/calling で全端末に共有。
 //  ④ お席案内の画面は、開くと全画面モードになる（閉じるのは×の長押し）。
 //
 // 【空きテーブルの調べ方】touch-panel-order-system.js の
@@ -39,10 +42,16 @@
   var TICKET_TTL_MS = 12 * 60 * 60 * 1000; // 12時間たった受付は自動で消す
 
   var tickets = {}; // no -> {no, pw(記号1つ), n(人数), at}
-  var ui = { tab: 'call', cnt: '', pw: '', calling: '', msg: '', result: null, busy: false };
+  var ui = { tab: 'call', cnt: '', pw: '', calling: '', msg: '', result: null, busy: false, dismissAt: 0, wrong: 0 };
   var resultTimer = null;
   var ticketsRef = null;
+  var callingRef = null;
   var attachedHash = '';
+  var calling = null;        // いま呼び出し中の受付 {no, at}（全端末で共有）
+  var callRepeatTimer = null;
+  var CALL_REPEAT_MS = 10000; // お客様用の受付画面は、呼び出し中は10秒に1回読み上げる
+  var CALL_EXPIRE_MS = 10 * 60 * 1000;
+  var WRONG_MAX = 3;
 
   /* ---------- 小道具 ---------- */
   function $(id) { return document.getElementById(id); }
@@ -121,6 +130,46 @@
     refreshBlock();
     if ($('seat-guide-overlay') && !ui.result && ui.tab === 'reg') renderOverlay();
   }
+  // 呼び出し中の番号（店員が呼ぶと全端末に共有される）
+  function onCalling(snap) {
+    var v = null;
+    try { v = snap.val(); } catch (e) {}
+    var next = (v && v.no && (now() - (v.at || 0) < CALL_EXPIRE_MS)) ? { no: String(v.no), at: v.at || 0 } : null;
+    var changed = !calling !== !next || (next && calling && (calling.no !== next.no || calling.at !== next.at));
+    if (changed && next) ui.wrong = 0;
+    calling = next;
+    if (changed && $('seat-guide-overlay') && ui.tab === 'reg' && !ui.result) renderOverlay();
+    else updateRepeat();
+  }
+  function setCalling(no) {
+    var at = now();
+    calling = no ? { no: String(no), at: at } : null;
+    ensureAttached();
+    try {
+      if (callingRef) { if (no) callingRef.set({ no: String(no), at: at }); else callingRef.remove(); }
+    } catch (e) {}
+  }
+  // お客様用の受付画面が、いま「使われていない」か（人数やパスワードの入力中・結果表示中でない）
+  function callPanelShowing() {
+    return !!($('seat-guide-overlay') && ui.tab === 'reg' && !ui.result && !ui.busy && !ui.cnt && !ui.pw &&
+      calling && tickets[calling.no] && ui.dismissAt !== calling.at);
+  }
+  function speakCall() {
+    if (!calling || !tickets[calling.no]) return;
+    say(kana(calling.no) + 'ばん の おきゃくさま、 いらっしゃいますか。 ぱすわーど の きごう を えらんで ください');
+  }
+  function stopRepeat() { if (callRepeatTimer) { clearInterval(callRepeatTimer); callRepeatTimer = null; } }
+  function updateRepeat() {
+    if (callPanelShowing()) {
+      if (!callRepeatTimer) {
+        speakCall();
+        callRepeatTimer = setInterval(function () { if (callPanelShowing()) speakCall(); else stopRepeat(); }, CALL_REPEAT_MS);
+      }
+    } else {
+      stopRepeat();
+    }
+  }
+
   function ensureAttached() {
     var p = sync();
     if (!p || !p.isReady || !p.isReady() || !p.getPathHash) return;
@@ -129,7 +178,10 @@
     var base = baseRef();
     if (!base) return;
     try { if (ticketsRef) ticketsRef.off('value', onTickets); } catch (e) {}
+    try { if (callingRef) callingRef.off('value', onCalling); } catch (e) {}
     attachedHash = hash;
+    callingRef = base.child('calling');
+    callingRef.on('value', onCalling, function () {});
     ticketsRef = base.child('tickets');
     ticketsRef.on('value', onTickets, function (err) {
       console.warn('[seat-guide] 受付データを読めません。Firebaseのルールで pos_sync/{場所}/' + NODE + ' を許可してください:', err && err.message ? err.message : err);
@@ -252,19 +304,24 @@
   function callTicket(no) {
     if (!tickets[no]) { fail('この受付は、すでにありません'); return; }
     ui.calling = no; ui.msg = ''; ui.result = null;
+    setCalling(no);
     say(kana(no) + 'ばん の おきゃくさま、 いらっしゃいますか');
     renderOverlay();
   }
   function callNext(exceptNo) {
     var w = waitingList(exceptNo);
-    if (!w.length) { ui.calling = ''; ui.msg = 'お待ちのお客様はいません'; renderOverlay(); return; }
+    if (!w.length) { ui.calling = ''; setCalling(null); ui.msg = 'お待ちのお客様はいません'; renderOverlay(); return; }
     callTicket(w[0].no);
   }
 
   // 「いらっしゃる」：空きテーブルへ案内する
   function doGuide() {
     if (ui.busy || !ui.calling) return;
-    var no = ui.calling;
+    guideNo(ui.calling);
+  }
+  // 受付番号 no を空きテーブルへ案内する（店員の「いらっしゃる」と、お客様がパスワードを合わせた時の自動案内の両方）
+  function guideNo(no) {
+    if (ui.busy) return;
     var tk = tickets[no];
     if (!tk) { fail('この受付は、すでにありません'); return; }
     var table = findFreeTable();
@@ -282,6 +339,7 @@
       occupy(table);
       ui.result = { type: 'guide', no: no, table: table, n: tk.n };
       ui.calling = ''; ui.msg = '';
+      if (calling && calling.no === String(no)) setCalling(null);
       say(kana(table) + 'ばん の てーぶる へ どうぞ');
       scheduleResultClose(15000);
       refreshBlock();
@@ -297,6 +355,7 @@
     removeTicket(no, function () {
       ui.busy = false;
       ui.calling = '';
+      setCalling(null);
       refreshBlock();
       if (!waitingList(no).length) {
         ui.msg = no + '番はいらっしゃいませんでした。お待ちのお客様はいません';
@@ -359,7 +418,7 @@
     click();
     ensureAttached();
     enterFullscreen(); // ボタンを押した操作の中で呼ぶ（そうしないとブラウザに拒否される）
-    ui.tab = tab || 'call'; ui.cnt = ''; ui.pw = ''; ui.calling = ''; ui.msg = ''; ui.result = null; ui.busy = false;
+    ui.tab = tab || 'call'; ui.cnt = ''; ui.pw = ''; ui.calling = ''; ui.msg = ''; ui.result = null; ui.busy = false; ui.dismissAt = 0; ui.wrong = 0;
     var o = $('seat-guide-overlay');
     if (!o) {
       o = document.createElement('div');
@@ -382,10 +441,15 @@
   function closeOverlay() {
     click();
     clearTimeout(resultTimer);
+    stopRepeat();
     var o = $('seat-guide-overlay');
     if (o) o.remove();
   }
   function renderOverlay() {
+    renderOverlayInner();
+    updateRepeat();
+  }
+  function renderOverlayInner() {
     var o = $('seat-guide-overlay');
     if (!o) return;
     // 右上の×だけ（タイトル・タブは出さない。呼び出し／受付はデータ管理の画面から開く）
@@ -438,6 +502,22 @@
         '</div>';
       return;
     }
+    if (callPanelShowing()) {
+      // お客様用の受付画面が使われていない間は、呼び出し中の番号を出す。
+      // 受付した時に選んだパスワードの記号が合えば、自動で空いているテーブルへご案内する。
+      var cc = tickets[calling.no];
+      var left = Math.max(0, WRONG_MAX - ui.wrong);
+      o.innerHTML = top +
+        '<div class="sg-res">' +
+          '<div class="sg-big">' + esc(cc.no) + '</div>' +
+          '<h2>番のお客様（' + esc(cc.n || '-') + '名様）<br>お待たせしました</h2>' +
+          '<div style="font-size:20px;font-weight:800">受付の時に選んだ<br>パスワードの記号をえらんでください</div>' +
+          '<div class="sg-grid sg-syms">' + SYMBOLS.map(function (m) { return '<button data-act="callsym" data-v="' + m + '"' + (left ? '' : ' disabled') + '>' + m + '</button>'; }).join('') + '</div>' +
+          '<div class="sg-msg">' + esc(ui.msg) + '</div>' +
+          '<button class="sg-tab" data-act="dismisscall" style="background:#33475f">新しく受付する</button>' +
+        '</div>';
+      return;
+    }
     var keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'C', '0', '⌫'].map(function (k) {
       return '<button data-act="key" data-v="' + k + '">' + k + '</button>';
     }).join('');
@@ -470,6 +550,18 @@
     }
     if (act === 'sym') { click(); ui.msg = ''; ui.pw = v; return renderOverlay(); }
     if (act === 'reg') return doRegister();
+    if (act === 'dismisscall') { click(); if (calling) ui.dismissAt = calling.at; ui.msg = ''; return renderOverlay(); }
+    if (act === 'callsym') {
+      if (!callPanelShowing() || ui.busy) return;
+      var tk = tickets[calling.no];
+      if (ui.wrong >= WRONG_MAX) { ui.msg = '間違いが続きました。スタッフをお呼びください'; return renderOverlay(); }
+      if (tk && v === tk.pw) { click(); ui.msg = ''; ui.wrong = 0; ui.calling = calling.no; return guideNo(calling.no); }
+      ui.wrong++;
+      ui.msg = ui.wrong >= WRONG_MAX ? '間違いが続きました。スタッフをお呼びください' : 'パスワードが違います（あと' + (WRONG_MAX - ui.wrong) + '回）';
+      try { if (typeof playSound === 'function') playSound('error'); } catch (e) {}
+      say('ぱすわーど が ちがい ます');
+      return renderOverlay();
+    }
     if (act === 'next') { click(); return callNext(''); }
     if (act === 'callno') { click(); return callTicket(v); }
     if (act === 'recall') { click(); return callTicket(ui.calling); }
@@ -494,8 +586,26 @@
         '<button type="button" id="sg-open-reg" style="background:#5c6bc0;color:#fff;padding:10px 16px;border:none;border-radius:6px;font-weight:700;cursor:pointer">＋ 受付する</button>' +
       '</div>' +
       '<label style="font-size:13px">テーブルの数：<input type="number" id="sg-table-count" min="1" max="200" style="width:70px;padding:4px"> 卓</label>' +
+      '<div style="margin-top:12px;padding-top:10px;border-top:1px dashed #ffb74d;font-size:13px">' +
+        '🔑 店員確認の暗証番号（タッチパネル・4桁）：<input type="text" id="sg-staff-pin" maxlength="4" inputmode="numeric" pattern="[0-9]*" autocomplete="off" style="width:80px;padding:4px;font-size:16px;letter-spacing:.2em;text-align:center">' +
+        ' <button type="button" id="sg-staff-pin-save" style="background:#2e7d32;color:#fff;padding:6px 14px;border:none;border-radius:6px;font-weight:700;cursor:pointer">保存</button>' +
+        ' <span id="sg-staff-pin-msg" style="color:#2e7d32"></span>' +
+        '<div style="color:#888;margin-top:4px">初期値は 5678 です。保存すると他の端末にも同期されます。</div>' +
+      '</div>' +
       '<div id="sg-list" style="margin-top:10px;font-size:14px"></div>';
     c.appendChild(b);
+    var pinInp = b.querySelector('#sg-staff-pin');
+    var pinMsg = b.querySelector('#sg-staff-pin-msg');
+    try { pinInp.value = localStorage.getItem('pos_touch_panel_kiosk_pin') || '5678'; } catch (e) { pinInp.value = '5678'; }
+    b.querySelector('#sg-staff-pin-save').addEventListener('click', function () {
+      var v = String(pinInp.value || '').replace(/[０-９]/g, function (ch) { return String.fromCharCode(ch.charCodeAt(0) - 0xfee0); }).trim();
+      if (!/^\d{4}$/.test(v)) { pinMsg.style.color = '#c62828'; pinMsg.textContent = '4桁の数字で入力してください'; return; }
+      try { localStorage.setItem('pos_touch_panel_kiosk_pin', v); } catch (e) {}
+      pinInp.value = v;
+      pinMsg.style.color = '#2e7d32'; pinMsg.textContent = '保存しました';
+      setTimeout(function () { pinMsg.textContent = ''; }, 3000);
+      backup();
+    });
     b.querySelector('#sg-open-call').addEventListener('click', function () { openOverlay('call'); });
     b.querySelector('#sg-open-reg').addEventListener('click', function () { openOverlay('reg'); });
     var inp = b.querySelector('#sg-table-count');
