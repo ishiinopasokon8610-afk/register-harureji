@@ -387,6 +387,8 @@
         const db = st.db;
         const base = db.ref('pos_sync/' + st.hash);
         const saved = loadLastSeenFor(st.hash);
+        // 保存された「最後に受け取った時刻」が未来(5分超)だと、それ以降の通信を全部読み飛ばしてしまうので捨てる
+        if (saved.t && saved.t > serverNow() + 5 * 60 * 1000) { saved.t = 0; saved.id = ''; }
         const first = !saved.t;
         st.lastSeen = saved.t || (serverNow() - 10000); // 初めての端末は「今から」のものだけ受け取る
         st.lastSeenId = saved.id || '';

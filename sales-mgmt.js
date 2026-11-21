@@ -336,7 +336,7 @@ function performCloseBusiness(diff) {
         //       高さ・はみ出しの制限を外して、全体を高解像度で撮る。
         html2canvas(salesMgmtScreen, {
             scale: 2,
-            backgroundColor: null,
+            backgroundColor: '#ffffff',
             useCORS: true,
             scrollX: 0,
             scrollY: 0,
@@ -345,24 +345,11 @@ function performCloseBusiness(diff) {
             onclone: (doc) => {
                 const c = doc.getElementById('sales-mgmt-screen');
                 if (!c) return;
-                // 画面と同じ色（ダークモードなら暗い背景・明るい文字）で撮る。色は変えない。
-                // ただし金額は、背景に対して読みやすい色（暗い背景→白、明るい背景→黒）にする。
-                const win = doc.defaultView;
-                const parseRgb = (rgb) => {
-                    const m = String(rgb).match(/rgba?\(([^)]+)\)/);
-                    if (!m) return null;
-                    const p = m[1].split(',').map(x => parseFloat(x));
-                    return { l: (0.299 * p[0] + 0.587 * p[1] + 0.114 * p[2]) / 255, a: p.length > 3 ? p[3] : 1 };
-                };
-                let bgCss = win.getComputedStyle(c).backgroundColor;
-                let bgInfo = parseRgb(bgCss);
-                if (!bgInfo || bgInfo.a < 0.95) {
-                    bgCss = win.getComputedStyle(doc.body).backgroundColor;
-                    bgInfo = parseRgb(bgCss);
-                }
-                if (!bgInfo || bgInfo.a < 0.95) { bgCss = '#ffffff'; bgInfo = { l: 1, a: 1 }; }
-                const amountColor = bgInfo.l < 0.45 ? '#ffffff' : '#111111';
+                // レシートは、ダークモードでも必ず「背景：白／文字：黒」で撮る。
+                const bgCss = '#ffffff';
+                const amountColor = '#000000';
                 c.style.setProperty('background-color', bgCss, 'important');
+                c.style.setProperty('color', '#000000', 'important');
                 c.style.boxSizing = 'border-box';
                 c.style.width = Math.max(salesMgmtScreen.scrollWidth, 720) + 'px';
                 c.style.margin = '0';
@@ -376,6 +363,9 @@ function performCloseBusiness(diff) {
                 c.querySelectorAll('*').forEach(el => {
                     el.style.overflow = 'visible';
                     el.style.textOverflow = 'clip';
+                    el.style.setProperty('color', '#000000', 'important');
+                    el.style.setProperty('text-shadow', 'none', 'important');
+                    if (el.tagName !== 'BUTTON') el.style.setProperty('background-color', 'transparent', 'important');
                     if (el.style.maxHeight) el.style.maxHeight = 'none';
                 });
                 // 入力欄は写さない（金額は、すでにある「¥0」などの小計を大きく表示する）
