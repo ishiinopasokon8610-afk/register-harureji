@@ -180,6 +180,12 @@ function isOrderRemoved(orderId) {
 }
 
 // 届いたイベントが「いま送られたもの」か（再接続で再生された過去のものではないか）
+// 商品のチェックが1つでも入っている更新は「新しい注文」ではなく「チェックの更新」。
+// この端末が注文を持っていなくても（例：開き直した直後）、チェック更新では鳴らさない。
+function isCheckUpdateRecord(record) {
+    return !!(record && Array.isArray(record.checkedItems) && record.checkedItems.some(Boolean));
+}
+
 function isFreshOrderMessage(message) {
     try {
         const ts = message && message.timestamp;
@@ -276,7 +282,7 @@ function showOrderChimeReasonToast(reason) {
             el.style.cssText = 'position:fixed;left:50%;bottom:70px;transform:translateX(-50%);z-index:100060;max-width:92vw;background:rgba(0,0,0,0.85);color:#fff;padding:8px 14px;border-radius:14px;font-size:12px;line-height:1.5;text-align:center;pointer-events:none;';
             document.body.appendChild(el);
         }
-        el.textContent = '🔔 注文チャイム（v67）：' + reason;
+        el.textContent = '🔔 注文チャイム（v68）：' + reason;
         el.style.display = 'block';
         clearTimeout(el.__t);
         el.__t = setTimeout(() => { el.style.display = 'none'; }, 7000);
@@ -361,7 +367,7 @@ function notifyAndShowNewOrder(reason) {
                 // 初めて届いた、いま送られた注文のときだけ知らせる（再接続で再生された過去分では鳴らさない）。
                 const alreadyKnown = !!(id && getOrderById(id));
                 upsertOrderInQueue(data.record);
-                if (!alreadyKnown && isFreshOrderMessage(message)) notifyAndShowNewOrder('他の端末から、この端末に無い注文の更新が届いた（注文…' + String(id || '').slice(-6) + '）'); else renderAllOrderCards();
+                if (!alreadyKnown && !isCheckUpdateRecord(data.record) && isFreshOrderMessage(message)) notifyAndShowNewOrder('他の端末から、この端末に無い注文の更新が届いた（注文…' + String(id || '').slice(-6) + '）'); else renderAllOrderCards();
                 return;
             }
 
@@ -376,7 +382,7 @@ function notifyAndShowNewOrder(reason) {
                 if (isOrderRemoved(id)) return;
                 const alreadyKnown = !!(id && getOrderById(id));
                 upsertOrderInQueue(data.record);
-                if (!alreadyKnown && isFreshOrderMessage(message)) notifyAndShowNewOrder('旧形式のイベントで届いた注文'); else renderAllOrderCards();
+                if (!alreadyKnown && !isCheckUpdateRecord(data.record) && isFreshOrderMessage(message)) notifyAndShowNewOrder('旧形式のイベントで届いた注文'); else renderAllOrderCards();
             }
         });
     }
