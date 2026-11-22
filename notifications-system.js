@@ -104,6 +104,21 @@ document.addEventListener('DOMContentLoaded', () => {
 /* =========================================================
    各種同期イベントをフックして、他端末での新規追加を検知する
    ========================================================= */
+
+// 【不具合修正】レジでバーコードをピッとしただけ（会計・使用済みの更新など）でも、
+// 他の端末に「新しい○○が追加されました」の通知が来ていた。
+// 原因：「前に見た一覧」を、同期のメッセージが届いた時にしか更新していなかったため、
+//       この端末の中で増えた・変わったものが「新しい」と誤判定されていた。
+// 対応：①この端末の保存データにすでにあるものは新しいとみなさない
+//       ②使用済み（アーカイブ）のバーコードは通知しない
+//       ③会計は、記録の時刻が2分より前のものは通知しない
+function notifLocalList(key) {
+    try { const v = JSON.parse(localStorage.getItem(key) || '[]'); return Array.isArray(v) ? v : []; } catch (e) { return []; }
+}
+function notifLocalHas(key, field, value) {
+    return notifLocalList(key).some(x => x && x[field] === value);
+}
+
 (function hookNotificationsIntoSync() {
     function tryHook() {
         if (typeof channel === 'undefined' || !channel) {
@@ -120,7 +135,10 @@ document.addEventListener('DOMContentLoaded', () => {
             const isOwn = (typeof SYNC_DEVICE_ID !== 'undefined') && msg.data.senderId === SYNC_DEVICE_ID;
             if (!isOwn) {
                 msg.data.discounts.forEach(d => {
-                    if (!lastKnownDiscountBarcodes.has(d.barcode)) {
+                    if (!d || d.archived) return;
+                    if (!lastKnownDiscountBarcodes.has(d.barcode) &&
+                        !notifLocalHas('pos_discounts', 'barcode', d.barcode) &&
+                        !((typeof discountBarcodes !== 'undefined' ? discountBarcodes : []).some(x => x && x.barcode === d.barcode))) {
                         if (isTouchPanelCallDiscountName(d.name)) {
                             fireDesktopNotification('🍽️ タッチパネルからの呼び出しです', d.name);
                         } else {
@@ -141,7 +159,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const isOwn = (typeof SYNC_DEVICE_ID !== 'undefined') && msg.data.senderId === SYNC_DEVICE_ID;
             if (!isOwn) {
                 msg.data.products.forEach(p => {
-                    if (!lastKnownProductJans.has(p.jan)) {
+                    if (!lastKnownProductJans.has(p.jan) && !notifLocalHas('pos_products', 'jan', p.jan) &&
+                        !((typeof products !== 'undefined' ? products : []).some(x => x && x.jan === p.jan))) {
                         fireDesktopNotification('📦 新しい商品が追加されました', p.name);
                     }
                 });
@@ -158,7 +177,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const isOwn = (typeof SYNC_DEVICE_ID !== 'undefined') && msg.data.senderId === SYNC_DEVICE_ID;
             if (!isOwn) {
                 msg.data.history.forEach(h => {
-                    if (!lastKnownHistoryIds.has(h.id)) {
+                    const hAge = Date.now() - (Number(h.id) || (h.dateISO ? new Date(h.dateISO).getTime() : 0));
+                    if (!lastKnownHistoryIds.has(h.id) && !notifLocalHas('pos_history', 'id', h.id) && hAge < 2 * 60 * 1000) {
                         fireDesktopNotification('🧾 新しいお会計がありました', `¥${(h.total || 0).toLocaleString()}（担当: ${h.clerk || '-'}）`);
                     }
                 });
@@ -214,7 +234,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const isOwn = (typeof SYNC_DEVICE_ID !== 'undefined') && msg.data.senderId === SYNC_DEVICE_ID;
             if (!isOwn) {
                 msg.data.customers.forEach(c => {
-                    if (c && c.barcode && !lastKnownCustomerBarcodes.has(c.barcode)) {
+                    if (c && c.barcode && !lastKnownCustomerBarcodes.has(c.barcode) && !notifLocalHas('pos_customers', 'barcode', c.barcode)) {
                         const name = c.name || `${c.lastName || ''} ${c.firstName || ''}`.trim() || c.barcode;
                         fireDesktopNotification('👤 新しい会員が登録されました', name);
                     }

@@ -33,6 +33,31 @@
         padding: clamp(8px, 2vh, 16px) clamp(24px, 8vw, 60px) !important;
         min-width: min(70vw, 320px) !important; margin: 0 !important;
     }
+
+    #customer-age-modal { overflow: hidden !important; padding: 0 !important; box-sizing: border-box !important; }
+    #customer-age-modal .customer-age-box {
+        box-sizing: border-box !important;
+        width: min(94vw, 760px) !important; max-width: 94vw !important;
+        max-height: 96vh !important; max-height: 96dvh !important;
+        overflow: hidden !important; margin: 0 auto !important;
+        padding: clamp(10px, 3vh, 28px) clamp(14px, 4vw, 36px) !important;
+        display: flex !important; flex-direction: column !important;
+        align-items: center !important; justify-content: center !important;
+        gap: clamp(6px, 2vh, 18px) !important; text-align: center !important;
+    }
+    #customer-age-modal .age-icon { font-size: clamp(34px, 11vh, 80px) !important; line-height: 1 !important; margin: 0 !important; }
+    #customer-age-modal .age-title { font-size: clamp(20px, 5.5vh, 40px) !important; line-height: 1.25 !important; margin: 0 !important; }
+    #customer-age-modal .age-desc { font-size: clamp(13px, 3.4vh, 24px) !important; line-height: 1.5 !important; margin: 0 !important; }
+    #customer-age-modal .age-btn-group { margin: 0 !important; width: 100% !important; display: flex !important; justify-content: center !important; gap: clamp(8px, 3vw, 24px) !important; flex-wrap: nowrap !important; }
+    #customer-age-modal .age-btn {
+        font-size: clamp(15px, 4.2vh, 28px) !important;
+        padding: clamp(8px, 2vh, 16px) clamp(14px, 5vw, 44px) !important;
+        flex: 1 1 0 !important; min-width: 0 !important; max-width: 320px !important; margin: 0 !important;
+    }
+    @media (max-height: 420px) {
+        #customer-age-modal .customer-age-box { flex-direction: row !important; flex-wrap: wrap !important; }
+        #customer-age-modal .age-icon { font-size: 30px !important; }
+    }
     @media (max-height: 420px) {
         #customer-fraud-modal .customer-fraud-box { flex-direction: row !important; flex-wrap: wrap !important; }
         #customer-fraud-modal .fraud-icon { font-size: 30px !important; }

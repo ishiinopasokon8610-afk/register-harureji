@@ -195,6 +195,12 @@ function isFreshOrderMessage(message) {
     } catch (e) { return true; }
 }
 
+// 割引・値引きの行（マイナス金額／「値引き/その他」）は、注文カードには含めない（調理・受け渡しの対象ではないため）
+function isOrderDiscountLine(i) {
+    if (!i) return false;
+    return (Number(i.price) < 0) || i.genre === '値引き/その他';
+}
+
 function getOrderById(orderId) {
     return getOrderQueue().find(r => r.orderId === orderId) || null;
 }
@@ -282,7 +288,7 @@ function showOrderChimeReasonToast(reason) {
             el.style.cssText = 'position:fixed;left:50%;bottom:70px;transform:translateX(-50%);z-index:100060;max-width:92vw;background:rgba(0,0,0,0.85);color:#fff;padding:8px 14px;border-radius:14px;font-size:12px;line-height:1.5;text-align:center;pointer-events:none;';
             document.body.appendChild(el);
         }
-        el.textContent = '🔔 注文チャイム（v68）：' + reason;
+        el.textContent = '🔔 注文チャイム：' + reason;
         el.style.display = 'block';
         clearTimeout(el.__t);
         el.__t = setTimeout(() => { el.style.display = 'none'; }, 7000);
@@ -416,11 +422,14 @@ function getReceiptNumberSafe(record) {
 
 function buildOrderCardInnerHTML(record) {
     const orderId = record.orderId;
-    const items = Array.isArray(record.cartSnapshot) ? record.cartSnapshot : [];
+    const allItems = Array.isArray(record.cartSnapshot) ? record.cartSnapshot : [];
     const safe = (typeof escapeHtml === 'function') ? escapeHtml : (s) => s;
     const checkedItems = Array.isArray(record.checkedItems) ? record.checkedItems : [];
+    // 割引の行は表示せず、チェックの番号（idx）は元のままにする
+    const visible = allItems.map((i, idx) => ({ i, idx })).filter(o => !isOrderDiscountLine(o.i));
+    const items = visible.map(o => o.i);
     const itemsHtml = items.length > 0
-        ? items.map((i, idx) => {
+        ? visible.map(({ i, idx }) => {
             const isChecked = !!checkedItems[idx];
             return `<div class="order-checkout-home-block-item${isChecked ? ' is-checked' : ''}" onclick="toggleOrderHomeItemChecked('${orderId}', ${idx})"
                 style="display:flex; justify-content:space-between; cursor:pointer; padding:2px 4px; margin:1px 0; border-radius:4px; ${isChecked ? 'background:rgba(255,255,255,0.35); text-decoration:line-through; opacity:0.75;' : ''}">
@@ -428,8 +437,8 @@ function buildOrderCardInnerHTML(record) {
             </div>`;
         }).join('')
         : `<div>${safe(record.items || '')}</div>`;
-    const allChecked = items.length > 0 && items.every((_, idx) => !!checkedItems[idx]);
-    const uncheckedCount = items.length - checkedItems.filter(Boolean).length;
+    const allChecked = visible.length > 0 && visible.every(o => !!checkedItems[o.idx]);
+    const uncheckedCount = visible.filter(o => !checkedItems[o.idx]).length;
 
     return `
         <div class="order-checkout-home-block-timer" style="position:absolute; top:6px; right:8px; font-size:11px; color:#e65100; font-family:monospace;">00:00</div>
@@ -623,7 +632,8 @@ function completeOrderHomeBlock(event, orderId) {
     if (!record) return;
     const items = Array.isArray(record.cartSnapshot) ? record.cartSnapshot : [];
     const checkedItems = Array.isArray(record.checkedItems) ? record.checkedItems : [];
-    const allChecked = items.length > 0 && items.every((_, idx) => !!checkedItems[idx]);
+    const visibleIdx = items.map((it, idx) => idx).filter(idx => !isOrderDiscountLine(items[idx]));
+    const allChecked = visibleIdx.length > 0 && visibleIdx.every(idx => !!checkedItems[idx]);
     if (!allChecked) return; // ボタンがdisabledでも念のため二重にガードする
 
     removeOrderFromQueue(orderId);

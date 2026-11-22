@@ -27,7 +27,7 @@
 // ==========================================
 
 // ★リリースのたびに、この値を書き換えてください★
-const APP_VERSION = 'v3.0.54';
+const APP_VERSION = 'v3.0.55';
 
 // このファイル自身のURL（script要素のsrcから逆算する。
 // index.html側でファイル名を変更・移動していても追従できるようにするため）
@@ -41,7 +41,7 @@ function getSelfScriptUrl() {
 }
 
 const UPDATE_CHECK_DISMISSED_KEY = 'pos_update_notice_dismissed_version';
-const UPDATE_CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5分ごと
+const UPDATE_CHECK_INTERVAL_MS = 60 * 1000; // 1分ごと
 const UPDATE_CHECK_MIN_GAP_MS = 30 * 1000; // タブに戻った時の再チェックは、前回から最低30秒あける
 let lastAppUpdateCheckAt = 0;
 
@@ -106,6 +106,27 @@ function ensureVersionBadge() {
     badge.innerText = APP_VERSION;
     document.body.appendChild(badge);
 }
+
+// 客用画面・タッチパネル・呼び出し画面（お席案内）・セルフレジでは、バージョン表示を出さない
+function isBadgeHiddenScreen() {
+    const shown = (id) => {
+        const el = document.getElementById(id);
+        if (!el) return false;
+        const cs = getComputedStyle(el);
+        return cs.display !== 'none' && cs.visibility !== 'hidden' && (el.offsetWidth > 0 || el.offsetHeight > 0);
+    };
+    try {
+        if (isTouchPanelInUse()) return true;
+        if (typeof isCustomerDisplayDevice === 'function' && isCustomerDisplayDevice()) return true;
+        const cs = document.getElementById('customer-screen');
+        if (cs && cs.classList.contains('active')) return true;
+        return ['touch-panel-overlay', 'seat-guide-overlay', 'self-checkout-root'].some(shown);
+    } catch (e) { return false; }
+}
+setInterval(() => {
+    const b = document.getElementById('app-version-badge');
+    if (b) b.style.display = isBadgeHiddenScreen() ? 'none' : '';
+}, 500);
 
 /* =========================================================
    ② 新バージョン通知バナー
@@ -209,11 +230,35 @@ async function checkForAppUpdate() {
         const latestVersion = match[1];
         if (latestVersion && isNewerAppVersion(latestVersion, APP_VERSION)) {
             showUpdateAvailableNotice(latestVersion);
+            autoApplyUpdate(latestVersion);
         }
     } catch (err) {
         // オフライン・通信エラー時は静かに諦める（レジ操作自体は継続できるようにする）
         console.warn('アップデート確認に失敗しました（オフラインの可能性があります）:', err);
     }
+}
+
+// 新しい版が見つかったら、すぐ自動で更新（リロード）する。
+// ・タッチパネル（お客様の画面・お席案内）を表示している端末は、これまで通り自動更新しない
+// ・会計の途中（カートに商品がある）の間は待ち、空になってから更新する
+// ・同じ版への自動更新は1タブ1回まで（古いキャッシュが残って無限に再読み込みするのを防ぐ）
+const AUTO_UPDATE_DONE_KEY = 'pos_auto_update_done_version';
+let autoUpdateWaiting = false;
+function autoApplyUpdate(latestVersion) {
+    try { if (sessionStorage.getItem(AUTO_UPDATE_DONE_KEY) === latestVersion) return; } catch (e) {}
+    if (autoUpdateWaiting) return;
+    autoUpdateWaiting = true;
+    const tryNow = () => {
+        if (isTouchPanelInUse()) { autoUpdateWaiting = false; return; }
+        let busy = false;
+        try { busy = (typeof cart !== 'undefined' && Array.isArray(cart) && cart.length > 0); } catch (e) {}
+        if (busy) { setTimeout(tryNow, 5000); return; }
+        try { sessionStorage.setItem(AUTO_UPDATE_DONE_KEY, latestVersion); sessionStorage.removeItem(UPDATE_CHECK_DISMISSED_KEY); } catch (e) {}
+        showUpdateAvailableNotice(latestVersion);
+        const b = document.getElementById('app-update-reload-btn');
+        if (b) b.click(); else location.reload();
+    };
+    tryNow();
 }
 
 document.addEventListener('DOMContentLoaded', () => {
