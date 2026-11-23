@@ -345,11 +345,42 @@ function performCloseBusiness(diff) {
             onclone: (doc) => {
                 const c = doc.getElementById('sales-mgmt-screen');
                 if (!c) return;
-                // レシートは、ダークモードでも必ず「背景：白／文字：黒」で撮る。
+                // 撮影用の複製は、ダークモードを外して「通常モード（明るい画面）」の色にする。
+                // 背景は白。文字の色は通常モードのまま（過不足の緑・赤などもそのまま）。
+                const win = doc.defaultView;
+                try {
+                    [doc.documentElement, doc.body].forEach(n => {
+                        if (!n) return;
+                        Array.from(n.classList).forEach(cl => { if (/dark|night/i.test(cl)) n.classList.remove(cl); });
+                        Array.from(n.attributes).forEach(at => { if (/theme|dark|night|color-scheme/i.test(at.name) || /dark|night/i.test(at.value)) { if (at.name !== 'class' && at.name !== 'style' && at.name !== 'id') n.removeAttribute(at.name); } });
+                        if (n.style) { n.style.filter = 'none'; n.style.colorScheme = 'light'; }
+                    });
+                    // ダークモード専用に差し込まれた<style>（idに dark / night を含むもの）だけ外す。
+                    doc.querySelectorAll('style[id]').forEach(st => { if (/dark|night/i.test(st.id)) st.remove(); });
+                    // 色の変数（--で始まるもの）が直接書かれていたら外す
+                    [doc.documentElement, doc.body].forEach(n => {
+                        if (!n || !n.style) return;
+                        Array.from(n.style).filter(k => k.startsWith('--')).forEach(k => n.style.removeProperty(k));
+                    });
+                } catch (e) { /* 無視 */ }
+                // ダーク/ライトモード（dark-mode-system.js）が付けた色の上書きを、撮影用コピーの中だけ元に戻す
+                try {
+                    ['pos-night-mode', 'pos-light-mode', 'pos-nm-scanning'].forEach(k => doc.documentElement.classList.remove(k));
+                    const nmst = doc.getElementById('night-mode-style'); if (nmst) nmst.remove();
+                    doc.querySelectorAll('[data-nm-scanned]').forEach(el => {
+                        ['background', 'background-color', 'background-image', 'border-color', 'color'].forEach(prop => {
+                            const ov = el.getAttribute('data-nm-orig-' + prop);
+                            if (ov === null) return;
+                            if (ov === '') el.style.removeProperty(prop); else el.style.setProperty(prop, ov);
+                        });
+                        el.classList.remove('pos-nm-bg', 'pos-nm-text');
+                    });
+                } catch (e) { /* 無視 */ }
                 const bgCss = '#ffffff';
-                const amountColor = '#000000';
+                const parseL = (rgb) => { const m = String(rgb).match(/rgba?\(([^)]+)\)/); if (!m) return 0; const p = m[1].split(',').map(x => parseFloat(x)); return (0.299 * p[0] + 0.587 * p[1] + 0.114 * p[2]) / 255; };
+                // 通常モードの色でも明るすぎて読めない文字（白など）だけ、濃い色にする
+                const amountColor = '#111111';
                 c.style.setProperty('background-color', bgCss, 'important');
-                c.style.setProperty('color', '#000000', 'important');
                 c.style.boxSizing = 'border-box';
                 c.style.width = Math.max(salesMgmtScreen.scrollWidth, 720) + 'px';
                 c.style.margin = '0';
@@ -363,9 +394,7 @@ function performCloseBusiness(diff) {
                 c.querySelectorAll('*').forEach(el => {
                     el.style.overflow = 'visible';
                     el.style.textOverflow = 'clip';
-                    el.style.setProperty('color', '#000000', 'important');
-                    el.style.setProperty('text-shadow', 'none', 'important');
-                    if (el.tagName !== 'BUTTON') el.style.setProperty('background-color', 'transparent', 'important');
+                    try { if (parseL(win.getComputedStyle(el).color) > 0.85) el.style.setProperty('color', '#111111', 'important'); } catch (e) { /* 無視 */ }
                     if (el.style.maxHeight) el.style.maxHeight = 'none';
                 });
                 // 入力欄は写さない（金額は、すでにある「¥0」などの小計を大きく表示する）

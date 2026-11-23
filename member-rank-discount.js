@@ -24,6 +24,43 @@
 
 const MEMBER_RANK_DISCOUNT_ITEM_NAME_PREFIX = '会員ランク割引';
 
+// データ管理の設定（pos_member_rank_discount_enabled）。未設定はON。
+const MEMBER_RANK_DISCOUNT_KEY = 'pos_member_rank_discount_enabled';
+function isMemberRankDiscountEnabled() {
+    try { return localStorage.getItem(MEMBER_RANK_DISCOUNT_KEY) !== 'false'; } catch (e) { return true; }
+}
+(function memberRankDiscountSetting() {
+    function ensureBlock() {
+        const scr = document.getElementById('migration-screen');
+        if (!scr || document.getElementById('rank-discount-block')) return;
+        const b = document.createElement('div');
+        b.id = 'rank-discount-block';
+        b.className = 'migration-block';
+        b.style.cssText = 'background:#e8f5e9;border:2px solid #81c784;padding:15px;border-radius:6px;margin-bottom:15px';
+        b.innerHTML = '<h3 class="migration-title" style="color:#2e7d32">🏅 会員ランク割引</h3>' +
+            '<p class="migration-desc">ONにすると、ゴールド3%・ダイヤモンド5%の自動割引を会計に適用します。OFFにすると割引しません（ポイント還元は変わりません）。</p>' +
+            '<label style="display:flex;gap:8px;align-items:center;font-weight:700;cursor:pointer"><input type="checkbox" id="rank-discount-check" style="width:20px;height:20px"> 会員ランク割引を適用する</label>';
+        const first = scr.querySelector('.migration-block');
+        if (first && first.parentNode === scr) scr.insertBefore(b, first); else scr.appendChild(b);
+        const cb = b.querySelector('#rank-discount-check');
+        cb.checked = isMemberRankDiscountEnabled();
+        cb.onchange = () => {
+            try { localStorage.setItem(MEMBER_RANK_DISCOUNT_KEY, cb.checked ? 'true' : 'false'); } catch (e) {}
+            try { if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow(); } catch (e) {}
+            if (typeof playSound === 'function') playSound('click');
+            if (typeof window.updateReceipt === 'function') window.updateReceipt();
+        };
+    }
+    function sync() {
+        const cb = document.getElementById('rank-discount-check');
+        if (cb) cb.checked = isMemberRankDiscountEnabled();
+        if (typeof window.updateReceipt === 'function') window.updateReceipt();
+    }
+    window.addEventListener('storage', (e) => { if (e.key === MEMBER_RANK_DISCOUNT_KEY) sync(); });
+    window.addEventListener('pos-setting-synced', (e) => { if (e && e.detail && e.detail.key === MEMBER_RANK_DISCOUNT_KEY) sync(); });
+    setInterval(ensureBlock, 1500);
+})();
+
 // カートから「会員ランク割引」の行を取り除き、必要なら現在のランクに応じた
 // 割引行を新しく追加し直す。表示（レンダリング）は行わず、cart配列の中身だけを整える。
 function recalcMemberRankDiscountLine() {
@@ -36,6 +73,7 @@ function recalcMemberRankDiscountLine() {
         }
     }
 
+    if (!isMemberRankDiscountEnabled()) return; // データ管理でOFFなら割引しない
     if (typeof activeCustomer === 'undefined' || !activeCustomer) return;
     if (typeof getCustomerRankInfo !== 'function') return;
 

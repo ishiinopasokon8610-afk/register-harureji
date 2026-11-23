@@ -515,14 +515,46 @@
         m.style.cssText = 'position:absolute;inset:0;z-index:5;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:12px;';
         m.innerHTML = `<div style="background:#fff;border-radius:14px;width:100%;max-width:640px;max-height:92%;display:flex;flex-direction:column;padding:14px;">
             <h3 style="margin:0 0 8px;">バーコードがない商品を選ぶ</h3>
-            <input type="text" id="sc-picker-search" class="sc-input" placeholder="🔍 商品名で検索" style="margin-bottom:8px;">
-            <div id="sc-picker-list" style="flex:1;min-height:120px;overflow-y:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;"></div>
+            <div id="sc-picker-tabs" style="display:flex;gap:6px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:8px;margin-bottom:6px;flex:0 0 auto;"></div>
+            <div id="sc-picker-list" style="flex:1;min-height:120px;overflow-y:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;align-content:start;"></div>
             <button type="button" class="sc-btn gray" id="sc-picker-close" style="margin-top:10px;">閉じる</button></div>`;
         $('self-checkout-root').appendChild(m);
+        // 上に分類ボタン（最初は「すべて」）。押すと下の商品の表示が切り替わる
+        const usable = list.filter(p => p && p.name && p.genre !== '値引き/その他' && !(Number(p.price) < 0));
+        let selGenre = 'すべて';
+        let scratch = false;
+        try { scratch = localStorage.getItem('pos_genre_from_scratch') === 'true'; } catch (e) { scratch = false; }
+        let allowed = [];
+        try { if (typeof getAllGenres === 'function') allowed = getAllGenres(); } catch (e) { allowed = []; }
+        // 「分類を自分で一から作る」がONの時は、自分で作った分類以外の商品は「分類なし」にまとめる
+        const genreOf = (p) => (!p.genre || (scratch && !allowed.includes(p.genre))) ? '分類なし' : p.genre;
+        const genreNames = () => {
+            const present = [];
+            usable.forEach(p => { const g = genreOf(p); if (!present.includes(g)) present.push(g); });
+            let order = [];
+            try { if (typeof getAllGenres === 'function') order = getAllGenres(); } catch (e) { order = []; }
+            const sorted = order.filter(g => present.includes(g));
+            present.forEach(g => { if (!sorted.includes(g)) sorted.push(g); });
+            return sorted.filter(g => g !== '値引き/その他');
+        };
+        const drawTabs = () => {
+            const tabs = $('sc-picker-tabs');
+            tabs.innerHTML = '';
+            ['すべて'].concat(genreNames()).forEach((g) => {
+                const active = (g === selGenre);
+                const b = document.createElement('button');
+                b.type = 'button';
+                b.style.cssText = 'flex:0 0 auto;white-space:nowrap;border:2px solid #1e3a5f;border-radius:999px;padding:8px 16px;font-size:15px;font-weight:800;cursor:pointer;' +
+                    (active ? 'background:#1e3a5f;color:#fff;' : 'background:#eaf1fb;color:#1e3a5f;');
+                b.textContent = g;
+                b.addEventListener('click', () => { sound('click'); selGenre = g; draw(); });
+                tabs.appendChild(b);
+            });
+        };
         const draw = () => {
-            const q = ($('sc-picker-search').value || '').trim().toLowerCase();
+            drawTabs();
             const box = $('sc-picker-list');
-            const shown = list.filter(p => p && p.name && !p.archived && (!q || p.name.toLowerCase().includes(q)));
+            const shown = usable.filter(p => selGenre === 'すべて' || genreOf(p) === selGenre);
             box.innerHTML = shown.length ? '' : '<div class="sc-empty" style="grid-column:1/-1;">該当する商品がありません</div>';
             shown.forEach((p) => {
                 const b = document.createElement('button');
@@ -533,7 +565,6 @@
                 box.appendChild(b);
             });
         };
-        $('sc-picker-search').addEventListener('input', draw);
         $('sc-picker-close').addEventListener('click', () => { sound('click'); m.remove(); focusScanInput(); });
         draw();
     }
@@ -1323,8 +1354,8 @@
         if (!m) {
             m = document.createElement('div');
             m.id = 'sc-monitor-modal';
-            m.style.cssText = 'position:fixed;inset:0;z-index:20000;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;padding:12px;';
-            m.innerHTML = '<div style="background:#fff;color:#1f2933;border-radius:14px;width:100%;max-width:560px;max-height:90vh;overflow-y:auto;padding:16px;">' +
+            m.style.cssText = 'position:fixed;inset:0;z-index:20000;background:#fff;display:none;align-items:stretch;justify-content:stretch;padding:0;';
+            m.innerHTML = '<div style="background:#fff;color:#1f2933;border-radius:0;width:100%;max-width:none;height:100%;max-height:none;overflow-y:auto;padding:16px;box-sizing:border-box;">' +
                 '<h3 style="margin:0 0 10px;">👀 セルフレジの様子</h3><div id="sc-monitor-body"></div>' +
                 '<button type="button" id="sc-monitor-close" style="width:100%;margin-top:10px;border:none;border-radius:10px;padding:12px;background:#6b7785;color:#fff;font-weight:900;cursor:pointer;">閉じる</button></div>';
             document.body.appendChild(m);

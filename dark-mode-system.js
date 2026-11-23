@@ -616,7 +616,14 @@ const NM_FORCE_PALETTE = {
 // 全く同じ「色そのものに意味がある」要素なので、同様に除外対象へ追加した。
 const NM_ALWAYS_IGNORE_SELECTORS = ['.customer-longpress-bar', '.customer-longpress-indicator', '#home-longpress-progress-bar', '#home-longpress-progress-track', '#customer-home-back-progress', '.modal-overlay'];
 
+// お客様用レシート（表示・印刷・画像保存）は、どのモードでも白背景・黒文字のまま。
+// 中身の要素すべてを対象外にするため、祖先を見て判定する。
+const NM_IGNORE_SUBTREE_SELECTORS = ['#receipt-capture-area', '#print-receipt-content'];
+
 function isNightModeIgnoredElement(el) {
+    if (NM_IGNORE_SUBTREE_SELECTORS.some(sel => {
+        try { return !!el.closest(sel); } catch (e) { return false; }
+    })) return true;
     return NM_ALWAYS_IGNORE_SELECTORS.some(sel => {
         try { return el.matches(sel); } catch (e) { return false; }
     });

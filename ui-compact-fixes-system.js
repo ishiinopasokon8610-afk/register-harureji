@@ -96,3 +96,99 @@
             .observe(document.documentElement, { childList: true, subtree: true });
     }
 })();
+
+// ===== レシート（お会計レシートの表示・印刷・保存）は、ダークモードでも「背景：白／文字：黒」に固定する =====
+(function receiptAlwaysWhiteBlack() {
+    'use strict';
+    if (document.getElementById('receipt-white-black-style')) return;
+    const st = document.createElement('style');
+    st.id = 'receipt-white-black-style';
+    st.textContent = `
+    #receipt-capture-area, #receipt-capture-area *:not(img):not(canvas):not(svg),
+    #print-receipt-content, #print-receipt-content *:not(img):not(canvas):not(svg) {
+        background-color: #ffffff !important; color: #000000 !important;
+        text-shadow: none !important; filter: none !important;
+    }
+    #receipt-capture-area img, #print-receipt-content img { filter: none !important; }
+    @media print {
+        body, #receipt-print-modal { background: #ffffff !important; }
+    }`;
+    document.head.appendChild(st);
+})();
+
+// 「お客様について」（性別・年齢層）の画面で、ENTERキーで「次へ」に進む
+(function enterKeyForCustomerInfo() {
+    'use strict';
+    if (window.__enterCustInfoInstalled) return;
+    window.__enterCustInfoInstalled = true;
+    function visible(el) {
+        if (!el) return false;
+        const r = el.getBoundingClientRect();
+        if (r.width === 0 || r.height === 0) return false;
+        const st = getComputedStyle(el);
+        return st.display !== 'none' && st.visibility !== 'hidden';
+    }
+    function findNextButton() {
+        const btns = document.querySelectorAll('button');
+        for (const b of btns) {
+            const t = (b.textContent || '').trim();
+            if (!t.startsWith('次へ') || !visible(b)) continue;
+            // 同じ画面の中に「お客様について」「年齢層」の見出しがあるときだけ
+            let p = b.parentElement;
+            for (let d = 0; p && d < 6; d++, p = p.parentElement) {
+                const tx = p.textContent || '';
+                if (tx.includes('お客様について') && tx.includes('年齢層')) return b;
+            }
+        }
+        return null;
+    }
+    document.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' || e.repeat || e.isComposing || e.ctrlKey || e.altKey || e.metaKey) return;
+        try {
+            const b = findNextButton();
+            if (!b) return;
+            e.preventDefault(); e.stopImmediatePropagation();
+            b.click();
+        } catch (err) { console.warn('Enterキー処理エラー', err); }
+    }, true);
+})();
+
+// データ管理画面：よく使う・大切な設定を上に、すぐやらなくていい設定を下に並べる
+(function migrationBlockOrder() {
+    'use strict';
+    // 数字が小さいほど上。登録外のブロックは真ん中（50）。
+    const RULES = [
+        [/会員ランク割引/, 1], [/商品の分類/, 2], [/データのバックアップ/, 3], [/gzip|圧縮|ローカル|ファイル.*バックアップ/i, 4], [/店長認証/, 5], [/税抜き.{0,2}税込み/, 6], [/税率をまとめて/, 7], [/利用規約|プライバシー/, 8],
+        [/セルフレジ/, 13], [/お席案内|呼び出し/, 14], [/お会計完了時/, 20],
+        [/ホーム画面の背景/, 80], [/ロゴ/, 81], [/初期化/, 99]
+    ];
+    function titleOf(b) {
+        const h = b.querySelector('.migration-title, h1, h2, h3, h4');
+        return ((h ? h.textContent : b.textContent) || '').trim().slice(0, 80);
+    }
+    function rank(b) {
+        const t = titleOf(b);
+        for (const [re, n] of RULES) if (re.test(t)) return n;
+        return 50;
+    }
+    function isBlock(el) {
+        if (!el || !el.classList || el.classList.contains('top-bar')) return false;
+        if (el.classList.contains('migration-block')) return true;
+        // 設定ブロック（migration-block クラスが無いもの）も、見出しが並べ替えの対象に当たれば動かす
+        return RULES.some(([re]) => re.test(titleOf(el))) && el.querySelector('h1, h2, h3, h4, .migration-title');
+    }
+    function run() {
+        const scr = document.getElementById('migration-screen');
+        if (!scr) return;
+        // 「客用ディスプレイ」の設定ブロックは使わないので隠す
+        Array.from(scr.children).forEach(el => {
+            if (el.classList && el.classList.contains('migration-block') && /客用ディスプレイ/.test((el.querySelector('.migration-title') || {}).textContent || '')) el.style.display = 'none';
+        });
+        const blocks = Array.from(scr.children).filter(isBlock);
+        if (blocks.length < 2) return;
+        const sorted = blocks.map((b, i) => ({ b, i, r: rank(b) })).sort((x, y) => x.r - y.r || x.i - y.i).map(o => o.b);
+        if (sorted.every((b, i) => b === blocks[i])) return;
+        sorted.forEach(b => scr.appendChild(b));
+    }
+    setInterval(run, 1500);
+})();

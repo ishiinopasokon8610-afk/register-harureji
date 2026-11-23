@@ -103,7 +103,16 @@ const EXTRA_BACKUP_EXCLUDED_PATTERNS = [
     /customerdisplay/i
 ];
 
+// 【2026-11追記】除外リストや pos_sync_ の前方一致に当たっても、バックアップ・復元には必ず含めるキー。
+// （同期用パスワード／同期用データコード。復元しただけで、他の端末でも同じ同期につながるようにするため）
+// ※ 他端末への自動同期（extra-settings-sync.js）の対象には含めない。バックアップ・復元だけ。
+const EXTRA_BACKUP_FORCE_INCLUDE_KEYS = [
+    'pos_sync_password',
+    'pos_sync_code'
+];
+
 function isExcludedFromExtraBackup(key) {
+    if (EXTRA_BACKUP_FORCE_INCLUDE_KEYS.includes(key)) return false;
     if (EXTRA_BACKUP_EXCLUDED_KEYS.includes(key)) return true;
     if (EXTRA_BACKUP_EXCLUDED_PATTERNS.some(re => re.test(key))) return true;
     return EXTRA_BACKUP_EXCLUDED_PREFIXES.some(prefix => key.startsWith(prefix));
