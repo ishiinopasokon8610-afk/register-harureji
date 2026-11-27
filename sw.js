@@ -133,7 +133,11 @@
 // ・変更: 全画面ガードを復活（#touch-panel とお席案内の間だけ、解除しても全画面へ戻す。他の画面では何もしない）。v49。
 // ・変更: 領収書発行では「再発行」の枠を出さない。宛名が空欄の時は、書き込めるように線を引く。v50。
 // ・変更: 領収書の発行元を「haruレジ」に変更。v51。
-const CACHE_VERSION = 'v92';
+const CACHE_VERSION = 'v96';
+// v96: データ管理画面が開けなくなる不具合の対策（即時反映をsetTimeout化・取り合い検知。ui-compact / manual-pdf / migration-screen-readability）
+// v95: データ管理画面の並べ替え・追加ブロックを、開いた瞬間に反映（ui-compact-fixes / manual-pdf / migration-screen-readability）
+// v94: データ管理画面を見やすく（折りたたみ・検索・幅そろえ。migration-screen-readability-system.js 新規）
+// v93: 精算画面をEnterキーだけで最後まで進める（settlement-enter-flow-system.js 新規）／レジ画面の商品ボタンの大きさ・配置・写真を自由に設定（product-button-layout-system.js 新規）
 // v92: 使い方説明書PDFのダウンロード（manual-pdf-download-system.js 新規）／データ管理に説明書ブロックを追加（並び順は ui-compact-fixes-system.js）
 // v91: データ管理で入力・ボタン操作中に画面が一番上へ戻る不具合の対策（並べ替えを操作中は止め、スクロール位置を保持）
 // v90: 客用画面のお知らせ（上の縁）・左下の会員情報（customer-display-extras-system.js 新規）／gzip・Driveバックアップを最上部へ

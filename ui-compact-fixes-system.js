@@ -202,7 +202,39 @@
         if (se) se.scrollTop = st;
         scr.scrollTop = scrTop;
     }
+    // 【修正】操作中の目印は「データ管理画面の中での操作」だけにする。
+    // 以前は画面のどこを触っても記録していたため、ホームで「データ管理」を押して開いた直後は
+    // 「操作中」とみなされ、並べ替えが3秒ほど待たされていた。
     let lastTouch = 0;
-    ['pointerdown', 'keydown', 'touchstart', 'wheel'].forEach(ev => document.addEventListener(ev, () => { lastTouch = Date.now(); }, { passive: true, capture: true }));
-    setInterval(run, 1500);
+    ['pointerdown', 'keydown', 'touchstart', 'wheel'].forEach(ev => document.addEventListener(ev, (e) => {
+        const scr = document.getElementById('migration-screen');
+        if (scr && e.target instanceof Node && scr.contains(e.target)) lastTouch = Date.now();
+    }, { passive: true, capture: true }));
+
+    // 【修正】1.5秒ごとの確認だけに頼らず、画面が開かれた時・ブロックが増えた時に、すぐ（描画の前に）並べ替える。
+    // ・マイクロタスクではなく setTimeout(0) で動かす（他のJSと取り合いになっても画面が固まらない）
+    // ・2秒に6回を超えて続くときは、取り合いとみなして即時反映をやめる（1秒ごとの確認だけに戻る）
+    let queued = false;
+    let runTimes = [];
+    function runSoon() {
+        if (queued) return;
+        queued = true;
+        setTimeout(() => {
+            queued = false;
+            const now = Date.now();
+            runTimes = runTimes.filter(t => now - t < 2000);
+            if (runTimes.length >= 6) return;
+            runTimes.push(now);
+            try { run(); } catch (e) { /* 無視 */ }
+        }, 0);
+    }
+    function watch() {
+        const scr = document.getElementById('migration-screen');
+        if (!scr || !window.MutationObserver) return false;
+        new MutationObserver(runSoon).observe(scr, { childList: true, attributes: true, attributeFilter: ['class'] });
+        runSoon();
+        return true;
+    }
+    if (!watch()) document.addEventListener('DOMContentLoaded', watch);
+    setInterval(run, 1000);   // 念のための保険
 })();

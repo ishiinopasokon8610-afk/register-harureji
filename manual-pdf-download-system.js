@@ -242,4 +242,14 @@
         try { checkPrompt(); } catch (e) { /* 無視 */ }
     }
     setInterval(tick, 1500);
+    // 【修正】データ管理画面が開かれた瞬間に、すぐブロックを追加する（1.5秒待たない）
+    (function watchMigration() {
+        const scr = document.getElementById('migration-screen');
+        if (!scr || !window.MutationObserver) return;
+        let q = false;
+        new MutationObserver(() => {
+            if (q) return; q = true;
+            setTimeout(() => { q = false; try { ensureBlock(); } catch (e) { /* 無視 */ } }, 0);
+        }).observe(scr, { attributes: true, attributeFilter: ['class'] });
+    })();
 })();
