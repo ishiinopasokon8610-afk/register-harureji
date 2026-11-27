@@ -256,6 +256,12 @@ function ensureMigrationNavMobileControls() {
 function buildMigrationAnchorNav() {
     const container = document.getElementById('migration-screen');
     if (!container) return;
+    // データ管理画面を開いていない時は、メニューを作り直さず隠したままにする
+    // （他の画面で、ブロックの追加や並べ替えが起きて、左にメニューが勝手に出るのを防ぐ）
+    if (!container.classList.contains('active')) {
+        if (typeof hideMigrationAnchorNav === 'function') hideMigrationAnchorNav();
+        return;
+    }
     ensureMigrationAnchorNavStyle();
     ensureMigrationNavMobileControls();
 

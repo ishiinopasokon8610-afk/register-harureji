@@ -158,7 +158,7 @@
     'use strict';
     // 数字が小さいほど上。登録外のブロックは真ん中（50）。
     const RULES = [
-        [/会員ランク割引/, 1], [/商品の分類/, 2], [/データのバックアップ/, 3], [/gzip|圧縮|ローカル|ファイル.*バックアップ/i, 4], [/店長認証/, 5], [/税抜き.{0,2}税込み/, 6], [/税率をまとめて/, 7], [/利用規約|プライバシー/, 8],
+        [/gzip|圧縮/i, 0], [/データのバックアップ/, 0.5], [/会員ランク割引/, 1], [/ポイント倍率/, 1.5], [/商品の分類/, 2], [/客用画面のお知らせ/, 2.5], [/使い方説明書/, 3], [/ローカル|ファイル.*バックアップ/, 4], [/店長認証/, 5], [/税抜き.{0,2}税込み/, 6], [/税率をまとめて/, 7], [/利用規約|プライバシー/, 8],
         [/セルフレジ/, 13], [/お席案内|呼び出し/, 14], [/お会計完了時/, 20],
         [/ホーム画面の背景/, 80], [/ロゴ/, 81], [/初期化/, 99]
     ];
@@ -179,7 +179,7 @@
     }
     function run() {
         const scr = document.getElementById('migration-screen');
-        if (!scr) return;
+        if (!scr || !scr.classList.contains('active')) return; // データ管理を開いている時だけ並べ替える
         // 「客用ディスプレイ」の設定ブロックは使わないので隠す
         Array.from(scr.children).forEach(el => {
             if (el.classList && el.classList.contains('migration-block') && /客用ディスプレイ/.test((el.querySelector('.migration-title') || {}).textContent || '')) el.style.display = 'none';
@@ -188,7 +188,21 @@
         if (blocks.length < 2) return;
         const sorted = blocks.map((b, i) => ({ b, i, r: rank(b) })).sort((x, y) => x.r - y.r || x.i - y.i).map(o => o.b);
         if (sorted.every((b, i) => b === blocks[i])) return;
+        // 入力中・操作中は並べ替えない（画面が勝手に一番上へ戻るのを防ぐ）
+        const ae = document.activeElement;
+        if (ae && scr.contains(ae) && /^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(ae.tagName)) return;
+        if (Date.now() - lastTouch < 3000) return;
+        // 並べ替えで位置が飛ばないように、スクロール位置を覚えて戻す
+        const sy = window.scrollY, sx = window.scrollX;
+        const se = document.scrollingElement;
+        const st = se ? se.scrollTop : 0;
+        const scrTop = scr.scrollTop;
         sorted.forEach(b => scr.appendChild(b));
+        window.scrollTo(sx, sy);
+        if (se) se.scrollTop = st;
+        scr.scrollTop = scrTop;
     }
+    let lastTouch = 0;
+    ['pointerdown', 'keydown', 'touchstart', 'wheel'].forEach(ev => document.addEventListener(ev, () => { lastTouch = Date.now(); }, { passive: true, capture: true }));
     setInterval(run, 1500);
 })();
