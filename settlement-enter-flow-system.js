@@ -9,6 +9,9 @@
 //     ・過不足が0円 … 「本日の業務を終了しますか？」の確認 → Enter で「はい」
 //     ・過不足がある … これまで通り店長認証（店長バーコード）が必要
 //
+//  ④ 「業務再開（準備金の入力）」でも同じ。Enter で次の欄へ（Shift+Enter で前へ）、
+//     1円の次は「再開を確定」ボタンに移り、もう一度 Enter で確定する。
+//
 // ・sales-mgmt.js / index.html の中身は変更しない（後から重ねる方式）。
 // ・既存の calculateEndCash() / closeBusiness() をそのまま使う。
 // ==========================================
@@ -120,4 +123,50 @@
         }
         wasActive = active;
     }, 400);
+
+    // ---- 業務再開（準備金の入力）も Enter で順に進む ----
+    function startModal() { return document.getElementById('business-start-modal'); }
+    function startConfirmButton() {
+        const m = startModal();
+        return m ? m.querySelector('button[onclick^="confirmStartBusiness"]') : null;
+    }
+    document.addEventListener('keydown', function (e) {
+        if (e.key !== 'Enter' || e.isComposing || e.ctrlKey || e.altKey || e.metaKey) return;
+        const t = e.target;
+        const m = startModal();
+        if (!t || !m || !m.contains(t)) return;
+        const btn = startConfirmButton();
+        const isInput = t.classList && t.classList.contains('start-cash-input');
+        if (!isInput && t !== btn) return;   // キャンセルボタンは、いつも通り
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        if (e.repeat) return;                // 押しっぱなしで確定まで進まないように
+        if (t === btn) { btn.click(); return; }
+        const inputs = Array.from(m.querySelectorAll('.start-cash-input'));
+        const i = inputs.indexOf(t);
+        try { if (typeof calculateStartCash === 'function') calculateStartCash(); } catch (err) { /* 無視 */ }
+        playClick();
+        if (e.shiftKey) {
+            if (i > 0) focusInput(inputs[i - 1]);
+        } else if (i < inputs.length - 1) {
+            focusInput(inputs[i + 1]);
+        } else if (btn) {
+            btn.focus();
+            try { btn.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (err) { /* 無視 */ }
+        }
+    }, true);
+
+    // 準備金の入力を開いたら、1万円の欄にカーソルを置く
+    let startWasOpen = false;
+    setInterval(function () {
+        const m = startModal();
+        const open = !!m && isVisible(m);
+        if (open && !startWasOpen) {
+            setTimeout(function () {
+                const first = m.querySelector('.start-cash-input');
+                if (first && !m.contains(document.activeElement)) focusInput(first);
+            }, 150);
+        }
+        startWasOpen = open;
+    }, 300);
 })();

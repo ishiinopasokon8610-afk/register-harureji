@@ -238,3 +238,29 @@
     if (!watch()) document.addEventListener('DOMContentLoaded', watch);
     setInterval(run, 1000);   // 念のための保険
 })();
+
+// ===== レジ画面：緑にするのは「お会計」。それ以外の操作ボタンは、ぜんぶ青にそろえる =====
+(function checkoutButtonGreen() {
+    'use strict';
+    if (document.getElementById('checkout-green-style')) return;
+    const st = document.createElement('style');
+    st.id = 'checkout-green-style';
+    const BTN = 'html body #register-screen .fixed-actions-container button:not([onclick^="openCheckout"])';
+    st.textContent = `
+    #register-screen .fixed-actions-container button[onclick^="openCheckout"] {
+        background: #2e7d32 !important; border-color: #2e7d32 !important; color: #ffffff !important; }
+    /* お会計いがいは、赤・オレンジ・白（自動化／会計保留など）も含めて、すべて青 */
+    ${BTN} {
+        background: #e3f2fd !important; background-image: none !important; border-color: #90caf9 !important; color: #1565c0 !important; }
+    ${BTN} * { background: transparent !important; color: inherit !important; }
+    ${BTN} small { color: #4a6a8a !important; }
+    html.pos-night-mode #register-screen .fixed-actions-container button.haru-auto-neutral {
+        background: #1e1e1e !important; border-color: #444444 !important; color: #eeeeee !important; }`;
+    document.head.appendChild(st);
+    // 「自動化」ボタンは後から追加されるので、見つけたら目印を付ける
+    setInterval(() => {
+        document.querySelectorAll('#register-screen .fixed-actions-container button:not(.haru-auto-neutral)').forEach(b => {
+            if ((b.textContent || '').includes('自動化')) b.classList.add('haru-auto-neutral');
+        });
+    }, 700);
+})();

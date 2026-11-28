@@ -133,7 +133,10 @@
 // ・変更: 全画面ガードを復活（#touch-panel とお席案内の間だけ、解除しても全画面へ戻す。他の画面では何もしない）。v49。
 // ・変更: 領収書発行では「再発行」の枠を出さない。宛名が空欄の時は、書き込めるように線を引く。v50。
 // ・変更: 領収書の発行元を「haruレジ」に変更。v51。
-const CACHE_VERSION = 'v96';
+const CACHE_VERSION = 'v99';
+// v99: 商品ボタンの配置・写真を、Google Driveのバックアップ／ファイル保存・復元にも入れる（product-button-layout-system.js）
+// v98: データ管理=画面を開くたびに全部閉じる・つぶれ修正・検索バー廃止／商品ボタン=初期横3列・おまかせ配置・配置は割合で保存（スマホ対応）・保存状態の表示
+// v97: データ管理の見やすさ調整（ふだんは全部ひらく・幅やボタンはもとのまま。migration-screen-readability-system.js）
 // v96: データ管理画面が開けなくなる不具合の対策（即時反映をsetTimeout化・取り合い検知。ui-compact / manual-pdf / migration-screen-readability）
 // v95: データ管理画面の並べ替え・追加ブロックを、開いた瞬間に反映（ui-compact-fixes / manual-pdf / migration-screen-readability）
 // v94: データ管理画面を見やすく（折りたたみ・検索・幅そろえ。migration-screen-readability-system.js 新規）

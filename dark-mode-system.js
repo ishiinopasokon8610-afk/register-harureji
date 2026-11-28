@@ -355,6 +355,29 @@ function ensureNightModeStyle() {
            アニメーションが再走査のたびに先頭から再生し直されてしまう
            不具合の原因だったため）。除外リストは transition 側の対象
            （長押しバー等）としてそのまま維持する。 */
+        /* 【v16で追加】データ管理画面の左サイドバー（#migration-anchor-nav）。
+           ここの項目は「選んでいる項目が青くなる」など、クラスの付け外しで色が
+           すぐ変わる。ところが自動判定は1.2秒おきの走査で色をインラインに書く
+           方式なので、クラスが変わってから次の走査までの間、元の色（明るい水色や
+           青）がむき出しになり、スクロールのたびに点滅して見えていた。
+           そこでサイドバーだけは自動判定の対象外にし、色をCSSだけで決める
+           （クラスが変わった瞬間に色も変わるので、走査待ちが起きない）。 */
+        html.pos-night-mode #migration-anchor-nav {
+            background-color: #1e1e1e !important;
+            border-right-color: #444 !important;
+        }
+        html.pos-night-mode #migration-anchor-nav .migration-anchor-btn {
+            background-color: #1e1e1e !important;
+            color: #eee !important;
+            border-color: #444 !important;
+        }
+        html.pos-night-mode #migration-anchor-nav .migration-anchor-btn.active,
+        html.pos-night-mode #migration-anchor-nav .migration-anchor-btn.mgr-nav-on {
+            background-color: #1976d2 !important;
+            color: #fff !important;
+            border-color: #64b5f6 !important;
+        }
+
         html.pos-nm-scanning,
         html.pos-nm-scanning *:not(#home-longpress-progress-bar):not(.customer-longpress-bar):not(.customer-longpress-indicator):not(.home-automation-block-archive-bar):not(#customer-home-back-progress):not(.slide-up-modal) {
             transition: none !important;
@@ -614,13 +637,39 @@ const NM_FORCE_PALETTE = {
 // と両立しづらいため、セレクタで名指しして除外する方式にした。
 // 【v14で追加】ホーム画面の4秒長押しバー（home-automation-blocks.js）も
 // 全く同じ「色そのものに意味がある」要素なので、同様に除外対象へ追加した。
-const NM_ALWAYS_IGNORE_SELECTORS = ['.customer-longpress-bar', '.customer-longpress-indicator', '#home-longpress-progress-bar', '#home-longpress-progress-track', '#customer-home-back-progress', '.modal-overlay'];
+const NM_ALWAYS_IGNORE_SELECTORS = ['.customer-longpress-bar', '.customer-longpress-indicator', '#home-longpress-progress-bar', '#home-longpress-progress-track', '#customer-home-back-progress', '.modal-overlay', '#register-screen button[onclick^="openCheckout"]'];   // お会計ボタンは、どのモードでも緑のまま
 
 // お客様用レシート（表示・印刷・画像保存）は、どのモードでも白背景・黒文字のまま。
 // 中身の要素すべてを対象外にするため、祖先を見て判定する。
-const NM_IGNORE_SUBTREE_SELECTORS = ['#receipt-capture-area', '#print-receipt-content'];
+const NM_IGNORE_SUBTREE_SELECTORS = ['#receipt-capture-area', '#print-receipt-content', '#migration-anchor-nav'];   // 【v16】データ管理のサイドバーは、下の固定CSSで色を決める（走査待ちの点滅を防ぐ）
+
+// 【v17で追加】レジの会計時に出る「お客様について」（性別・年齢層を選ぶ）画面の
+// ボタンは、ダークモードでも元の色のまま表示する。画面の中身は元のHTMLが
+// 分からないため、ui-compact-fixes-system.js と同じ見つけ方（「次へ」ボタンから
+// 親をたどり、「お客様について」と「年齢層」の両方の文字を含む入れ物を探す）で
+// 入れ物に目印を付け、その中のボタン（と、ボタンの中身）だけを対象外にする。
+const NM_KEEP_BUTTONS_ATTR = 'data-nm-keep-buttons';
+function markCustomerInfoPickers() {
+    try {
+        document.querySelectorAll('button').forEach(b => {
+            if (!(b.textContent || '').trim().startsWith('次へ')) return;
+            let p = b.parentElement;
+            for (let d = 0; p && d < 6; d++, p = p.parentElement) {
+                if (p.hasAttribute(NM_KEEP_BUTTONS_ATTR)) return;
+                const tx = p.textContent || '';
+                if (tx.includes('お客様について') && tx.includes('年齢層')) {
+                    p.setAttribute(NM_KEEP_BUTTONS_ATTR, '1');
+                    return;
+                }
+            }
+        });
+    } catch (e) { /* 無視 */ }
+}
 
 function isNightModeIgnoredElement(el) {
+    try {
+        if (el.closest('[' + NM_KEEP_BUTTONS_ATTR + '] button')) return true;
+    } catch (e) { /* 無視 */ }
     if (NM_IGNORE_SUBTREE_SELECTORS.some(sel => {
         try { return !!el.closest(sel); } catch (e) { return false; }
     })) return true;
@@ -753,12 +802,13 @@ let nightModeRescanTimer = null;
 // 即座に1回再走査するので、次の1.2秒待たずに反映される。
 function startNightModeAutoScan(mode) {
     currentForceMode = mode;
-    runNightModeBatch(() => scanForNightMode(document.body));
+    runNightModeBatch(() => { markCustomerInfoPickers(); scanForNightMode(document.body); });
     if (!nightModeMutationObserver) {
         nightModeMutationObserver = new MutationObserver(mutations => {
             // 追加されたノードすべてを1回のバッチにまとめてtransitionを
             // 止めた状態で判定する（ノードごとにON/OFFを繰り返さない）
             runNightModeBatch(() => {
+                markCustomerInfoPickers();
                 mutations.forEach(m => {
                     m.addedNodes.forEach(node => scanForNightMode(node));
                 });
@@ -768,7 +818,7 @@ function startNightModeAutoScan(mode) {
     }
     if (!nightModeRescanTimer) {
         nightModeRescanTimer = setInterval(() => {
-            runNightModeBatch(() => scanForNightMode(document.body));
+            runNightModeBatch(() => { markCustomerInfoPickers(); scanForNightMode(document.body); });
         }, 1200);
     }
 }

@@ -1,25 +1,20 @@
 // ==========================================
 // migration-screen-readability-system.js
-// 「データ管理・ロゴ設定」画面を、見やすく整える
+// 「データ管理・ロゴ設定」画面を、すっきり見せる
 //
-//  ① 設定ブロックを「タイトルだけの行」にたたみ、押すと開く（開閉の状態は覚える）
-//  ② 画面の上に「🔍 設定をさがす」欄と「すべて開く／すべて閉じる」ボタン（スクロールしても上に残る）
-//  ③ 幅をそろえて中央に寄せ、文字・ボタン・入力欄を大きく、すき間を広く
-//  ④ 色ぶんけ（各ブロックの色）はそのまま。危険な操作（初期化）は赤い枠で目立たせる
+//  ・画面を開くたびに、設定ブロックはぜんぶ「タイトルだけ」に閉じた状態から始まる
+//  ・タイトルを押すと、そのブロックだけ開く／もう一度押すと閉じる
+//  ・ブロックが縦に押しつぶされて文字が欠ける問題（flexの縮み）を防ぐ
+//  ・左のサイドバーの項目を選ぶと、そのブロックが開いて、そこへ移動する
+//  ・検索バーなどは付けない
 //
-// ・index.html / 他のJSは変更しない。ブロックの中身は動かさず、CSSとクラスの追加だけ行う
-//   （他のファイルが画面を作り直しても、1.5秒ごとに整え直す）。
-// ・並び順は ui-compact-fixes-system.js のまま。
+// ・index.html / 他のJSは変更しない（CSSとクラスの追加だけ）。
+// ・他のJSとの取り合いで固まらないよう、画面の中身を並べ替えたり移動したりはしない。
 // ==========================================
 (function migrationReadability() {
     'use strict';
     if (window.__migrationReadabilityInstalled) return;
     window.__migrationReadabilityInstalled = true;
-
-    const LS_KEY = 'haru_migration_open_blocks_v1';   // 開いているブロックの名前（この端末だけ）
-    let openSet = new Set();
-    try { openSet = new Set(JSON.parse(localStorage.getItem(LS_KEY) || '[]')); } catch (e) { /* 無視 */ }
-    function saveOpen() { try { localStorage.setItem(LS_KEY, JSON.stringify(Array.from(openSet))); } catch (e) { /* 無視 */ } }
 
     function screenEl() { return document.getElementById('migration-screen'); }
 
@@ -29,154 +24,193 @@
         const st = document.createElement('style');
         st.id = 'mgr-read-style';
         st.textContent = `
-        #migration-screen { font-size: 16px; }
-        #migration-screen .mgr-wrap-ok > .migration-block,
-        #migration-screen > .migration-block { max-width: 920px; margin: 0 auto 12px !important; padding: 0 !important; border-radius: 12px !important;
-            overflow: hidden; box-shadow: 0 1px 4px rgba(0,0,0,.12); box-sizing: border-box; }
-        #migration-screen > .migration-block > .mgr-title { margin: 0 !important; padding: 16px 48px 16px 18px !important; font-size: 18px !important; line-height: 1.4 !important;
-            cursor: pointer; position: relative; user-select: none; -webkit-user-select: none; }
-        #migration-screen > .migration-block > .mgr-title::after { content: '▾'; position: absolute; right: 18px; top: 50%; transform: translateY(-50%); font-size: 20px; transition: transform .15s; }
-        #migration-screen > .migration-block.mgr-collapsed > .mgr-title::after { transform: translateY(-50%) rotate(-90deg); }
-        #migration-screen > .migration-block > :not(.mgr-title) { margin-left: 18px !important; margin-right: 18px !important; max-width: calc(100% - 36px); box-sizing: border-box; }
-        #migration-screen > .migration-block > :last-child { margin-bottom: 18px !important; }
-        #migration-screen > .migration-block.mgr-collapsed > :not(.mgr-title) { display: none !important; }
-        #migration-screen > .migration-block > p, #migration-screen > .migration-block .migration-desc { font-size: 14.5px !important; line-height: 1.75 !important; color: #444; }
-        #migration-screen > .migration-block button { min-height: 40px; padding: 9px 16px !important; font-size: 15px !important; margin: 4px 8px 4px 0; border-radius: 8px !important; }
-        #migration-screen > .migration-block input:not([type=checkbox]):not([type=radio]):not([type=file]), #migration-screen > .migration-block select { min-height: 40px; font-size: 16px; box-sizing: border-box; }
-        #migration-screen > .migration-block.danger, #migration-screen > .migration-block.mgr-danger { border: 3px solid #e53935 !important; }
-        #migration-screen > .migration-block.mgr-danger > .mgr-title::before { content: '⚠️ '; }
-        #mgr-toolbar { position: sticky; top: 0; z-index: 30; max-width: 920px; margin: 0 auto 12px; padding: 10px 12px; box-sizing: border-box; display: flex; flex-wrap: wrap; gap: 8px;
-            align-items: center; background: #fffde7; border: 2px solid #fbc02d; border-radius: 12px; box-shadow: 0 2px 6px rgba(0,0,0,.15); }
-        #mgr-toolbar input { flex: 1 1 200px; min-width: 0; min-height: 40px; padding: 6px 12px; font-size: 16px; border: 1px solid #aaa; border-radius: 8px; box-sizing: border-box; }
-        #mgr-toolbar button { min-height: 40px; padding: 8px 14px; font-size: 14px; font-weight: 700; border: none; border-radius: 8px; background: #546e7a; color: #fff; cursor: pointer; }
-        #mgr-toolbar .mgr-count { font-size: 13px; color: #6d4c00; font-weight: 700; }
-        #migration-screen > .migration-block.mgr-hidden { display: none !important; }
-        @media (max-width: 700px) {
-            #migration-screen > .migration-block > .mgr-title { font-size: 16px !important; padding: 14px 40px 14px 14px !important; }
-            #migration-screen > .migration-block > :not(.mgr-title) { margin-left: 12px !important; margin-right: 12px !important; max-width: calc(100% - 24px); }
-        }`;
+        /* ブロックが縮んで文字が切れないようにする（親がflexでも、高さは中身にあわせる） */
+        #migration-screen .mgr-block { flex: 0 0 auto !important; height: auto !important; min-height: 0 !important; max-height: none !important;
+            overflow: visible !important; box-sizing: border-box; margin-bottom: 12px !important; border-radius: 10px; }
+        #migration-screen .mgr-block .mgr-title { display: block; cursor: pointer; position: relative; user-select: none; -webkit-user-select: none;
+            padding-right: 34px !important; line-height: 1.45 !important; font-size: 18px !important; height: auto !important; overflow: visible !important; }
+        #migration-screen .mgr-block .mgr-title::after { content: '▾'; position: absolute; right: 6px; top: 50%; transform: translateY(-50%); font-size: 18px; opacity: .6; transition: transform .15s; }
+        #migration-screen .mgr-block.mgr-collapsed .mgr-title::after { transform: translateY(-50%) rotate(-90deg); }
+        #migration-screen .mgr-block.mgr-collapsed .mgr-title { margin-bottom: 0 !important; }
+        /* いちばん下のほうのブロックも画面の上まで送れるように、下に余白を足す（サイドバーの青い項目がずれないように） */
+        #migration-screen.active::after { content: ''; display: block; flex: 0 0 auto; height: 85vh; }
+        #migration-screen .mgr-block { scroll-margin-top: 8px; }
+        /* サイドバー：選んだ項目だけを青にする */
+        .mgr-nav-forced > * { background-color: var(--mgr-nav-bg) !important; color: var(--mgr-nav-fg) !important; border-color: var(--mgr-nav-bd) !important; }
+        .mgr-nav-forced > .mgr-nav-on { background-color: #1976d2 !important; color: #fff !important; border-color: #64b5f6 !important; }
+        .mgr-nav-forced > .mgr-nav-on * { color: #fff !important; }
+        /* 閉じているときは、タイトル以外をかくす */
+        #migration-screen .mgr-block.mgr-collapsed > :not(.mgr-title):not(.mgr-path) { display: none !important; }
+        #migration-screen .mgr-block.mgr-collapsed .mgr-path > :not(.mgr-title):not(.mgr-path) { display: none !important; }
+        #migration-screen .mgr-block .migration-desc { line-height: 1.7 !important; }
+        /* 必要性が高い設定（上のほう）＝赤、いちばん下のほうの設定＝緑 */
+        #migration-screen .mgr-block.mgr-red { border: 3px solid #e53935 !important; }
+        #migration-screen .mgr-block.mgr-green { border: 3px solid #2e9d4f !important; }
+        #migration-screen .mgr-block.mgr-green.mgr-warn .mgr-title::before { content: '⚠️ '; }`;
         document.head.appendChild(st);
     }
 
-    /* ---------- ブロックの準備 ---------- */
-    function titleEl(b) {
-        for (const c of b.children) {
-            if (c.classList && c.classList.contains('mgr-title')) return c;
-        }
-        for (const c of b.children) {
-            if (/^H[1-4]$/.test(c.tagName) || (c.classList && c.classList.contains('migration-title'))) return c;
-        }
-        return null;
-    }
-    function blockName(b) {
-        const t = titleEl(b);
-        return ((t ? t.textContent : b.textContent) || '').replace(/\s+/g, ' ').trim().slice(0, 60);
-    }
-    function isDanger(b) {
-        return b.classList.contains('danger') || /初期化|削除/.test(blockName(b));
-    }
-    function setCollapsed(b, collapsed) {
-        b.classList.toggle('mgr-collapsed', collapsed);
-        const name = blockName(b);
-        if (collapsed) openSet.delete(name); else openSet.add(name);
+    /* ---------- ブロックの見つけかた ---------- */
+    const HEADING = 'h1, h2, h3, h4, .migration-title';
+
+    // 並び順（ui-compact-fixes-system.js の migrationBlockOrder）の、上のほう＝必要性が高い設定 → 赤
+    const RED_TITLES = [/gzip|圧縮/i, /データのバックアップ/, /会員ランク割引/, /ポイント倍率/, /商品の分類/, /客用画面のお知らせ/, /使い方説明書/,
+        /ローカル|ファイル.*バックアップ/, /店長認証/, /税抜き.{0,2}税込み/, /税率をまとめて/, /利用規約|プライバシー/];
+    // いちばん下のほうの設定 → 緑
+    const GREEN_TITLES = [/ホーム画面の背景/, /ロゴ/, /初期化/];
+
+    function candidates(scr) {
+        const out = [];
+        scr.querySelectorAll('.migration-block').forEach(b => {
+            const p = b.parentElement;
+            if (p && p.closest('.migration-block')) return;   // 入れ子の内側は、外側のブロックで扱う
+            out.push(b);
+        });
+        // migration-block のクラスが付いていない設定ブロック（見出しをもつ、画面直下の要素）
+        Array.from(scr.children).forEach(el => {
+            if (out.includes(el)) return;
+            if (!el.tagName || /^(SCRIPT|STYLE|LINK)$/.test(el.tagName)) return;
+            if (el.classList.contains('top-bar') || el.classList.contains('mgr-block')) return;
+            if (el.querySelector('.migration-block')) return;          // 入れ物（中に別のブロックがある）は触らない
+            if (!el.querySelector(HEADING)) return;
+            if ((el.textContent || '').length > 20000) return;
+            out.push(el);
+        });
+        return out;
     }
 
     function decorate(b) {
         if (b.dataset.mgrDone === '1') return;
-        const t = titleEl(b);
-        if (!t) return;                       // 見出しの無いブロックは、そのまま触らない
+        const title = b.querySelector(HEADING);
+        if (!title || !(title.textContent || '').trim()) return;
         b.dataset.mgrDone = '1';
-        t.classList.add('mgr-title');
-        if (isDanger(b)) b.classList.add('mgr-danger');
-        t.setAttribute('role', 'button');
-        t.setAttribute('tabindex', '0');
-        t.addEventListener('click', () => { setCollapsed(b, !b.classList.contains('mgr-collapsed')); saveOpen(); });
-        t.addEventListener('keydown', e => {
-            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); t.click(); }
-        });
-        // 前回開いていたものだけ開く。はじめては、すべて閉じておく
-        b.classList.toggle('mgr-collapsed', !openSet.has(blockName(b)));
-    }
+        b.classList.add('mgr-block');
+        title.classList.add('mgr-title');
+        // タイトルが直下でないときは、タイトルまでの途中の要素に目印を付ける
+        let p = title.parentElement;
+        while (p && p !== b) { p.classList.add('mgr-path'); p = p.parentElement; }
+        const ttl = title.textContent || '';
+        if (RED_TITLES.some(re => re.test(ttl))) b.classList.add('mgr-red');
+        else if (GREEN_TITLES.some(re => re.test(ttl))) b.classList.add('mgr-green');
+        if (/初期化|削除/.test(ttl)) b.classList.add('mgr-warn');   // 消す操作には、タイトルに⚠️を付ける
 
-    /* ---------- 検索・ツールバー ---------- */
-    function ensureToolbar(scr) {
-        let bar = document.getElementById('mgr-toolbar');
-        if (bar) return bar;
-        bar = document.createElement('div');
-        bar.id = 'mgr-toolbar';
-        bar.innerHTML =
-            '<input type="search" id="mgr-search" placeholder="🔍 設定をさがす（例：バックアップ、ロゴ、税率）" autocomplete="off">' +
-            '<button type="button" id="mgr-open-all">すべて開く</button>' +
-            '<button type="button" id="mgr-close-all">すべて閉じる</button>' +
-            '<span class="mgr-count" id="mgr-count"></span>';
-        const top = scr.querySelector('.top-bar');
-        if (top && top.parentNode === scr) top.insertAdjacentElement('afterend', bar); else scr.insertBefore(bar, scr.firstChild);
-
-        const input = bar.querySelector('#mgr-search');
-        input.addEventListener('input', applyFilter);
-        input.addEventListener('keydown', e => { e.stopPropagation(); });   // スキャナ等の全体Enter処理に取られないように
-        bar.querySelector('#mgr-open-all').addEventListener('click', () => {
-            blocks(scr).forEach(b => setCollapsed(b, false)); saveOpen();
+        title.setAttribute('role', 'button');
+        title.setAttribute('tabindex', '0');
+        title.addEventListener('click', () => b.classList.toggle('mgr-collapsed'));
+        title.addEventListener('keydown', e => {
+            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); title.click(); }
         });
-        bar.querySelector('#mgr-close-all').addEventListener('click', () => {
-            blocks(scr).forEach(b => setCollapsed(b, true)); saveOpen();
-        });
-        return bar;
-    }
-    function blocks(scr) {
-        return Array.from(scr.children).filter(el => el.classList && el.classList.contains('migration-block') && el.classList.contains('mgr-title') === false && titleEl(el));
-    }
-    function applyFilter() {
-        const scr = screenEl();
-        if (!scr) return;
-        const q = ((document.getElementById('mgr-search') || {}).value || '').trim().toLowerCase();
-        let shown = 0;
-        const list = blocks(scr);
-        list.forEach(b => {
-            const hit = !q || (b.textContent || '').toLowerCase().includes(q);
-            b.classList.toggle('mgr-hidden', !hit);
-            if (hit) shown++;
-            // さがしているときは、見つかったブロックを開いて中身が見えるようにする（保存はしない）
-            if (q && hit) b.classList.remove('mgr-collapsed');
-        });
-        const c = document.getElementById('mgr-count');
-        if (c) c.textContent = q ? `${shown} / ${list.length} 件` : `${list.length} 件の設定`;
-        if (!q) list.forEach(b => b.classList.toggle('mgr-collapsed', !openSet.has(blockName(b))));
+        b.classList.add('mgr-collapsed');   // はじめは閉じておく
     }
 
     /* ---------- 定期的に整える ---------- */
+    let wasActive = false;
     function tick() {
         const scr = screenEl();
-        if (!scr || !scr.classList.contains('active')) return;
+        const active = !!(scr && scr.classList.contains('active'));
+        if (!active) { wasActive = false; return; }
         ensureStyle();
-        Array.from(scr.children).forEach(el => {
-            if (el.classList && el.classList.contains('migration-block')) decorate(el);
-        });
-        const bar = ensureToolbar(scr);
-        const q = (document.getElementById('mgr-search') || {}).value || '';
-        const c = document.getElementById('mgr-count');
-        if (c && !q) c.textContent = `${blocks(scr).length} 件の設定`;
-        // 他のファイルが後から足したブロックにも検索を効かせる
-        if (q.trim()) applyFilter();
+        const list = candidates(scr);
+        list.forEach(decorate);
+        if (!wasActive) {
+            // 画面を開いたとき：ぜんぶ閉じた状態にそろえる
+            scr.querySelectorAll('.mgr-block').forEach(b => b.classList.add('mgr-collapsed'));
+            wasActive = true;
+        }
     }
+
+    /* ---------- サイドバー（左の項目）から選んだら、そのブロックを開く ---------- */
+    // 記号・絵文字・空白を除いて、項目名とタイトルを比べる
+    function norm(s) { return String(s || '').replace(/[^0-9A-Za-z\u3041-\u30ff\u3400-\u9fff\uff10-\uff5a]/g, '').toLowerCase(); }
+    function findBlock(scr, item) {
+        // 1) href や data-target で行き先が分かるとき
+        const ref = item.getAttribute('data-target') || item.getAttribute('data-anchor') || item.getAttribute('href') || '';
+        const id = ref.replace(/^#/, '');
+        const target = id && document.getElementById(id);
+        if (target && scr.contains(target)) {
+            const b = target.closest('.mgr-block') || target.querySelector('.mgr-block');
+            if (b) return b;
+        }
+        // 2) 項目の文字と、ブロックのタイトルを比べる
+        const label = norm(item.textContent) || norm(item.title);
+        if (label.length < 2) return null;
+        let best = null, bestDiff = Infinity;
+        scr.querySelectorAll('.mgr-block').forEach(b => {
+            if (!b.getClientRects().length) return;   // 非表示のブロックは対象外
+            const t = norm((b.querySelector('.mgr-title') || {}).textContent);
+            if (!t || !(t.includes(label) || label.includes(t))) return;
+            const diff = Math.abs(t.length - label.length);
+            if (diff < bestDiff) { best = b; bestDiff = diff; }
+        });
+        return best;
+    }
+    function openBlock(b) {
+        b.classList.remove('mgr-collapsed');
+        // 開いたあとの位置に合わせて、そのブロックの先頭へ移動する
+        setTimeout(() => { try { b.scrollIntoView({ block: 'start', behavior: 'smooth' }); } catch (e) { /* 無視 */ } }, 60);
+    }
+    /* ---------- 選んだ項目を、強制的に青くする（自分でスクロールしたら自動の表示に戻す） ---------- */
+    let forced = null;   // { list, item }
+    function releaseNav() {
+        if (!forced) return;
+        forced.list.classList.remove('mgr-nav-forced');
+        forced.item.classList.remove('mgr-nav-on');
+        forced = null;
+    }
+    function forceNav(el) {
+        releaseNav();
+        // 項目が3つ以上並んでいる入れ物（サイドバーの一覧）まで上がる
+        let item = el;
+        while (item.parentElement && item.parentElement !== document.body && item.parentElement.children.length < 3) item = item.parentElement;
+        const list = item.parentElement;
+        if (!list || list === document.body && !item.matches('a, button, li, [role="button"]')) return;
+        // ほかの項目の「ふだんの色」を調べる（いちばん多い色）
+        const common = prop => {
+            const count = {};
+            Array.from(list.children).forEach(c => { if (c !== item) { const v = getComputedStyle(c)[prop]; count[v] = (count[v] || 0) + 1; } });
+            return Object.keys(count).sort((a, b) => count[b] - count[a])[0] || '';
+        };
+        list.style.setProperty('--mgr-nav-bg', common('backgroundColor'));
+        list.style.setProperty('--mgr-nav-fg', common('color'));
+        list.style.setProperty('--mgr-nav-bd', common('borderTopColor'));
+        list.classList.add('mgr-nav-forced');
+        item.classList.add('mgr-nav-on');
+        forced = { list, item };
+    }
+    // 人がスクロールしたら解除する（選んだあとの自動の移動では解除しない）
+    const byUser = e => { if (forced && !(e.target instanceof Node && forced.list.contains(e.target))) releaseNav(); };
+    ['wheel', 'touchmove', 'pointerdown'].forEach(ev => document.addEventListener(ev, byUser, { passive: true, capture: true }));
+    document.addEventListener('keydown', e => { if (/^(ArrowUp|ArrowDown|PageUp|PageDown|Home|End| )$/.test(e.key)) releaseNav(); }, true);
+
+    document.addEventListener('click', e => {
+        const scr = screenEl();
+        if (!scr || !scr.classList.contains('active') || !(e.target instanceof Element)) return;
+        if (e.target.closest('.mgr-block, .top-bar, .back-btn')) return;   // ブロックの中・戻るボタンは対象外
+        const item = e.target.closest('a, button, li, [role="button"], [data-target], [data-anchor]') || e.target;
+        if ((item.textContent || '').trim().length > 60) return;           // 大きな入れ物を押したときは何もしない
+        tick();
+        const b = findBlock(scr, item);
+        if (b) { forceNav(item); openBlock(b); }
+    }, true);
+
     ensureStyle();
-    setInterval(tick, 1500);
-    if (window.MutationObserver) {
-        // 【即時反映】画面が開かれた時・ブロックが増えた時は、描画の前に整える（待たせない）
-        let q = false;
-        let times = [];
-        const root = document.getElementById('migration-screen') || document.body;
+    setInterval(tick, 1000);
+    // 画面が開かれた瞬間にも、すぐ反映（setTimeout＝描画を止めない。取り合い防止のため回数も制限）
+    (function watch() {
+        const scr = screenEl();
+        if (!scr || !window.MutationObserver) return;
+        let q = false, times = [];
         new MutationObserver(() => {
             if (q) return; q = true;
             setTimeout(() => {
                 q = false;
                 const now = Date.now();
                 times = times.filter(t => now - t < 2000);
-                if (times.length >= 6) return;       // 他のJSと取り合いのときは、定期確認だけに任せる
+                if (times.length >= 6) return;
                 times.push(now);
                 tick();
             }, 0);
-        }).observe(root, { childList: true, attributes: true, attributeFilter: ['class'] });
-    }
+        }).observe(scr, { attributes: true, attributeFilter: ['class'] });   // 画面の開閉(class)だけ見る
+    })();
     setTimeout(tick, 300);
 })();
