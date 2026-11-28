@@ -649,16 +649,29 @@ const NM_IGNORE_SUBTREE_SELECTORS = ['#receipt-capture-area', '#print-receipt-co
 // 親をたどり、「お客様について」と「年齢層」の両方の文字を含む入れ物を探す）で
 // 入れ物に目印を付け、その中のボタン（と、ボタンの中身）だけを対象外にする。
 const NM_KEEP_BUTTONS_ATTR = 'data-nm-keep-buttons';
+// 【修正】目印を付ける入れ物が大きすぎると（画面全体・body など）、その中の全部のボタンが
+// ダークモードの対象外になってしまう。「お客様について」の小さな入れ物だけに付ける。
+function isReasonableCustomerInfoBox(p) {
+    if (!p || p === document.body || p === document.documentElement) return false;
+    if (p.classList.contains('screen') || /-screen$/.test(p.id || '')) return false;   // レジ画面などの「画面」全体は対象外
+    if (p.querySelectorAll('button').length > 24) return false;                          // ボタンが多すぎる＝画面全体
+    return true;
+}
 function markCustomerInfoPickers() {
     try {
+        // 以前の判定で、大きすぎる入れ物に付いてしまった目印は外す
+        document.querySelectorAll('[' + NM_KEEP_BUTTONS_ATTR + ']').forEach(el => {
+            if (!isReasonableCustomerInfoBox(el)) el.removeAttribute(NM_KEEP_BUTTONS_ATTR);
+        });
         document.querySelectorAll('button').forEach(b => {
             if (!(b.textContent || '').trim().startsWith('次へ')) return;
+            if (!b.getClientRects().length) return;   // 見えていない「次へ」は対象外（隠れた画面の誤判定を防ぐ）
             let p = b.parentElement;
             for (let d = 0; p && d < 6; d++, p = p.parentElement) {
                 if (p.hasAttribute(NM_KEEP_BUTTONS_ATTR)) return;
                 const tx = p.textContent || '';
                 if (tx.includes('お客様について') && tx.includes('年齢層')) {
-                    p.setAttribute(NM_KEEP_BUTTONS_ATTR, '1');
+                    if (isReasonableCustomerInfoBox(p)) p.setAttribute(NM_KEEP_BUTTONS_ATTR, '1');
                     return;
                 }
             }
