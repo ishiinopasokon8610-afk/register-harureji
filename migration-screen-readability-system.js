@@ -144,21 +144,10 @@
         });
         return best;
     }
-    // 実際にスクロールしている入れ物を探す（なければ画面全体）
-    function scrollerOf(el) {
-        let p = el.parentElement;
-        while (p && p !== document.body && p !== document.documentElement) {
-            if (/(auto|scroll)/.test(getComputedStyle(p).overflowY)) return p;
-            p = p.parentElement;
-        }
-        return document.scrollingElement || document.documentElement;
-    }
+    // 「どの入れ物がスクロールしているか」はブラウザに任せる（scrollIntoView）。
+    // smooth だと、サイドバー側のスクロールと取り合いになって途中で止まるので、instant（一瞬で移動）にする。
     function goTo(b) {
-        const sc = scrollerOf(b);
-        const isDoc = sc === document.scrollingElement || sc === document.documentElement;
-        const baseTop = isDoc ? 0 : sc.getBoundingClientRect().top;
-        const y = b.getBoundingClientRect().top - baseTop + sc.scrollTop - 8;
-        sc.scrollTo({ top: Math.max(0, y), behavior: 'instant' });
+        b.scrollIntoView({ block: 'start', behavior: 'instant' });
     }
     let navToken = 0;
     // 手でスクロールしたら、自動の合わせ直しをやめる
@@ -167,7 +156,7 @@
         b.classList.remove('mgr-collapsed');
         const my = ++navToken;
         // サイドバー側のスムーズスクロールとぶつかるので、少し間をあけて数回合わせ直す
-        [0, 80, 250, 600].forEach(ms => setTimeout(() => {
+        [0, 60, 150, 300, 600, 1000].forEach(ms => setTimeout(() => {
             if (my !== navToken) return;
             try { goTo(b); } catch (err) { /* 無視 */ }
         }, ms));
