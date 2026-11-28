@@ -641,7 +641,7 @@ const NM_ALWAYS_IGNORE_SELECTORS = ['.customer-longpress-bar', '.customer-longpr
 
 // お客様用レシート（表示・印刷・画像保存）は、どのモードでも白背景・黒文字のまま。
 // 中身の要素すべてを対象外にするため、祖先を見て判定する。
-const NM_IGNORE_SUBTREE_SELECTORS = ['#receipt-capture-area', '#print-receipt-content', '#migration-anchor-nav'];   // 【v16】データ管理のサイドバーは、下の固定CSSで色を決める（走査待ちの点滅を防ぐ）
+const NM_IGNORE_SUBTREE_SELECTORS = ['#receipt-capture-area', '#print-receipt-content', '#migration-anchor-nav', '#customer-notice-bar'];   // お知らせの帯は、設定した文字色のまま表示する   // 【v16】データ管理のサイドバーは、下の固定CSSで色を決める（走査待ちの点滅を防ぐ）
 
 // 【v17で追加】レジの会計時に出る「お客様について」（性別・年齢層を選ぶ）画面の
 // ボタンは、ダークモードでも元の色のまま表示する。画面の中身は元のHTMLが

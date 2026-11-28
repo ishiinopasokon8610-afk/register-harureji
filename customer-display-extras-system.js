@@ -9,6 +9,11 @@
     'use strict';
     const KEY = 'pos_customer_notices';
 
+    const COLOR_KEY = 'pos_customer_notice_color';   // お知らせの文字の色（#rrggbb）。pos_ で始まるので同期・バックアップの対象
+    const DEFAULT_COLOR = '#3e2723';
+    function getColor() {
+        try { const v = localStorage.getItem(COLOR_KEY); return /^#[0-9a-fA-F]{6}$/.test(v || '') ? v : DEFAULT_COLOR; } catch (e) { return DEFAULT_COLOR; }
+    }
     const SCROLL_KEY = 'pos_customer_notice_scroll'; // 'false' なら流さず、固定で表示する
     function isScroll() { try { return localStorage.getItem(SCROLL_KEY) !== 'false'; } catch (e) { return true; } }
     let rotTimer = null, rotIdx = 0;
@@ -30,18 +35,26 @@
         st.id = 'customer-display-extras-style';
         st.textContent = `
         #customer-notice-bar { position: fixed; left: 0; right: 0; top: 6px; z-index: 50; height: 40px; overflow: hidden; display: none;
-            background: rgba(255, 193, 7, 0.95); color: #3e2723; font-weight: 800; font-size: 20px; line-height: 40px; white-space: nowrap; pointer-events: none; }
+            background: rgba(255, 193, 7, 0.95); color: var(--cn-color, #3e2723); font-weight: 800; font-size: 20px; line-height: 40px; white-space: nowrap; pointer-events: none; }
         #customer-notice-bar .cn-track { display: inline-block; padding-left: 100%; animation: cn-scroll var(--cn-dur, 20s) linear infinite; }
         @keyframes cn-scroll { from { transform: translateX(0); } to { transform: translateX(-100%); } }
         #customer-notice-bar.cn-static { text-align: center; padding: 0 12px; box-sizing: border-box; text-overflow: ellipsis; }
         #customer-screen.has-notice { padding-top: 46px !important; box-sizing: border-box; }
         /* 会員の情報：左下に小さく控えめに */
         #customer-member-card { display: none !important; }
-        #customer-member-corner { position: fixed; left: 10px; bottom: 10px; z-index: 30; display: none; pointer-events: none;
+        /* 下の金額バー（z-index:5500）の裏に隠れないよう、バーの高さぶん上げる（正確な位置は renderCorner で測り直す） */
+        #customer-member-corner { position: fixed; left: 10px; bottom: calc(var(--customer-total-height, 110px) + 10px); z-index: 30; display: none; pointer-events: none;
             padding: 6px 10px; border-radius: 8px; background: rgba(0, 0, 0, 0.28); color: rgba(255, 255, 255, 0.72);
             font-size: 12px; line-height: 1.55; max-width: 60vw; }
         #customer-member-corner .cmc-rank { display: inline-block; padding: 0 7px; border-radius: 8px; font-size: 11px; color: #fff; opacity: .85; }
+        /* 右上の「クレジット／QR決済」「会員カード」のパネルが、お知らせの帯の裏に隠れないよう、帯の下へ */
+        #customer-screen.has-notice .customer-side-panel { top: 56px; }
+        @media (max-width: 600px) { #customer-screen.has-notice .customer-side-panel { top: 48px; } }
         /* データ管理：お知らせの設定（スマホ対応） */
+        #customer-notice-block .cnb-color { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 10px; font-weight: 700; }
+        #customer-notice-block .cnb-color input[type=color] { width: 56px; height: 38px; padding: 0; border: 1px solid #aaa; border-radius: 6px; background: #fff; cursor: pointer; }
+        #customer-notice-block .cnb-color button { padding: 8px 14px; font-size: 14px; border: 1px solid #8d6e63; color: #5d4037; background: #fff; border-radius: 6px; cursor: pointer; }
+        #customer-notice-block .cnb-color .cnb-sample { padding: 4px 14px; border-radius: 6px; background: rgba(255, 193, 7, 0.95); font-weight: 800; }
         #customer-notice-block .cnb-add { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
         #customer-notice-block .cnb-add input { flex: 1 1 220px; min-width: 0; padding: 10px; font-size: 16px; border: 1px solid #aaa; border-radius: 6px; box-sizing: border-box; }
         #customer-notice-block .cnb-add button { flex: 0 0 auto; padding: 10px 16px; font-size: 15px; font-weight: 700; border: none; border-radius: 6px; background: #f9a825; color: #3e2723; cursor: pointer; }
@@ -101,6 +114,7 @@
             }
             lastBannerText = joined;
         }
+        bar.style.setProperty('--cn-color', getColor());
         bar.style.display = 'block';
         scr.classList.add('has-notice');
     }
@@ -132,6 +146,7 @@
         b.innerHTML = '<h3 class="migration-title" style="color:#f57f17">📢 客用画面のお知らせ</h3>' +
             '<p class="migration-desc">客用画面の一番上に、文字が流れて表示されます。複数あるときは、つなげて流れます。</p>' +
             '<label style="display:flex;gap:8px;align-items:center;font-weight:700;cursor:pointer;margin-top:8px"><input type="checkbox" id="cnb-scroll" style="width:20px;height:20px"> 文字を流す（OFFにすると、固定で表示します）</label>' +
+            '<div class="cnb-color"><span>文字の色</span><input type="color" id="cnb-color"><span class="cnb-sample" id="cnb-sample">見本：本日もありがとうございます</span><button type="button" id="cnb-color-reset">元の色に戻す</button></div>' +
             '<div class="cnb-add"><input type="text" id="cnb-input" maxlength="120" placeholder="例：本日はポイント2倍デーです"><button type="button" id="cnb-add-btn">追加</button></div>' +
             '<div class="cnb-list" style="margin-top:10px"></div>';
         const first = scr.querySelector('.migration-block');
@@ -152,6 +167,24 @@
             try { localStorage.setItem(SCROLL_KEY, sc.checked ? 'true' : 'false'); } catch (e) { /* 無視 */ }
             try { if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow(); } catch (e) { /* 無視 */ }
             renderBanner();
+            if (typeof playSound === 'function') playSound('click');
+        });
+        const col = b.querySelector('#cnb-color'), sample = b.querySelector('#cnb-sample');
+        const showColor = () => { const c = getColor(); col.value = c; sample.style.color = c; };
+        showColor();
+        // 色を選んでいる間も、客用画面にすぐ反映する（保存・バックアップは選び終わったときに1回だけ）
+        col.addEventListener('input', () => {
+            try { localStorage.setItem(COLOR_KEY, col.value); } catch (e) { /* 無視 */ }
+            sample.style.color = col.value;
+            renderBanner();
+        });
+        col.addEventListener('change', () => {
+            try { if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow(); } catch (e) { /* 無視 */ }
+        });
+        b.querySelector('#cnb-color-reset').addEventListener('click', () => {
+            try { localStorage.removeItem(COLOR_KEY); } catch (e) { /* 無視 */ }
+            try { if (typeof window.haruPosBackupNow === 'function') window.haruPosBackupNow(); } catch (e) { /* 無視 */ }
+            showColor(); renderBanner();
             if (typeof playSound === 'function') playSound('click');
         });
         renderManager();
@@ -202,6 +235,16 @@
         if (rank) lines.push(`ランク ${rank}`);
         el.innerHTML = lines.join('<br>');
         el.style.display = 'block';
+        placeCorner(el);
+    }
+    // 金額バーのすぐ上に置く（バーの高さが変わっても追従する）
+    function placeCorner(el) {
+        try {
+            const bar = document.querySelector('#customer-screen .customer-total-area');
+            if (bar && bar.getClientRects().length) {
+                el.style.bottom = Math.round(window.innerHeight - bar.getBoundingClientRect().top + 10) + 'px';
+            }
+        } catch (e) { /* 無視 */ }
     }
     function hookDisplay() {
         if (typeof window.updateCustomerDisplay !== 'function') { setTimeout(hookDisplay, 300); return; }
@@ -215,8 +258,15 @@
         window.updateCustomerDisplay.__cdx = true;
     }
 
-    window.addEventListener('storage', (e) => { if (e.key === KEY || e.key === SCROLL_KEY) { renderBanner(); renderManager(); const c = document.getElementById('cnb-scroll'); if (c) c.checked = isScroll(); } });
-    window.addEventListener('pos-setting-synced', (e) => { if (e && e.detail && (e.detail.key === KEY || e.detail.key === SCROLL_KEY)) { renderBanner(); renderManager(); const c = document.getElementById('cnb-scroll'); if (c) c.checked = isScroll(); } });
+    function refreshAll() {
+        renderBanner(); renderManager();
+        const c = document.getElementById('cnb-scroll'); if (c) c.checked = isScroll();
+        const cc = document.getElementById('cnb-color'); if (cc) cc.value = getColor();
+        const sm = document.getElementById('cnb-sample'); if (sm) sm.style.color = getColor();
+    }
+    window.addEventListener('storage', (e) => { if (e.key === KEY || e.key === SCROLL_KEY || e.key === COLOR_KEY) refreshAll(); });
+    window.addEventListener('pos-setting-synced', (e) => { if (e && e.detail && (e.detail.key === KEY || e.detail.key === SCROLL_KEY || e.detail.key === COLOR_KEY)) refreshAll(); });
+    window.addEventListener('resize', () => { const el = document.getElementById('customer-member-corner'); if (el && el.style.display !== 'none') placeCorner(el); });
     hookSummary();
     hookDisplay();
     setInterval(() => { try { ensureManagerBlock(); renderBanner(); renderCorner(); } catch (e) { /* 無視 */ } }, 1500);
