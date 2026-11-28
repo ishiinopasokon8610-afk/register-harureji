@@ -144,10 +144,12 @@
         });
         return best;
     }
-    // 「どの入れ物がスクロールしているか」はブラウザに任せる（scrollIntoView）。
-    // smooth だと、サイドバー側のスクロールと取り合いになって途中で止まるので、instant（一瞬で移動）にする。
+    // サイドバー側（migration-anchor-nav-system.js）も、押した直後に同じブロックへ scrollIntoView(smooth) を呼ぶ。
+    // 2つが同時に動くと、片方が途中で戻ったり止まったりするので、こちらが動かす間だけ、あちらの呼び出しを無効にする。
+    const nativeScrollIntoView = Element.prototype.scrollIntoView;
     function goTo(b) {
-        b.scrollIntoView({ block: 'start', behavior: 'instant' });
+        try { nativeScrollIntoView.call(b, { block: 'start', behavior: 'instant' }); }
+        catch (err) { try { nativeScrollIntoView.call(b, true); } catch (e2) { /* 無視 */ } }
     }
     let navToken = 0;
     // 手でスクロールしたら、自動の合わせ直しをやめる
@@ -155,11 +157,14 @@
     function openBlock(b) {
         b.classList.remove('mgr-collapsed');
         const my = ++navToken;
-        // サイドバー側のスムーズスクロールとぶつかるので、少し間をあけて数回合わせ直す
-        [0, 60, 150, 300, 600, 1000].forEach(ms => setTimeout(() => {
-            if (my !== navToken) return;
-            try { goTo(b); } catch (err) { /* 無視 */ }
-        }, ms));
+        b.scrollIntoView = function () { /* サイドバー側のスクロールは使わない（こちらで動かす） */ };
+        setTimeout(() => { try { delete b.scrollIntoView; } catch (err) { /* 無視 */ } }, 80);
+        const t0 = Date.now();
+        (function step() {
+            if (my !== navToken || Date.now() - t0 > 900) return;
+            goTo(b);   // すでにそこにあれば何も起きない。何かに戻されても、すぐ引き戻す
+            requestAnimationFrame(step);
+        })();
     }
     /* ---------- 選んだ項目を、強制的に青くする（自分でスクロールしたら自動の表示に戻す） ---------- */
     let forced = null;   // { list, item }
