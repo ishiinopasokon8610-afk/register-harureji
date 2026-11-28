@@ -124,7 +124,7 @@
     function norm(s) { return String(s || '').replace(/[^0-9A-Za-z\u3041-\u30ff\u3400-\u9fff\uff10-\uff5a]/g, '').toLowerCase(); }
     function findBlock(scr, item) {
         // 1) href や data-target で行き先が分かるとき
-        const ref = item.getAttribute('data-target') || item.getAttribute('data-anchor') || item.getAttribute('href') || '';
+        const ref = item.getAttribute('data-target-id') || item.getAttribute('data-target') || item.getAttribute('data-anchor') || item.getAttribute('href') || '';
         const id = ref.replace(/^#/, '');
         const target = id && document.getElementById(id);
         if (target && scr.contains(target)) {
@@ -144,10 +144,33 @@
         });
         return best;
     }
+    // 実際にスクロールしている入れ物を探す（なければ画面全体）
+    function scrollerOf(el) {
+        let p = el.parentElement;
+        while (p && p !== document.body && p !== document.documentElement) {
+            if (/(auto|scroll)/.test(getComputedStyle(p).overflowY)) return p;
+            p = p.parentElement;
+        }
+        return document.scrollingElement || document.documentElement;
+    }
+    function goTo(b) {
+        const sc = scrollerOf(b);
+        const isDoc = sc === document.scrollingElement || sc === document.documentElement;
+        const baseTop = isDoc ? 0 : sc.getBoundingClientRect().top;
+        const y = b.getBoundingClientRect().top - baseTop + sc.scrollTop - 8;
+        sc.scrollTo({ top: Math.max(0, y), behavior: 'instant' });
+    }
+    let navToken = 0;
+    // 手でスクロールしたら、自動の合わせ直しをやめる
+    ['wheel', 'touchmove'].forEach(ev => document.addEventListener(ev, () => { navToken++; }, { passive: true, capture: true }));
     function openBlock(b) {
         b.classList.remove('mgr-collapsed');
-        // 開いたあとの位置に合わせて、そのブロックの先頭へ移動する
-        setTimeout(() => { try { b.scrollIntoView({ block: 'start', behavior: 'smooth' }); } catch (e) { /* 無視 */ } }, 60);
+        const my = ++navToken;
+        // サイドバー側のスムーズスクロールとぶつかるので、少し間をあけて数回合わせ直す
+        [0, 80, 250, 600].forEach(ms => setTimeout(() => {
+            if (my !== navToken) return;
+            try { goTo(b); } catch (err) { /* 無視 */ }
+        }, ms));
     }
     /* ---------- 選んだ項目を、強制的に青くする（自分でスクロールしたら自動の表示に戻す） ---------- */
     let forced = null;   // { list, item }

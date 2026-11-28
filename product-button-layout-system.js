@@ -121,8 +121,13 @@
         if (!raw || typeof raw !== 'string') return { code: '', reason: 'none' };
         let norm = raw;
         try { if (window.PosSync && PosSync.normalizeCode) norm = PosSync.normalizeCode(raw) || raw; } catch (e) { /* 無視 */ }
-        const cands = [norm, raw].map(x => String(x).toLowerCase().replace(/[\s-]/g, ''));
-        for (const c of cands) if (/^[0-9a-f]{32}$/.test(c)) return { code: c, reason: 'ok' };
+        // 旧形式：32桁の16進数 ／ 現在の形式：16文字の英数字（KC5T-6WQC-E6C4-ZE2A のように表示されるもの）
+        const strip = x => String(x).replace(/[\s-]/g, '');
+        for (const x of [norm, raw]) {
+            const c = strip(x);
+            if (/^[0-9a-f]{32}$/i.test(c)) return { code: c.toLowerCase(), reason: 'ok' };
+            if (/^[0-9A-Za-z]{16}$/.test(c)) return { code: c.toUpperCase(), reason: 'ok' };
+        }
         return { code: '', reason: 'format', len: raw.length };
     }
     function getSyncCode() { return syncCodeInfo().code; }
