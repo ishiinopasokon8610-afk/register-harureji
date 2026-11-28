@@ -46,6 +46,15 @@
         #customer-member-corner { position: fixed; left: 10px; bottom: calc(var(--customer-total-height, 110px) + 10px); z-index: 30; display: none; pointer-events: none;
             padding: 6px 10px; border-radius: 8px; background: rgba(0, 0, 0, 0.28); color: rgba(255, 255, 255, 0.72);
             font-size: 12px; line-height: 1.55; max-width: 60vw; }
+        #customer-member-corner { text-align: left; }
+        #customer-member-corner .cmc-l { display: block; }
+        /* スマホ（横向き）など背の低い画面：横1行にまとめて小さくし、商品リストの枠のほうを上へ縮めて重ならないようにする */
+        @media (max-height: 560px), (max-width: 700px) {
+            #customer-member-corner { font-size: 11px; line-height: 1.4; padding: 3px 8px; max-width: calc(100vw - 20px); }
+            #customer-member-corner .cmc-l { display: inline-block; margin-right: 12px; }
+            #customer-member-corner .cmc-l:last-child { margin-right: 0; }
+            #customer-screen.has-member-corner .customer-card { bottom: calc(var(--customer-total-height) + 20px + var(--cmc-extra, 0px)); }
+        }
         #customer-member-corner .cmc-rank { display: inline-block; padding: 0 7px; border-radius: 8px; font-size: 11px; color: #fff; opacity: .85; }
         /* 右上の「クレジット／QR決済」「会員カード」のパネルが、お知らせの帯の裏に隠れないよう、帯の下へ */
         #customer-screen.has-notice .customer-side-panel { top: 56px; }
@@ -224,7 +233,7 @@
         ensureStyle();
         let el = document.getElementById('customer-member-corner');
         const info = (typeof customerDisplayMemberInfo !== 'undefined') ? customerDisplayMemberInfo : null;
-        if (!info) { if (el) el.style.display = 'none'; return; }
+        if (!info) { if (el) el.style.display = 'none'; scr.classList.remove('has-member-corner'); return; }
         if (!el) { el = document.createElement('div'); el.id = 'customer-member-corner'; scr.appendChild(el); }
         const pts = (info.points !== undefined && info.points !== null) ? info.points : 0;
         const rank = info.rankName ? `<span class="cmc-rank" style="background:${esc(info.rankColor || '#607d8b')}">${esc(info.rankName)}</span>` : '';
@@ -233,16 +242,34 @@
         lines.push(`ポイント ${esc(pts)} pt`);
         lines.push(`失効予定 ${info.expiryText ? esc(info.expiryText) : 'なし'}`);
         if (rank) lines.push(`ランク ${rank}`);
-        el.innerHTML = lines.join('<br>');
+        el.innerHTML = lines.map(l => '<span class="cmc-l">' + l + '</span>').join('');
         el.style.display = 'block';
+        scr.classList.add('has-member-corner');
         placeCorner(el);
     }
+    const COMPACT_MQ = '(max-height: 560px), (max-width: 700px)';
     // 金額バーのすぐ上に置く（バーの高さが変わっても追従する）
     function placeCorner(el) {
         try {
+            const scr = document.getElementById('customer-screen');
+            const compact = !!(window.matchMedia && window.matchMedia(COMPACT_MQ).matches);
+            const gap = compact ? 6 : 10;
             const bar = document.querySelector('#customer-screen .customer-total-area');
             if (bar && bar.getClientRects().length) {
-                el.style.bottom = Math.round(window.innerHeight - bar.getBoundingClientRect().top + 10) + 'px';
+                el.style.bottom = Math.round(window.innerHeight - bar.getBoundingClientRect().top + gap) + 'px';
+            }
+            // コンパクト表示のときだけ：会員情報が商品リストの枠にかかる分だけ、枠の下端を上げる
+            const card = scr && scr.querySelector('.customer-card');
+            if (!scr || !card) return;
+            const cur = Number(scr.dataset.cmcExtra || 0);
+            let need = 0;
+            if (compact) {
+                const naturalBottom = card.getBoundingClientRect().bottom + cur;   // 押し上げる前の下端
+                need = Math.max(0, Math.round(naturalBottom - (el.getBoundingClientRect().top - 6)));
+            }
+            if (need !== cur) {
+                scr.dataset.cmcExtra = String(need);
+                scr.style.setProperty('--cmc-extra', need + 'px');
             }
         } catch (e) { /* 無視 */ }
     }
