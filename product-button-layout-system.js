@@ -115,19 +115,18 @@
     //   pos_sync/<コード>/product_buttons/images/<商品>    … 写真(dataURL)
     // （ルールの変更は不要。データ用コード＝他の端末とつなぐ「合言葉」が設定されている端末だけ保存できる）
     function syncCodeInfo() {
+        // 画面に出ている16文字のコードではなく、PosSync が作る「保存場所の名前（32桁）」を使う
+        // （firebase-sync-system.js の getPathHash。他の同期データと同じ場所になる）
+        try {
+            const h = (window.PosSync && PosSync.getPathHash && PosSync.getPathHash()) || '';
+            if (/^[0-9a-f]{32}$/.test(h)) return { code: h, reason: 'ok' };
+        } catch (e) { /* 無視 */ }
         let raw = '';
         try { raw = (window.PosSync && PosSync.getCode && PosSync.getCode()) || ''; } catch (e) { /* 無視 */ }
         if (!raw) { try { raw = localStorage.getItem('pos_sync_code') || ''; } catch (e) { /* 無視 */ } }
         if (!raw || typeof raw !== 'string') return { code: '', reason: 'none' };
-        let norm = raw;
-        try { if (window.PosSync && PosSync.normalizeCode) norm = PosSync.normalizeCode(raw) || raw; } catch (e) { /* 無視 */ }
-        // 旧形式：32桁の16進数 ／ 現在の形式：16文字の英数字（KC5T-6WQC-E6C4-ZE2A のように表示されるもの）
-        const strip = x => String(x).replace(/[\s-]/g, '');
-        for (const x of [norm, raw]) {
-            const c = strip(x);
-            if (/^[0-9a-f]{32}$/i.test(c)) return { code: c.toLowerCase(), reason: 'ok' };
-            if (/^[0-9A-Za-z]{16}$/.test(c)) return { code: c.toUpperCase(), reason: 'ok' };
-        }
+        // コードはあるが、保存場所の名前がまだ作られていない（起動直後など）→ 少し待てば使える
+        if (/^[0-9A-Za-z]{16}$/.test(raw.replace(/[\s-]/g, ''))) return { code: '', reason: 'pending' };
         return { code: '', reason: 'format', len: raw.length };
     }
     function getSyncCode() { return syncCodeInfo().code; }
@@ -383,6 +382,7 @@
             const info = syncCodeInfo();
             const fileHint = (location.protocol === 'file:') ? ' ※file://で開いているため、ふだんのサイトとは別の保存領域です。サイトのURLから開いてね' : '';
             if (info.reason === 'format') { t = '⚠️ データ用コードの形式が想定外です（' + info.len + '文字）。Firebaseには保存しません' + fileHint; bad = true; }
+            else if (info.reason === 'pending') t = 'ℹ️ データ用コードの準備中です…（つながったら自動で保存されます）';
             else t = 'ℹ️ この画面ではデータ用コードが見つかりません。Firebaseには保存しません（この端末・Driveには保存済み）' + fileHint;
         }
         el.textContent = t;
